@@ -240,40 +240,55 @@ QColor HicHeatmapItem::colorForValue(float value) const {
             return QColor("#808080");
         }
         double scaled = 0.0;
-        double threshold = 1.0;
-        if (pearson) {
-            scaled = std::clamp(static_cast<double>(value), -1.0, 1.0);
-            threshold = 1.0;
-        } else if (logRatio) {
-            threshold = std::max(std::abs(minValue), std::abs(maxValue));
-            scaled = std::clamp(static_cast<double>(value), -threshold, threshold);
-        } else {
-            threshold = std::log(std::max(1.01, maxValue));
-            scaled = std::clamp(std::log(static_cast<double>(value)), -threshold, threshold);
+        double low = minValue;
+        double high = maxValue;
+        if (low >= high) {
+            high = low + 1.0;
         }
+        if (pearson) {
+            scaled = std::clamp(static_cast<double>(value), low, high);
+        } else if (logRatio) {
+            scaled = std::clamp(static_cast<double>(value), low, high);
+        } else {
+            low = std::log(std::max(0.000001, minValue));
+            high = std::log(std::max(0.000001, maxValue));
+            if (low >= high) {
+                high = low + 1.0;
+            }
+            scaled = std::clamp(std::log(static_cast<double>(value)), low, high);
+        }
+        const double midpoint = low < 0.0 && high > 0.0 ? 0.0 : (low + high) * 0.5;
+        const double positiveRange = std::max(0.000001, high - midpoint);
+        const double negativeRange = std::max(0.000001, midpoint - low);
         int r = 255;
         int g = 255;
         int b = 255;
-        if (scaled > 0.0) {
+        if (scaled >= midpoint) {
+            const double t = std::clamp((scaled - midpoint) / positiveRange, 0.0, 1.0);
             r = 255;
-            g = static_cast<int>(255.0 * (threshold - scaled) / threshold);
-            b = static_cast<int>(255.0 * (threshold - scaled) / threshold);
+            g = static_cast<int>(255.0 * (1.0 - t));
+            b = static_cast<int>(255.0 * (1.0 - t));
         } else {
-            scaled = std::abs(scaled);
+            const double t = std::clamp((midpoint - scaled) / negativeRange, 0.0, 1.0);
             b = 255;
-            r = static_cast<int>(255.0 * (threshold - scaled) / threshold);
-            g = static_cast<int>(255.0 * (threshold - scaled) / threshold);
+            r = static_cast<int>(255.0 * (1.0 - t));
+            g = static_cast<int>(255.0 * (1.0 - t));
         }
         return QColor(std::clamp(r, 0, 255), std::clamp(g, 0, 255), std::clamp(b, 0, 255), 245);
     }
 
     double scaledValue = static_cast<double>(std::max(0.0f, value));
-    double scaledMax = std::max(1.0, maxValue);
+    double scaledMin = minValue;
+    double scaledMax = maxValue;
     if (matrixType == QStringLiteral("log") || matrixType == QStringLiteral("logcontrol")) {
         scaledValue = std::log1p(scaledValue);
-        scaledMax = std::log1p(scaledMax);
+        scaledMin = std::log1p(std::max(0.0, scaledMin));
+        scaledMax = std::log1p(std::max(0.0, scaledMax));
     }
-    const double t = std::clamp(scaledValue / scaledMax, 0.0, 1.0);
+    if (scaledMin >= scaledMax) {
+        scaledMax = scaledMin + 1.0;
+    }
+    const double t = std::clamp((scaledValue - scaledMin) / (scaledMax - scaledMin), 0.0, 1.0);
     const QString colorMap = m_controller ? m_controller->colorMap() : QStringLiteral("White-Red");
     QColor color;
     if (colorMap == QStringLiteral("Viridis")) {

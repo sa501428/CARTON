@@ -35,6 +35,24 @@ ApplicationWindow {
         return Math.round(value) + "bp"
     }
 
+    function colorRangeLower() {
+        if (!activeController)
+            return 0
+        var min = Number(activeController.colorMin)
+        var max = Number(activeController.colorMax)
+        var span = Math.max(1, Math.abs(max - min))
+        return min < 0 ? min - span : Math.max(0, min - span)
+    }
+
+    function colorRangeUpper() {
+        if (!activeController)
+            return 100
+        var min = Number(activeController.colorMin)
+        var max = Number(activeController.colorMax)
+        var span = Math.max(1, Math.abs(max - min))
+        return max + span
+    }
+
     ListModel { id: tabModel }
 
     function createController() {
@@ -709,9 +727,9 @@ ApplicationWindow {
                                 var axisLabelHeight = 18
                                 var axisY = height - axisLabelHeight - 0.5
                                 if (activeController.showChromosomeContext) {
-                                    ctx.fillStyle = activeController.wholeGenomeView ? "#e0f2fe" : "#dbeafe"
+                                    ctx.fillStyle = activeController.wholeGenomeView ? "#e5e7eb" : "#edf0f3"
                                     ctx.fillRect(0, 0, width, 8)
-                                    ctx.fillStyle = "#2563eb"
+                                    ctx.fillStyle = "#6b7280"
                                     ctx.fillRect(0, 0, width, 8)
                                 }
                                 ctx.strokeStyle = "#8b949e"
@@ -763,9 +781,9 @@ ApplicationWindow {
                                 var labelWidth = 42
                                 var axisX = width - 0.5
                                 if (activeController.showChromosomeContext) {
-                                    ctx.fillStyle = activeController.wholeGenomeView ? "#e0f2fe" : "#dbeafe"
+                                    ctx.fillStyle = activeController.wholeGenomeView ? "#e5e7eb" : "#edf0f3"
                                     ctx.fillRect(0, 0, 8, height)
-                                    ctx.fillStyle = "#2563eb"
+                                    ctx.fillStyle = "#6b7280"
                                     ctx.fillRect(0, 0, 8, height)
                                 }
                                 ctx.strokeStyle = "#8b949e"
@@ -1227,6 +1245,20 @@ ApplicationWindow {
                     }
                 }
 
+                RowLayout {
+                    Layout.fillWidth: true
+                    CheckBox {
+                        text: "Gridlines"
+                        checked: activeController && activeController.showGridlines
+                        onToggled: if (activeController) activeController.showGridlines = checked
+                    }
+                    CheckBox {
+                        text: "Chromosome context"
+                        checked: activeController && activeController.showChromosomeContext
+                        onToggled: if (activeController) activeController.showChromosomeContext = checked
+                    }
+                }
+
                 Label {
                     text: "Color Scale"
                     color: "#20252b"
@@ -1269,12 +1301,14 @@ ApplicationWindow {
                     }
                 }
 
-                Slider {
+                RangeSlider {
                     Layout.fillWidth: true
-                    from: activeController ? activeController.colorMin : 0
-                    to: Math.max(500, activeController ? activeController.colorMax : 500)
-                    value: activeController ? activeController.colorMax : 50
-                    onMoved: if (activeController) activeController.colorMax = value
+                    from: colorRangeLower()
+                    to: colorRangeUpper()
+                    first.value: activeController ? activeController.colorMin : 0
+                    second.value: activeController ? activeController.colorMax : 50
+                    first.onMoved: if (activeController) activeController.colorMin = first.value
+                    second.onMoved: if (activeController) activeController.colorMax = second.value
                 }
 
                 RowLayout {
@@ -1282,11 +1316,33 @@ ApplicationWindow {
                     Button {
                         text: "-"
                         enabled: !!activeController
-                        onClicked: if (activeController) activeController.colorMax = Math.max(0.1, activeController.colorMax / 2)
+                        onClicked: if (activeController) {
+                            var center = (activeController.colorMin + activeController.colorMax) * 0.5
+                            var half = Math.max(0.000001, (activeController.colorMax - activeController.colorMin) * 0.25)
+                            activeController.colorMin = center - half
+                            activeController.colorMax = center + half
+                        }
                     }
                     Label {
-                        text: activeController && activeController.colorMaxAuto ? "Max Auto" : "Max"
+                        text: activeController && activeController.colorMaxAuto ? "Auto" : "Min / Max"
                         color: "#5b6672"
+                    }
+                    TextField {
+                        id: colorMinField
+                        Layout.fillWidth: true
+                        text: activeController ? activeController.colorMin.toString() : ""
+                        selectByMouse: true
+                        validator: DoubleValidator {
+                            notation: DoubleValidator.ScientificNotation
+                        }
+                        onAccepted: {
+                            if (activeController && isFinite(Number(text)))
+                                activeController.colorMin = Number(text)
+                        }
+                        onEditingFinished: {
+                            if (activeController && isFinite(Number(text)))
+                                activeController.colorMin = Number(text)
+                        }
                     }
                     TextField {
                         id: colorMaxField
@@ -1294,15 +1350,14 @@ ApplicationWindow {
                         text: activeController ? activeController.colorMax.toString() : ""
                         selectByMouse: true
                         validator: DoubleValidator {
-                            bottom: 0.000001
                             notation: DoubleValidator.ScientificNotation
                         }
                         onAccepted: {
-                            if (activeController && Number(text) > 0)
+                            if (activeController && isFinite(Number(text)))
                                 activeController.colorMax = Number(text)
                         }
                         onEditingFinished: {
-                            if (activeController && Number(text) > 0)
+                            if (activeController && isFinite(Number(text)))
                                 activeController.colorMax = Number(text)
                         }
                     }
@@ -1314,7 +1369,12 @@ ApplicationWindow {
                     Button {
                         text: "+"
                         enabled: !!activeController
-                        onClicked: if (activeController) activeController.colorMax = activeController.colorMax * 2
+                        onClicked: if (activeController) {
+                            var center = (activeController.colorMin + activeController.colorMax) * 0.5
+                            var half = Math.max(0.000001, activeController.colorMax - activeController.colorMin)
+                            activeController.colorMin = center - half
+                            activeController.colorMax = center + half
+                        }
                     }
                 }
 

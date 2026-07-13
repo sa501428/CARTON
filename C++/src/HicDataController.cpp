@@ -1058,16 +1058,22 @@ void HicDataController::setY0(qint64 value) { if (m_y0 != value) { m_y0 = value;
 void HicDataController::setY1(qint64 value) { if (m_y1 != value) { m_y1 = value; emit viewChanged(); } }
 
 void HicDataController::setColorMax(double value) {
-    if (qFuzzyCompare(m_colorMax, value)) return;
+    if (!std::isfinite(value) || qFuzzyCompare(m_colorMax, value)) return;
     m_colorMaxAuto = false;
-    m_colorMax = std::max(0.1, value);
+    m_colorMax = value;
+    if (m_colorMax <= m_colorMin) {
+        m_colorMin = m_colorMax - std::max(1.0, std::abs(m_colorMax) * 0.1);
+    }
     emit colorMaxChanged();
 }
 
 void HicDataController::setColorMin(double value) {
-    if (qFuzzyCompare(m_colorMin, value)) return;
+    if (!std::isfinite(value) || qFuzzyCompare(m_colorMin, value)) return;
     m_colorMaxAuto = false;
     m_colorMin = value;
+    if (m_colorMin >= m_colorMax) {
+        m_colorMax = m_colorMin + std::max(1.0, std::abs(m_colorMin) * 0.1);
+    }
     emit colorMaxChanged();
 }
 
