@@ -123,14 +123,14 @@ ApplicationWindow {
     FileDialog {
         id: trackDialog
         title: "Load 1D Track"
-        nameFilters: ["Track files (*.bed *.bedgraph *.wig *.txt *.tsv)", "All files (*)"]
+        nameFilters: ["Genomics tracks (*.bed *.bed.gz *.bedgraph *.bedGraph *.bedgraph.gz *.wig *.wig.gz *.bw *.bigWig *.bigwig *.bb *.bigBed *.bigbed *.txt *.tsv)", "All files (*)"]
         onAccepted: if (activeController) activeController.loadTrack(selectedFile)
     }
 
     FileDialog {
         id: annotationDialog
         title: "Load 2D Annotations"
-        nameFilters: ["Annotation files (*.bedpe *.txt *.tsv)", "All files (*)"]
+        nameFilters: ["BEDPE annotations (*.bedpe *.txt *.tsv)", "All files (*)"]
         onAccepted: if (activeController) activeController.loadAnnotations(selectedFile)
     }
 

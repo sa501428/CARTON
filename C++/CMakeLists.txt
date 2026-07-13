@@ -39,6 +39,8 @@ qt_add_executable(carton
     src/app_main.cpp
     src/HicDataController.cpp
     src/HicDataController.h
+    src/GenomicTrackReader.cpp
+    src/GenomicTrackReader.h
     src/HicHeatmapItem.cpp
     src/HicHeatmapItem.h
     src/HicTileCache.h

@@ -93,7 +93,8 @@ QSGNode* HicHeatmapItem::updatePaintNode(QSGNode* oldNode, UpdatePaintNodeData*)
 
     const std::vector<contactRecord> records = m_controller->recordsSnapshot();
     const std::vector<contactRecord> controlRecords = m_controller->controlRecordsSnapshot();
-    const bool isVsMode = m_controller->matrixType() == QStringLiteral("vs") && !controlRecords.empty();
+    const QString matrixType = m_controller->matrixType();
+    const bool isVsMode = (matrixType == QStringLiteral("vs") || matrixType.endsWith(QStringLiteral("vs"))) && !controlRecords.empty();
     if (records.empty() && controlRecords.empty()) {
         return root;
     }

@@ -1,4 +1,5 @@
 #include "HicDataController.h"
+#include "GenomicTrackReader.h"
 
 #include <QtConcurrent>
 #include <QClipboard>
@@ -29,6 +30,8 @@
 
 namespace {
 constexpr int kRecentLimit = 10;
+constexpr int kMinPearsonResolution = 50000;
+constexpr int kMaxPearsonBins = 1200;
 
 size_t appendCurlText(void* contents, size_t size, size_t nmemb, void* userp) {
     const size_t total = size * nmemb;
@@ -85,7 +88,21 @@ HicDataController::HicDataController(QObject* parent)
                                                                                result.hasControl ? result.controlTile.records : std::vector<contactRecord>());
         std::vector<contactRecord> displayControlRecords;
         if (result.hasControl && matrixIsVs(m_matrixType)) {
-            displayControlRecords = result.controlTile.records;
+            if (m_matrixType == QStringLiteral("pearsonvs")) {
+                displayControlRecords = transformPearsonLike(result.controlTile.records);
+            } else if (m_matrixType == QStringLiteral("logvs")) {
+                displayControlRecords = result.controlTile.records;
+                for (contactRecord& record : displayControlRecords) {
+                    record.counts = record.counts > 0 ? static_cast<float>(std::log(record.counts)) : 0.0f;
+                }
+            } else if (m_matrixType == QStringLiteral("logeovs")) {
+                displayControlRecords = result.controlTile.records;
+                for (contactRecord& record : displayControlRecords) {
+                    record.counts = record.counts > 0 ? static_cast<float>(std::log(record.counts)) : 0.0f;
+                }
+            } else {
+                displayControlRecords = result.controlTile.records;
+            }
         }
         {
             QMutexLocker locker(&m_mutex);
@@ -223,43 +240,33 @@ void HicDataController::loadTrack(const QUrl& url) {
 }
 
 void HicDataController::loadTrackFromPath(const QString& path) {
-    const QString text = readTextResource(path);
-    if (text.isEmpty()) {
-        setStatus(QStringLiteral("Could not open 1D track: %1").arg(path));
+    const GenomicTrackReadResult parsed = readGenomicTrack(path);
+    if (parsed.features.empty()) {
+        setStatus(parsed.warning.isEmpty()
+                      ? QStringLiteral("No intervals found in 1D track: %1").arg(path)
+                      : parsed.warning);
         return;
     }
-
-    QTextStream in(const_cast<QString*>(&text), QIODevice::ReadOnly);
     int loaded = 0;
-    while (!in.atEnd()) {
-        const QString line = in.readLine().trimmed();
-        if (line.isEmpty() || line.startsWith('#') || line.startsWith("track")) {
-            continue;
-        }
-        const QStringList parts = line.split(QRegularExpression("\\s+"), Qt::SkipEmptyParts);
-        if (parts.size() < 3) {
-            continue;
-        }
+    for (const GenomicTrackFeature& feature : parsed.features) {
         TrackSegment segment;
-        segment.chr = parts[0];
-        segment.start = parts[1].toLongLong();
-        segment.end = parts[2].toLongLong();
-        segment.name = QFileInfo(path).baseName();
+        segment.chr = feature.chr;
+        segment.start = feature.start;
+        segment.end = feature.end;
+        segment.name = feature.name.isEmpty() ? QFileInfo(path).baseName() : feature.name;
         segment.source = path;
-        if (parts.size() >= 4) {
-            bool ok = false;
-            const double v = parts[3].toDouble(&ok);
-            segment.value = ok ? v : 1.0;
-        } else {
-            segment.value = 1.0;
-        }
+        segment.value = feature.value;
+        segment.color = feature.color;
         if (segment.end > segment.start) {
             segment.maxValue = std::max(1.0, std::abs(segment.value));
             m_tracks.push_back(segment);
             ++loaded;
         }
     }
-    setStatus(QStringLiteral("Loaded %1 1D track intervals.").arg(loaded));
+    setStatus(QStringLiteral("Loaded %1 %2 track intervals%3.")
+                  .arg(loaded)
+                  .arg(parsed.format.isEmpty() ? QStringLiteral("genomics") : parsed.format)
+                  .arg(parsed.warning.isEmpty() ? QString() : QStringLiteral(" (%1)").arg(parsed.warning)));
     emit tracksChanged();
 }
 
@@ -1510,7 +1517,8 @@ bool HicDataController::matrixIsDivergent(const QString& matrixType) const {
 QString HicDataController::primaryDataMatrixType(const QString& matrixType) const {
     if (matrixType == QStringLiteral("oe") || matrixType == QStringLiteral("logoe") ||
         matrixType == QStringLiteral("explogoe") || matrixType == QStringLiteral("oeratio") ||
-        matrixType == QStringLiteral("oevs") || matrixType == QStringLiteral("logeovs")) {
+        matrixType == QStringLiteral("oevs") || matrixType == QStringLiteral("logeovs") ||
+        matrixType == QStringLiteral("pearson") || matrixType == QStringLiteral("pearsonvs")) {
         return QStringLiteral("oe");
     }
     if (matrixType == QStringLiteral("expected")) {
@@ -1521,7 +1529,8 @@ QString HicDataController::primaryDataMatrixType(const QString& matrixType) cons
 
 QString HicDataController::controlDataMatrixType(const QString& matrixType) const {
     if (matrixType == QStringLiteral("controloe") || matrixType == QStringLiteral("oeratio") ||
-        matrixType == QStringLiteral("oevs") || matrixType == QStringLiteral("logeovs")) {
+        matrixType == QStringLiteral("oevs") || matrixType == QStringLiteral("logeovs") ||
+        matrixType == QStringLiteral("controlpearson") || matrixType == QStringLiteral("pearsonvs")) {
         return QStringLiteral("oe");
     }
     return QStringLiteral("observed");
@@ -1536,6 +1545,18 @@ bool HicDataController::validateMatrixMode(const QString& matrixType) {
     if ((matrixIsPearson(matrixType) || matrixIsVs(matrixType)) && m_chrX != m_chrY) {
         setStatus(QStringLiteral("%1 is only available for intrachromosomal views.").arg(matrixType));
         return false;
+    }
+    if (matrixIsPearson(matrixType)) {
+        if (m_resolution > 0 && m_resolution < kMinPearsonResolution) {
+            setStatus(QStringLiteral("Pearson modes are available at %1 bp resolution or coarser.").arg(kMinPearsonResolution));
+            return false;
+        }
+        const qint64 span = std::max<qint64>(m_x1 - m_x0, m_y1 - m_y0);
+        const qint64 bins = (span + std::max(1, m_resolution) - 1) / std::max(1, m_resolution);
+        if (bins > kMaxPearsonBins) {
+            setStatus(QStringLiteral("Pearson view is too large (%1 bins); zoom in before enabling Pearson.").arg(bins));
+            return false;
+        }
     }
     if (matrixNeedsControl(matrixType) && m_controlFilePath.isEmpty()) {
         setStatus(QStringLiteral("Load a control .hic file before using %1 mode.").arg(matrixType));
@@ -1562,10 +1583,21 @@ std::vector<contactRecord> HicDataController::transformRecordsForDisplay(const Q
                                                                           const std::vector<contactRecord>& control) const {
     if (matrixType == QStringLiteral("control") || matrixType == QStringLiteral("logcontrol") ||
         matrixType == QStringLiteral("controloe")) {
-        if (matrixType == QStringLiteral("controlpearson")) {
-            return transformPearsonLike(control);
+        if (matrixType == QStringLiteral("logcontrol")) {
+            std::vector<contactRecord> out = control;
+            for (contactRecord& record : out) {
+                record.counts = record.counts > 0 ? static_cast<float>(std::log(record.counts)) : 0.0f;
+            }
+            return out;
         }
         return control;
+    }
+    if (matrixType == QStringLiteral("log") || matrixType == QStringLiteral("logvs")) {
+        std::vector<contactRecord> out = primary;
+        for (contactRecord& record : out) {
+            record.counts = record.counts > 0 ? static_cast<float>(std::log(record.counts)) : 0.0f;
+        }
+        return out;
     }
     if (matrixType == QStringLiteral("pearson")) {
         return transformPearsonLike(primary);
@@ -1592,21 +1624,71 @@ std::vector<contactRecord> HicDataController::transformRecordsForDisplay(const Q
 }
 
 std::vector<contactRecord> HicDataController::transformPearsonLike(const std::vector<contactRecord>& records) const {
-    std::unordered_map<qint64, std::pair<double, int>> byDistance;
-    for (const contactRecord& record : records) {
-        const qint64 distance = std::llabs(record.binX - record.binY) / std::max(1, m_resolution);
-        auto& bucket = byDistance[distance];
-        bucket.first += record.counts;
-        bucket.second += 1;
+    const qint64 resolution = std::max<qint64>(1, m_resolution);
+    const qint64 origin = (std::min(m_x0, m_y0) / resolution) * resolution;
+    const qint64 end = ((std::max(m_x1, m_y1) + resolution - 1) / resolution) * resolution;
+    const int bins = static_cast<int>((end - origin) / resolution);
+    if (bins <= 0 || bins > kMaxPearsonBins) {
+        return {};
     }
-    std::vector<contactRecord> out = records;
-    for (contactRecord& record : out) {
-        const qint64 distance = std::llabs(record.binX - record.binY) / std::max(1, m_resolution);
-        const auto it = byDistance.find(distance);
-        const double expected = it != byDistance.end() && it->second.second > 0
-            ? it->second.first / it->second.second
-            : 1.0;
-        record.counts = static_cast<float>(std::clamp((record.counts - expected) / std::max(1.0, expected), -1.0, 1.0));
+
+    std::vector<double> matrix(static_cast<std::size_t>(bins) * static_cast<std::size_t>(bins), 0.0);
+    auto indexFor = [&](qint64 genomePosition) -> int {
+        return static_cast<int>((genomePosition - origin) / resolution);
+    };
+    auto setValue = [&](int row, int col, double value) {
+        if (row >= 0 && row < bins && col >= 0 && col < bins) {
+            matrix[static_cast<std::size_t>(row) * bins + col] = value;
+        }
+    };
+
+    for (const contactRecord& record : records) {
+        const int x = indexFor(record.binX);
+        const int y = indexFor(record.binY);
+        setValue(y, x, record.counts);
+        if (x != y) {
+            setValue(x, y, record.counts);
+        }
+    }
+
+    std::vector<double> means(bins, 0.0);
+    std::vector<double> sumsOfSquares(bins, 0.0);
+    for (int row = 0; row < bins; ++row) {
+        double sum = 0.0;
+        for (int col = 0; col < bins; ++col) {
+            sum += matrix[static_cast<std::size_t>(row) * bins + col];
+        }
+        means[row] = sum / bins;
+        double ss = 0.0;
+        for (int col = 0; col < bins; ++col) {
+            const double centered = matrix[static_cast<std::size_t>(row) * bins + col] - means[row];
+            ss += centered * centered;
+        }
+        sumsOfSquares[row] = ss;
+    }
+
+    const int xStart = std::max(0, indexFor(m_x0));
+    const int xEnd = std::min(bins, static_cast<int>((m_x1 - origin + resolution - 1) / resolution));
+    const int yStart = std::max(0, indexFor(m_y0));
+    const int yEnd = std::min(bins, static_cast<int>((m_y1 - origin + resolution - 1) / resolution));
+    std::vector<contactRecord> out;
+    out.reserve(static_cast<std::size_t>(std::max(0, xEnd - xStart)) * static_cast<std::size_t>(std::max(0, yEnd - yStart)));
+    for (int y = yStart; y < yEnd; ++y) {
+        for (int x = xStart; x < xEnd; ++x) {
+            double dot = 0.0;
+            for (int k = 0; k < bins; ++k) {
+                const double a = matrix[static_cast<std::size_t>(y) * bins + k] - means[y];
+                const double b = matrix[static_cast<std::size_t>(x) * bins + k] - means[x];
+                dot += a * b;
+            }
+            const double denom = std::sqrt(sumsOfSquares[y] * sumsOfSquares[x]);
+            const double corr = denom > 0.0 ? std::clamp(dot / denom, -1.0, 1.0) : (x == y ? 1.0 : 0.0);
+            contactRecord record;
+            record.binX = static_cast<int32_t>(origin + static_cast<qint64>(x) * resolution);
+            record.binY = static_cast<int32_t>(origin + static_cast<qint64>(y) * resolution);
+            record.counts = static_cast<float>(corr);
+            out.push_back(record);
+        }
     }
     return out;
 }
