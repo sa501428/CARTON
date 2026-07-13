@@ -18,6 +18,19 @@ ApplicationWindow {
     property real contextFx: 0.5
     property real contextFy: 0.5
     property string hoverText: ""
+    property bool hoverActive: false
+    property real hoverPlotX: 0
+    property real hoverPlotY: 0
+
+    function formatBp(value) {
+        if (value >= 1000000000)
+            return (value / 1000000000).toFixed(value >= 10000000000 ? 1 : 2) + "Gb"
+        if (value >= 1000000)
+            return (value / 1000000).toFixed(value >= 10000000 ? 1 : 2) + "Mb"
+        if (value >= 1000)
+            return (value / 1000).toFixed(value >= 10000 ? 1 : 2) + "kb"
+        return Math.round(value) + "bp"
+    }
 
     ListModel { id: tabModel }
 
@@ -85,11 +98,21 @@ ApplicationWindow {
 
     FileDialog {
         id: openDialog
-        title: "Open Hi-C file"
+        title: "Open primary Hi-C file"
         nameFilters: ["Hi-C files (*.hic)", "All files (*)"]
         onAccepted: {
             if (activeController)
                 activeController.openFile(selectedFile)
+        }
+    }
+
+    FileDialog {
+        id: controlDialog
+        title: "Open control Hi-C file"
+        nameFilters: ["Hi-C files (*.hic)", "All files (*)"]
+        onAccepted: {
+            if (activeController)
+                activeController.openControlFile(selectedFile)
         }
     }
 
@@ -136,7 +159,8 @@ ApplicationWindow {
     menuBar: MenuBar {
         Menu {
             title: "File"
-            MenuItem { text: "Open Hi-C..."; onTriggered: openDialog.open() }
+            MenuItem { text: "Open Primary Hi-C..."; onTriggered: openDialog.open() }
+            MenuItem { text: "Open Control Hi-C..."; onTriggered: controlDialog.open() }
             MenuItem { text: "Load 1D Track..."; onTriggered: trackDialog.open() }
             MenuItem { text: "Load 2D Annotations..."; onTriggered: annotationDialog.open() }
             MenuSeparator {}
@@ -174,9 +198,16 @@ ApplicationWindow {
             anchors.rightMargin: 12
             spacing: 10
 
-            ToolButton {
-                text: "Open"
+            Button {
+                text: "Open Hi-C"
+                highlighted: true
                 onClicked: openDialog.open()
+            }
+
+            Button {
+                text: "Control"
+                enabled: !!activeController
+                onClicked: controlDialog.open()
             }
 
             ComboBox {
@@ -206,7 +237,7 @@ ApplicationWindow {
             ComboBox {
                 id: matrixBox
                 Layout.preferredWidth: 120
-                model: ["observed", "oe", "expected"]
+                model: ["observed", "log", "oe", "expected", "vs"]
                 onActivated: if (activeController) activeController.matrixType = currentText
             }
 
@@ -391,13 +422,14 @@ ApplicationWindow {
                         anchors.centerIn: parent
                         width: Math.max(240, Math.min(parent.width - 58, parent.height - 90))
                         height: width
+                        property int axisSize: 72
 
                         Canvas {
                             id: topTrackCanvas
-                            x: 42
+                            x: plotFrame.axisSize
                             y: 0
-                            width: plotFrame.width - 42
-                            height: 42
+                            width: plotFrame.width - plotFrame.axisSize
+                            height: plotFrame.axisSize
                             onPaint: {
                                 var ctx = getContext("2d")
                                 ctx.reset()
@@ -406,18 +438,36 @@ ApplicationWindow {
                                 if (!activeController) return
                                 var segments = activeController.visibleTrackSegments(true)
                                 var span = Math.max(1, activeController.x1 - activeController.x0)
+                                var axisLabelHeight = 18
+                                var axisY = height - axisLabelHeight - 0.5
                                 ctx.strokeStyle = "#8b949e"
                                 ctx.beginPath()
-                                ctx.moveTo(0, height - 0.5)
-                                ctx.lineTo(width, height - 0.5)
+                                ctx.moveTo(0, axisY)
+                                ctx.lineTo(width, axisY)
                                 ctx.stroke()
+                                ctx.font = "11px sans-serif"
+                                ctx.fillStyle = "#4b5563"
+                                ctx.textBaseline = "top"
+                                var ticks = 5
+                                for (var t = 0; t < ticks; t++) {
+                                    var f = ticks === 1 ? 0 : t / (ticks - 1)
+                                    var tx = f * width
+                                    var label = formatBp(activeController.x0 + f * span)
+                                    ctx.strokeStyle = "#8b949e"
+                                    ctx.beginPath()
+                                    ctx.moveTo(tx + 0.5, axisY)
+                                    ctx.lineTo(tx + 0.5, axisY + 5)
+                                    ctx.stroke()
+                                    ctx.textAlign = t === 0 ? "left" : (t === ticks - 1 ? "right" : "center")
+                                    ctx.fillText(label, tx, axisY + 6)
+                                }
                                 for (var i = 0; i < segments.length; i++) {
                                     var s = segments[i]
                                     var x0 = (s.start - activeController.x0) / span * width
                                     var x1 = (s.end - activeController.x0) / span * width
-                                    var h = Math.max(2, Math.min(height - 6, Math.abs(s.value) * 8))
+                                    var h = Math.max(2, Math.min(axisY - 6, Math.abs(s.value) * 8))
                                     ctx.fillStyle = s.color
-                                    ctx.fillRect(Math.max(0, x0), height - h - 2, Math.max(1, x1 - x0), h)
+                                    ctx.fillRect(Math.max(0, x0), axisY - h - 2, Math.max(1, x1 - x0), h)
                                 }
                             }
                         }
@@ -425,9 +475,9 @@ ApplicationWindow {
                         Canvas {
                             id: leftTrackCanvas
                             x: 0
-                            y: 42
-                            width: 42
-                            height: plotFrame.height - 42
+                            y: plotFrame.axisSize
+                            width: plotFrame.axisSize
+                            height: plotFrame.height - plotFrame.axisSize
                             onPaint: {
                                 var ctx = getContext("2d")
                                 ctx.reset()
@@ -436,28 +486,46 @@ ApplicationWindow {
                                 if (!activeController) return
                                 var segments = activeController.visibleTrackSegments(false)
                                 var span = Math.max(1, activeController.y1 - activeController.y0)
+                                var labelWidth = 42
+                                var axisX = width - 0.5
                                 ctx.strokeStyle = "#8b949e"
                                 ctx.beginPath()
-                                ctx.moveTo(width - 0.5, 0)
-                                ctx.lineTo(width - 0.5, height)
+                                ctx.moveTo(axisX, 0)
+                                ctx.lineTo(axisX, height)
                                 ctx.stroke()
+                                ctx.font = "11px sans-serif"
+                                ctx.fillStyle = "#4b5563"
+                                ctx.textAlign = "left"
+                                ctx.textBaseline = "middle"
+                                var ticks = 5
+                                for (var t = 0; t < ticks; t++) {
+                                    var f = ticks === 1 ? 0 : t / (ticks - 1)
+                                    var ty = f * height
+                                    var label = formatBp(activeController.y0 + f * span)
+                                    ctx.strokeStyle = "#8b949e"
+                                    ctx.beginPath()
+                                    ctx.moveTo(axisX - 5, ty + 0.5)
+                                    ctx.lineTo(axisX, ty + 0.5)
+                                    ctx.stroke()
+                                    ctx.fillText(label, 2, Math.max(8, Math.min(height - 8, ty)))
+                                }
                                 for (var i = 0; i < segments.length; i++) {
                                     var s = segments[i]
                                     var y0 = (s.start - activeController.y0) / span * height
                                     var y1 = (s.end - activeController.y0) / span * height
-                                    var w = Math.max(2, Math.min(width - 6, Math.abs(s.value) * 8))
+                                    var w = Math.max(2, Math.min(width - labelWidth - 8, Math.abs(s.value) * 8))
                                     ctx.fillStyle = s.color
-                                    ctx.fillRect(width - w - 2, Math.max(0, y0), w, Math.max(1, y1 - y0))
+                                    ctx.fillRect(axisX - w - 2, Math.max(0, y0), w, Math.max(1, y1 - y0))
                                 }
                             }
                         }
 
                         Item {
                             id: heatmapHost
-                            x: 42
-                            y: 42
-                            width: plotFrame.width - 42
-                            height: plotFrame.height - 42
+                            x: plotFrame.axisSize
+                            y: plotFrame.axisSize
+                            width: plotFrame.width - plotFrame.axisSize
+                            height: plotFrame.height - plotFrame.axisSize
                             clip: true
 
                             HicHeatmapItem {
@@ -477,10 +545,8 @@ ApplicationWindow {
                                     var spanY = Math.max(1, activeController.y1 - activeController.y0)
                                     var side = Math.min(width, height)
                                     var scale = side / Math.max(spanX, spanY)
-                                    var extentW = spanX * scale
-                                    var extentH = spanY * scale
-                                    var ox = (width - extentW) * 0.5
-                                    var oy = (height - extentH) * 0.5
+                                    var ox = (width - side) * 0.5
+                                    var oy = (height - side) * 0.5
                                     ctx.lineWidth = 1.5
                                     for (var i = 0; i < annotations.length; i++) {
                                         var a = annotations[i]
@@ -520,30 +586,26 @@ ApplicationWindow {
                                 }
 
                                 function fractionX(px) {
-                                    var spanX = Math.max(1, activeController ? activeController.x1 - activeController.x0 : 1)
-                                    var spanY = Math.max(1, activeController ? activeController.y1 - activeController.y0 : 1)
                                     var side = Math.min(width, height)
-                                    var scale = side / Math.max(spanX, spanY)
-                                    var extentW = spanX * scale
-                                    var ox = (width - extentW) * 0.5
-                                    return clamp01((px - ox) / Math.max(1, extentW))
+                                    var ox = (width - side) * 0.5
+                                    return clamp01((px - ox) / Math.max(1, side))
                                 }
 
                                 function fractionY(py) {
-                                    var spanX = Math.max(1, activeController ? activeController.x1 - activeController.x0 : 1)
-                                    var spanY = Math.max(1, activeController ? activeController.y1 - activeController.y0 : 1)
                                     var side = Math.min(width, height)
-                                    var scale = side / Math.max(spanX, spanY)
-                                    var extentH = spanY * scale
-                                    var oy = (height - extentH) * 0.5
-                                    return clamp01((py - oy) / Math.max(1, extentH))
+                                    var oy = (height - side) * 0.5
+                                    return clamp01((py - oy) / Math.max(1, side))
                                 }
 
                                 function updateHover(mouse) {
                                     if (!activeController) {
                                         hoverText = ""
+                                        hoverActive = false
                                         return
                                     }
+                                    hoverPlotX = mouse.x
+                                    hoverPlotY = mouse.y
+                                    hoverActive = true
                                     contextFx = fractionX(mouse.x)
                                     contextFy = fractionY(mouse.y)
                                     hoverText = activeController.positionText(contextFx, contextFy)
@@ -615,17 +677,43 @@ ApplicationWindow {
                                 onCanceled: {
                                     selectionRect.visible = false
                                     selecting = false
+                                    hoverActive = false
                                     if (activeController)
                                         activeController.endInteraction()
                                 }
 
-                                onExited: hoverText = ""
+                                onExited: {
+                                    hoverText = ""
+                                    hoverActive = false
+                                }
                                 cursorShape: selecting ? Qt.CrossCursor : Qt.OpenHandCursor
                                 preventStealing: true
                                 propagateComposedEvents: false
                                 onDoubleClicked: function(mouse) {
                                     if (!activeController) return
                                     activeController.zoom(2.0, fractionX(mouse.x), fractionY(mouse.y))
+                                }
+                            }
+
+                            Rectangle {
+                                id: hoverBadge
+                                z: 20
+                                visible: hoverActive && hoverText.length > 0
+                                width: hoverBadgeLabel.implicitWidth + 16
+                                height: hoverBadgeLabel.implicitHeight + 10
+                                x: Math.max(8, Math.min(parent.width - width - 8, hoverPlotX + 14))
+                                y: Math.max(8, Math.min(parent.height - height - 8, hoverPlotY + 14))
+                                radius: 4
+                                color: "#ee111827"
+                                border.color: "#66374151"
+                                border.width: 1
+
+                                Label {
+                                    id: hoverBadgeLabel
+                                    anchors.centerIn: parent
+                                    text: hoverText
+                                    color: "#ffffff"
+                                    font.pixelSize: 12
                                 }
                             }
                         }

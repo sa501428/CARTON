@@ -18,6 +18,7 @@
 class HicDataController : public QObject {
     Q_OBJECT
     Q_PROPERTY(QString filePath READ filePath NOTIFY filePathChanged)
+    Q_PROPERTY(QString controlFilePath READ controlFilePath NOTIFY controlFilePathChanged)
     Q_PROPERTY(QString genomeId READ genomeId NOTIFY metadataChanged)
     Q_PROPERTY(QString status READ status NOTIFY statusChanged)
     Q_PROPERTY(bool busy READ busy NOTIFY busyChanged)
@@ -46,6 +47,7 @@ public:
     ~HicDataController() override;
 
     QString filePath() const;
+    QString controlFilePath() const;
     QString genomeId() const;
     QString status() const;
     bool busy() const;
@@ -70,6 +72,7 @@ public:
     bool canRedoView() const;
 
     Q_INVOKABLE void openFile(const QUrl& url);
+    Q_INVOKABLE void openControlFile(const QUrl& url);
     Q_INVOKABLE void loadTrack(const QUrl& url);
     Q_INVOKABLE void loadAnnotations(const QUrl& url);
     Q_INVOKABLE void clearTracks();
@@ -110,9 +113,11 @@ public:
     void setCustomHighColor(const QColor& value);
 
     std::vector<contactRecord> recordsSnapshot() const;
+    std::vector<contactRecord> controlRecordsSnapshot() const;
 
 signals:
     void filePathChanged();
+    void controlFilePathChanged();
     void metadataChanged();
     void statusChanged();
     void busyChanged();
@@ -128,8 +133,10 @@ private:
     struct TileResult {
         quint64 requestId = 0;
         HicTile tile;
+        HicTile controlTile;
         QString error;
         bool fromCache = false;
+        bool hasControl = false;
     };
 
     static QString localPathFromUrl(const QUrl& url);
@@ -144,6 +151,8 @@ private:
     qint64 chromosomeLength(const QString& name) const;
     void clampRegion();
     void updateAutoColorScale(const std::vector<contactRecord>& records);
+    void updateAutoColorScale(const std::vector<contactRecord>& records,
+                              const std::vector<contactRecord>& controlRecords);
     void pushViewHistory();
     void restoreView(const QVariantMap& view);
     void orientTileForRequestedAxes(HicTile& tile) const;
@@ -172,6 +181,7 @@ private:
 
     mutable QMutex m_mutex;
     QString m_filePath;
+    QString m_controlFilePath;
     QString m_genomeId;
     QString m_status = "Open a .hic file to begin.";
     bool m_busy = false;
@@ -192,6 +202,7 @@ private:
     QColor m_customHighColor = QColor("#d7191c");
     HicFileMetadata m_metadata;
     std::vector<contactRecord> m_records;
+    std::vector<contactRecord> m_controlRecords;
     std::vector<TrackSegment> m_tracks;
     std::vector<Annotation2D> m_annotations;
     std::unique_ptr<HicTileCache> m_cache;

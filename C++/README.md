@@ -20,13 +20,13 @@ The desktop app supports:
 1. Opening local `.hic` files
 2. Header/metadata inspection
 3. Chromosome and resolution switching
-4. Observed/OE/expected matrix modes
+4. Observed/log/OE/expected matrix modes, plus VS mode with a loaded control `.hic`
 5. Normalization switching
 6. Smooth mouse-wheel zoom and drag pan
 7. Asynchronous visible-range loading with a bounded record cache
 8. Batched GPU heatmap rendering in a custom Qt Quick item
 9. Multiple independent tabs, each with its own file, viewport, cache, and display settings
-10. Juicebox-compatible coloring: observed/expected use a linear white-to-red scale with an automatic 95th-percentile range, while OE uses a log-ratio blue-white-red scale with default threshold 5
+10. Juicebox-compatible coloring: observed/expected use a linear white-to-red scale with an automatic 95th-percentile range, log is an explicit separate display mode, and OE uses a log-ratio blue-white-red scale with default threshold 5
 11. Right-click map actions for undo/redo zoom, jump to diagonal, copy genomic position, and layer loading/clearing
 12. Top and left 1D track panels for BED/bedGraph-like interval tracks
 13. 2D BEDPE-like annotation overlays with intrachromosomal reflection

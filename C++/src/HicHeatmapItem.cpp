@@ -92,7 +92,9 @@ QSGNode* HicHeatmapItem::updatePaintNode(QSGNode* oldNode, UpdatePaintNodeData*)
     }
 
     const std::vector<contactRecord> records = m_controller->recordsSnapshot();
-    if (records.empty()) {
+    const std::vector<contactRecord> controlRecords = m_controller->controlRecordsSnapshot();
+    const bool isVsMode = m_controller->matrixType() == QStringLiteral("vs") && !controlRecords.empty();
+    if (records.empty() && controlRecords.empty()) {
         return root;
     }
 
@@ -104,15 +106,16 @@ QSGNode* HicHeatmapItem::updatePaintNode(QSGNode* oldNode, UpdatePaintNodeData*)
     const qint64 viewHeight = std::max<qint64>(1, y1 - y0);
     const double side = std::min(width(), height());
     const double scale = side / static_cast<double>(std::max(viewWidth, viewHeight));
-    const double extentW = viewWidth * scale;
-    const double extentH = viewHeight * scale;
-    const double originX = (width() - extentW) * 0.5;
-    const double originY = (height() - extentH) * 0.5;
+    const double originX = (width() - side) * 0.5;
+    const double originY = (height() - side) * 0.5;
     const double cellSize = std::max(1.0, m_controller->resolution() * scale);
-    const bool mirrorIntra = m_controller->chrX() == m_controller->chrY();
+    const bool mirrorIntra = m_controller->chrX() == m_controller->chrY() && !isVsMode;
+    const bool splitVsIntra = m_controller->chrX() == m_controller->chrY() && isVsMode;
 
     const int stride = std::max(1, static_cast<int>(std::ceil(records.size() / static_cast<double>(kMaxRenderedRecords))));
-    const int renderedRecords = static_cast<int>((records.size() + stride - 1) / stride);
+    const int controlStride = std::max(1, static_cast<int>(std::ceil(controlRecords.size() / static_cast<double>(kMaxRenderedRecords))));
+    const int renderedRecords = static_cast<int>((records.size() + stride - 1) / stride)
+                                + static_cast<int>((controlRecords.size() + controlStride - 1) / controlStride);
     const int verticesPerRecord = mirrorIntra ? 12 : 6;
     auto* node = new QSGGeometryNode;
     auto* geometry = new QSGGeometry(QSGGeometry::defaultAttributes_ColoredPoint2D(), renderedRecords * verticesPerRecord);
@@ -145,9 +148,22 @@ QSGNode* HicHeatmapItem::updatePaintNode(QSGNode* oldNode, UpdatePaintNodeData*)
     for (std::size_t i = 0; i < records.size(); i += stride) {
         const contactRecord& record = records[i];
         const QColor color = colorForValue(record.counts);
-        appendQuad(record.binX, record.binY, color);
+        if (splitVsIntra) {
+            appendQuad(std::max(record.binX, record.binY), std::min(record.binX, record.binY), color);
+        } else {
+            appendQuad(record.binX, record.binY, color);
+        }
         if (mirrorIntra && record.binX != record.binY) {
             appendQuad(record.binY, record.binX, color);
+        }
+    }
+    for (std::size_t i = 0; i < controlRecords.size(); i += controlStride) {
+        const contactRecord& record = controlRecords[i];
+        const QColor color = colorForValue(record.counts);
+        if (splitVsIntra) {
+            appendQuad(std::min(record.binX, record.binY), std::max(record.binX, record.binY), color);
+        } else {
+            appendQuad(record.binX, record.binY, color);
         }
     }
     geometry->setVertexCount(vi);
@@ -234,7 +250,13 @@ QColor HicHeatmapItem::colorForValue(float value) const {
         return QColor(std::clamp(r, 0, 255), std::clamp(g, 0, 255), std::clamp(b, 0, 255), 245);
     }
 
-    const double t = std::clamp(static_cast<double>(std::max(0.0f, value)) / std::max(1.0, maxValue), 0.0, 1.0);
+    double scaledValue = static_cast<double>(std::max(0.0f, value));
+    double scaledMax = std::max(1.0, maxValue);
+    if (m_controller && m_controller->matrixType() == QStringLiteral("log")) {
+        scaledValue = std::log1p(scaledValue);
+        scaledMax = std::log1p(scaledMax);
+    }
+    const double t = std::clamp(scaledValue / scaledMax, 0.0, 1.0);
     const QString colorMap = m_controller ? m_controller->colorMap() : QStringLiteral("White-Red");
     QColor color;
     if (colorMap == QStringLiteral("Viridis")) {
