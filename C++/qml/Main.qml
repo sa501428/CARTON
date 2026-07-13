@@ -15,6 +15,8 @@ ApplicationWindow {
     property var controllers: []
     property var activeController: null
     property int tabSerial: 0
+    property real contextFx: 0.5
+    property real contextFy: 0.5
 
     ListModel { id: tabModel }
 
@@ -88,6 +90,20 @@ ApplicationWindow {
             if (activeController)
                 activeController.openFile(selectedFile)
         }
+    }
+
+    FileDialog {
+        id: trackDialog
+        title: "Load 1D Track"
+        nameFilters: ["Track files (*.bed *.bedgraph *.wig *.txt *.tsv)", "All files (*)"]
+        onAccepted: if (activeController) activeController.loadTrack(selectedFile)
+    }
+
+    FileDialog {
+        id: annotationDialog
+        title: "Load 2D Annotations"
+        nameFilters: ["Annotation files (*.bedpe *.txt *.tsv)", "All files (*)"]
+        onAccepted: if (activeController) activeController.loadAnnotations(selectedFile)
     }
 
     ColorDialog {
@@ -174,6 +190,18 @@ ApplicationWindow {
                 onClicked: activeController.resetView()
             }
 
+            ToolButton {
+                text: "Track"
+                enabled: !!activeController
+                onClicked: trackDialog.open()
+            }
+
+            ToolButton {
+                text: "2D"
+                enabled: !!activeController
+                onClicked: annotationDialog.open()
+            }
+
             Item { Layout.fillWidth: true }
 
             BusyIndicator {
@@ -234,14 +262,197 @@ ApplicationWindow {
                 Rectangle {
                     Layout.fillWidth: true
                     Layout.fillHeight: true
-                    color: "#ffffff"
+                    color: "#eef1f4"
                     border.color: "#c8d0d8"
                     border.width: 1
 
-                    HicHeatmapItem {
-                        anchors.fill: parent
-                        anchors.margins: 1
-                        controller: activeController
+                    Connections {
+                        target: activeController
+                        function onViewChanged() {
+                            topTrackCanvas.requestPaint()
+                            leftTrackCanvas.requestPaint()
+                            annotationCanvas.requestPaint()
+                        }
+                        function onTracksChanged() {
+                            topTrackCanvas.requestPaint()
+                            leftTrackCanvas.requestPaint()
+                        }
+                        function onAnnotationsChanged() {
+                            annotationCanvas.requestPaint()
+                        }
+                        function onRecordsChanged() {
+                            annotationCanvas.requestPaint()
+                        }
+                    }
+
+                    Menu {
+                        id: heatmapMenu
+                        MenuItem {
+                            text: "Undo Zoom"
+                            enabled: activeController && activeController.canUndoView
+                            onTriggered: activeController.undoView()
+                        }
+                        MenuItem {
+                            text: "Redo Zoom"
+                            enabled: activeController && activeController.canRedoView
+                            onTriggered: activeController.redoView()
+                        }
+                        MenuSeparator {}
+                        MenuItem {
+                            text: "Jump to Diagonal"
+                            enabled: activeController && activeController.chrX === activeController.chrY
+                            onTriggered: activeController.jumpToDiagonal(contextFx, contextFy)
+                        }
+                        MenuItem {
+                            text: "Copy Position"
+                            enabled: !!activeController
+                            onTriggered: activeController.copyPosition(contextFx, contextFy)
+                        }
+                        MenuSeparator {}
+                        MenuItem {
+                            text: "Load 1D Track..."
+                            onTriggered: trackDialog.open()
+                        }
+                        MenuItem {
+                            text: "Load 2D Annotations..."
+                            onTriggered: annotationDialog.open()
+                        }
+                        MenuItem {
+                            text: "Clear 1D Tracks"
+                            enabled: activeController && activeController.trackCount > 0
+                            onTriggered: activeController.clearTracks()
+                        }
+                        MenuItem {
+                            text: "Clear 2D Annotations"
+                            enabled: activeController && activeController.annotationCount > 0
+                            onTriggered: activeController.clearAnnotations()
+                        }
+                    }
+
+                    Item {
+                        id: plotFrame
+                        anchors.centerIn: parent
+                        width: Math.max(240, Math.min(parent.width - 58, parent.height - 90))
+                        height: width
+
+                        Canvas {
+                            id: topTrackCanvas
+                            x: 42
+                            y: 0
+                            width: plotFrame.width - 42
+                            height: 42
+                            onPaint: {
+                                var ctx = getContext("2d")
+                                ctx.reset()
+                                ctx.fillStyle = "#f7f8fa"
+                                ctx.fillRect(0, 0, width, height)
+                                if (!activeController) return
+                                var segments = activeController.visibleTrackSegments(true)
+                                var span = Math.max(1, activeController.x1 - activeController.x0)
+                                ctx.strokeStyle = "#8b949e"
+                                ctx.beginPath()
+                                ctx.moveTo(0, height - 0.5)
+                                ctx.lineTo(width, height - 0.5)
+                                ctx.stroke()
+                                for (var i = 0; i < segments.length; i++) {
+                                    var s = segments[i]
+                                    var x0 = (s.start - activeController.x0) / span * width
+                                    var x1 = (s.end - activeController.x0) / span * width
+                                    var h = Math.max(2, Math.min(height - 6, Math.abs(s.value) * 8))
+                                    ctx.fillStyle = s.color
+                                    ctx.fillRect(Math.max(0, x0), height - h - 2, Math.max(1, x1 - x0), h)
+                                }
+                            }
+                        }
+
+                        Canvas {
+                            id: leftTrackCanvas
+                            x: 0
+                            y: 42
+                            width: 42
+                            height: plotFrame.height - 42
+                            onPaint: {
+                                var ctx = getContext("2d")
+                                ctx.reset()
+                                ctx.fillStyle = "#f7f8fa"
+                                ctx.fillRect(0, 0, width, height)
+                                if (!activeController) return
+                                var segments = activeController.visibleTrackSegments(false)
+                                var span = Math.max(1, activeController.y1 - activeController.y0)
+                                ctx.strokeStyle = "#8b949e"
+                                ctx.beginPath()
+                                ctx.moveTo(width - 0.5, 0)
+                                ctx.lineTo(width - 0.5, height)
+                                ctx.stroke()
+                                for (var i = 0; i < segments.length; i++) {
+                                    var s = segments[i]
+                                    var y0 = (s.start - activeController.y0) / span * height
+                                    var y1 = (s.end - activeController.y0) / span * height
+                                    var w = Math.max(2, Math.min(width - 6, Math.abs(s.value) * 8))
+                                    ctx.fillStyle = s.color
+                                    ctx.fillRect(width - w - 2, Math.max(0, y0), w, Math.max(1, y1 - y0))
+                                }
+                            }
+                        }
+
+                        Item {
+                            id: heatmapHost
+                            x: 42
+                            y: 42
+                            width: plotFrame.width - 42
+                            height: plotFrame.height - 42
+                            clip: true
+
+                            HicHeatmapItem {
+                                anchors.fill: parent
+                                controller: activeController
+                            }
+
+                            Canvas {
+                                id: annotationCanvas
+                                anchors.fill: parent
+                                onPaint: {
+                                    var ctx = getContext("2d")
+                                    ctx.reset()
+                                    if (!activeController) return
+                                    var annotations = activeController.visibleAnnotations()
+                                    var spanX = Math.max(1, activeController.x1 - activeController.x0)
+                                    var spanY = Math.max(1, activeController.y1 - activeController.y0)
+                                    var side = Math.min(width, height)
+                                    var scale = side / Math.max(spanX, spanY)
+                                    var extentW = spanX * scale
+                                    var extentH = spanY * scale
+                                    var ox = (width - extentW) * 0.5
+                                    var oy = (height - extentH) * 0.5
+                                    ctx.lineWidth = 1.5
+                                    for (var i = 0; i < annotations.length; i++) {
+                                        var a = annotations[i]
+                                        var x = ox + (a.x0 - activeController.x0) * scale
+                                        var y = oy + (a.y0 - activeController.y0) * scale
+                                        var w = Math.max(2, (a.x1 - a.x0) * scale)
+                                        var h = Math.max(2, (a.y1 - a.y0) * scale)
+                                        ctx.strokeStyle = a.color
+                                        ctx.strokeRect(x, y, w, h)
+                                        if (w > 7 && h > 7)
+                                            ctx.strokeRect(x + 1, y + 1, w - 2, h - 2)
+                                    }
+                                }
+                            }
+
+                            MouseArea {
+                                anchors.fill: parent
+                                acceptedButtons: Qt.RightButton
+                                onPressed: function(mouse) {
+                                    if (!activeController) return
+                                    var side = Math.max(1, Math.min(width, height))
+                                    var ox = (width - side) * 0.5
+                                    var oy = (height - side) * 0.5
+                                    contextFx = Math.max(0, Math.min(1, (mouse.x - ox) / side))
+                                    contextFy = Math.max(0, Math.min(1, (mouse.y - oy) / side))
+                                    heatmapMenu.popup()
+                                }
+                            }
+                        }
                     }
 
                     Rectangle {

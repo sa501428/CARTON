@@ -1,6 +1,12 @@
 #include "HicDataController.h"
 
 #include <QtConcurrent>
+#include <QClipboard>
+#include <QFile>
+#include <QFileInfo>
+#include <QGuiApplication>
+#include <QRegularExpression>
+#include <QTextStream>
 
 #include <algorithm>
 #include <cmath>
@@ -78,6 +84,10 @@ double HicDataController::colorMax() const { return m_colorMax; }
 QString HicDataController::colorMap() const { return m_colorMap; }
 QColor HicDataController::customLowColor() const { return m_customLowColor; }
 QColor HicDataController::customHighColor() const { return m_customHighColor; }
+int HicDataController::trackCount() const { return static_cast<int>(m_tracks.size()); }
+int HicDataController::annotationCount() const { return static_cast<int>(m_annotations.size()); }
+bool HicDataController::canUndoView() const { return !m_undoStack.isEmpty(); }
+bool HicDataController::canRedoView() const { return !m_redoStack.isEmpty(); }
 
 int HicDataController::recordCount() const {
     QMutexLocker locker(&m_mutex);
@@ -110,6 +120,98 @@ void HicDataController::openFile(const QUrl& url) {
     }));
 }
 
+void HicDataController::loadTrack(const QUrl& url) {
+    const QString path = localPathFromUrl(url);
+    QFile file(path);
+    if (!file.open(QIODevice::ReadOnly | QIODevice::Text)) {
+        setStatus(QStringLiteral("Could not open 1D track: %1").arg(path));
+        return;
+    }
+
+    QTextStream in(&file);
+    int loaded = 0;
+    while (!in.atEnd()) {
+        const QString line = in.readLine().trimmed();
+        if (line.isEmpty() || line.startsWith('#') || line.startsWith("track")) {
+            continue;
+        }
+        const QStringList parts = line.split(QRegularExpression("\\s+"), Qt::SkipEmptyParts);
+        if (parts.size() < 3) {
+            continue;
+        }
+        TrackSegment segment;
+        segment.chr = parts[0];
+        segment.start = parts[1].toLongLong();
+        segment.end = parts[2].toLongLong();
+        segment.name = QFileInfo(path).baseName();
+        if (parts.size() >= 4) {
+            bool ok = false;
+            const double v = parts[3].toDouble(&ok);
+            segment.value = ok ? v : 1.0;
+        } else {
+            segment.value = 1.0;
+        }
+        if (segment.end > segment.start) {
+            m_tracks.push_back(segment);
+            ++loaded;
+        }
+    }
+    setStatus(QStringLiteral("Loaded %1 1D track intervals.").arg(loaded));
+    emit tracksChanged();
+}
+
+void HicDataController::loadAnnotations(const QUrl& url) {
+    const QString path = localPathFromUrl(url);
+    QFile file(path);
+    if (!file.open(QIODevice::ReadOnly | QIODevice::Text)) {
+        setStatus(QStringLiteral("Could not open 2D annotations: %1").arg(path));
+        return;
+    }
+
+    QTextStream in(&file);
+    int loaded = 0;
+    while (!in.atEnd()) {
+        const QString line = in.readLine().trimmed();
+        if (line.isEmpty() || line.startsWith('#')) {
+            continue;
+        }
+        const QStringList parts = line.split(QRegularExpression("\\s+"), Qt::SkipEmptyParts);
+        if (parts.size() < 6) {
+            continue;
+        }
+        Annotation2D annotation;
+        annotation.chr1 = parts[0];
+        annotation.start1 = parts[1].toLongLong();
+        annotation.end1 = parts[2].toLongLong();
+        annotation.chr2 = parts[3];
+        annotation.start2 = parts[4].toLongLong();
+        annotation.end2 = parts[5].toLongLong();
+        annotation.name = parts.size() >= 7 ? parts[6] : QFileInfo(path).baseName();
+        if (parts.size() >= 9) {
+            const QColor parsed(parts[8]);
+            if (parsed.isValid()) {
+                annotation.color = parsed;
+            }
+        }
+        if (annotation.end1 > annotation.start1 && annotation.end2 > annotation.start2) {
+            m_annotations.push_back(annotation);
+            ++loaded;
+        }
+    }
+    setStatus(QStringLiteral("Loaded %1 2D annotations.").arg(loaded));
+    emit annotationsChanged();
+}
+
+void HicDataController::clearTracks() {
+    m_tracks.clear();
+    emit tracksChanged();
+}
+
+void HicDataController::clearAnnotations() {
+    m_annotations.clear();
+    emit annotationsChanged();
+}
+
 QVariantList HicDataController::chromosomeNames() const {
     QVariantList names;
     for (const chromosome& chr : m_metadata.chromosomes) {
@@ -139,6 +241,113 @@ QVariantList HicDataController::normalizations() const {
     return values;
 }
 
+QVariantList HicDataController::visibleTrackSegments(bool xAxis) const {
+    QVariantList values;
+    const QString chr = xAxis ? m_chrX : m_chrY;
+    const qint64 start = xAxis ? m_x0 : m_y0;
+    const qint64 end = xAxis ? m_x1 : m_y1;
+    for (const TrackSegment& segment : m_tracks) {
+        if (segment.chr != chr || segment.end < start || segment.start > end) {
+            continue;
+        }
+        QVariantMap item;
+        item["name"] = segment.name;
+        item["start"] = segment.start;
+        item["end"] = segment.end;
+        item["value"] = segment.value;
+        item["color"] = segment.color;
+        values.push_back(item);
+    }
+    return values;
+}
+
+QVariantList HicDataController::visibleAnnotations() const {
+    QVariantList values;
+    for (const Annotation2D& annotation : m_annotations) {
+        const bool direct = annotation.chr1 == m_chrX && annotation.chr2 == m_chrY &&
+                            annotation.end1 >= m_x0 && annotation.start1 <= m_x1 &&
+                            annotation.end2 >= m_y0 && annotation.start2 <= m_y1;
+        const bool reflected = annotation.chr1 == m_chrY && annotation.chr2 == m_chrX &&
+                               annotation.end1 >= m_y0 && annotation.start1 <= m_y1 &&
+                               annotation.end2 >= m_x0 && annotation.start2 <= m_x1;
+        if (!direct && !reflected) {
+            continue;
+        }
+        QVariantMap item;
+        item["name"] = annotation.name;
+        item["x0"] = direct ? annotation.start1 : annotation.start2;
+        item["x1"] = direct ? annotation.end1 : annotation.end2;
+        item["y0"] = direct ? annotation.start2 : annotation.start1;
+        item["y1"] = direct ? annotation.end2 : annotation.end1;
+        item["color"] = annotation.color;
+        values.push_back(item);
+
+        if (m_chrX == m_chrY && annotation.chr1 == annotation.chr2) {
+            QVariantMap mirror = item;
+            mirror["x0"] = item["y0"];
+            mirror["x1"] = item["y1"];
+            mirror["y0"] = item["x0"];
+            mirror["y1"] = item["x1"];
+            values.push_back(mirror);
+        }
+    }
+    return values;
+}
+
+QString HicDataController::positionText(double xFraction, double yFraction) const {
+    const qint64 x = m_x0 + static_cast<qint64>((m_x1 - m_x0) * std::clamp(xFraction, 0.0, 1.0));
+    const qint64 y = m_y0 + static_cast<qint64>((m_y1 - m_y0) * std::clamp(yFraction, 0.0, 1.0));
+    return QStringLiteral("%1:%2 | %3:%4 | %5 bp")
+        .arg(m_chrX).arg(x)
+        .arg(m_chrY).arg(y)
+        .arg(m_resolution);
+}
+
+void HicDataController::copyPosition(double xFraction, double yFraction) const {
+    if (QClipboard* clipboard = QGuiApplication::clipboard()) {
+        clipboard->setText(positionText(xFraction, yFraction));
+    }
+}
+
+void HicDataController::jumpToDiagonal(double xFraction, double yFraction) {
+    if (m_chrX != m_chrY) {
+        return;
+    }
+    pushViewHistory();
+    const qint64 width = std::max<qint64>(m_resolution, m_x1 - m_x0);
+    const qint64 height = std::max<qint64>(m_resolution, m_y1 - m_y0);
+    const qint64 x = m_x0 + static_cast<qint64>(width * std::clamp(xFraction, 0.0, 1.0));
+    const qint64 y = m_y0 + static_cast<qint64>(height * std::clamp(yFraction, 0.0, 1.0));
+    const qint64 center = (x + y) / 2;
+    m_x0 = center - width / 2;
+    m_y0 = center - height / 2;
+    m_x1 = m_x0 + width;
+    m_y1 = m_y0 + height;
+    clampRegion();
+    emit viewChanged();
+    scheduleRequest();
+}
+
+void HicDataController::undoView() {
+    if (m_undoStack.isEmpty()) {
+        return;
+    }
+    QVariantMap current;
+    current["x0"] = m_x0; current["x1"] = m_x1; current["y0"] = m_y0; current["y1"] = m_y1;
+    m_redoStack.push_back(current);
+    restoreView(m_undoStack.takeLast());
+}
+
+void HicDataController::redoView() {
+    if (m_redoStack.isEmpty()) {
+        return;
+    }
+    QVariantMap current;
+    current["x0"] = m_x0; current["x1"] = m_x1; current["y0"] = m_y0; current["y1"] = m_y1;
+    m_undoStack.push_back(current);
+    restoreView(m_redoStack.takeLast());
+}
+
 void HicDataController::requestVisibleRegion() {
     if (m_filePath.isEmpty() || m_chrX.isEmpty() || m_chrY.isEmpty() || m_resolution <= 0) {
         return;
@@ -152,6 +361,7 @@ void HicDataController::zoom(double factor, double centerX, double centerY) {
         return;
     }
 
+    pushViewHistory();
     const qint64 width = std::max<qint64>(m_resolution, m_x1 - m_x0);
     const qint64 height = std::max<qint64>(m_resolution, m_y1 - m_y0);
     const qint64 nextWidth = std::max<qint64>(m_resolution * 20LL, static_cast<qint64>(width / factor));
@@ -169,6 +379,7 @@ void HicDataController::zoom(double factor, double centerX, double centerY) {
 }
 
 void HicDataController::pan(double dxFraction, double dyFraction) {
+    pushViewHistory();
     const qint64 width = m_x1 - m_x0;
     const qint64 height = m_y1 - m_y0;
     const qint64 dx = static_cast<qint64>(width * dxFraction);
@@ -186,6 +397,7 @@ void HicDataController::resetView() {
     if (m_chrX.isEmpty() || m_chrY.isEmpty()) {
         return;
     }
+    pushViewHistory();
     m_x0 = 0;
     m_y0 = 0;
     m_x1 = chromosomeLength(m_chrX);
@@ -348,6 +560,39 @@ void HicDataController::clampRegion() {
     m_y0 = std::clamp<qint64>(m_y0, 0, std::max<qint64>(0, maxY - height));
     m_x1 = m_x0 + width;
     m_y1 = m_y0 + height;
+}
+
+void HicDataController::pushViewHistory() {
+    if (m_restoringView || m_chrX.isEmpty() || m_chrY.isEmpty()) {
+        return;
+    }
+    QVariantMap view;
+    view["x0"] = m_x0;
+    view["x1"] = m_x1;
+    view["y0"] = m_y0;
+    view["y1"] = m_y1;
+    if (!m_undoStack.isEmpty() && m_undoStack.last() == view) {
+        return;
+    }
+    m_undoStack.push_back(view);
+    if (m_undoStack.size() > 100) {
+        m_undoStack.removeFirst();
+    }
+    m_redoStack.clear();
+    emit viewHistoryChanged();
+}
+
+void HicDataController::restoreView(const QVariantMap& view) {
+    m_restoringView = true;
+    m_x0 = view.value("x0").toLongLong();
+    m_x1 = view.value("x1").toLongLong();
+    m_y0 = view.value("y0").toLongLong();
+    m_y1 = view.value("y1").toLongLong();
+    clampRegion();
+    m_restoringView = false;
+    emit viewHistoryChanged();
+    emit viewChanged();
+    scheduleRequest();
 }
 
 void HicDataController::orientTileForRequestedAxes(HicTile& tile) const {

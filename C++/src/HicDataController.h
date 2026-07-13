@@ -6,6 +6,7 @@
 #include <QObject>
 #include <QColor>
 #include <QUrl>
+#include <QVariantMap>
 #include <QVariantList>
 
 #include <memory>
@@ -34,6 +35,10 @@ class HicDataController : public QObject {
     Q_PROPERTY(QString colorMap READ colorMap WRITE setColorMap NOTIFY colorMapChanged)
     Q_PROPERTY(QColor customLowColor READ customLowColor WRITE setCustomLowColor NOTIFY colorMapChanged)
     Q_PROPERTY(QColor customHighColor READ customHighColor WRITE setCustomHighColor NOTIFY colorMapChanged)
+    Q_PROPERTY(int trackCount READ trackCount NOTIFY tracksChanged)
+    Q_PROPERTY(int annotationCount READ annotationCount NOTIFY annotationsChanged)
+    Q_PROPERTY(bool canUndoView READ canUndoView NOTIFY viewHistoryChanged)
+    Q_PROPERTY(bool canRedoView READ canRedoView NOTIFY viewHistoryChanged)
 
 public:
     explicit HicDataController(QObject* parent = nullptr);
@@ -57,11 +62,26 @@ public:
     QString colorMap() const;
     QColor customLowColor() const;
     QColor customHighColor() const;
+    int trackCount() const;
+    int annotationCount() const;
+    bool canUndoView() const;
+    bool canRedoView() const;
 
     Q_INVOKABLE void openFile(const QUrl& url);
+    Q_INVOKABLE void loadTrack(const QUrl& url);
+    Q_INVOKABLE void loadAnnotations(const QUrl& url);
+    Q_INVOKABLE void clearTracks();
+    Q_INVOKABLE void clearAnnotations();
     Q_INVOKABLE QVariantList chromosomeNames() const;
     Q_INVOKABLE QVariantList resolutions() const;
     Q_INVOKABLE QVariantList normalizations() const;
+    Q_INVOKABLE QVariantList visibleTrackSegments(bool xAxis) const;
+    Q_INVOKABLE QVariantList visibleAnnotations() const;
+    Q_INVOKABLE QString positionText(double xFraction, double yFraction) const;
+    Q_INVOKABLE void copyPosition(double xFraction, double yFraction) const;
+    Q_INVOKABLE void jumpToDiagonal(double xFraction, double yFraction);
+    Q_INVOKABLE void undoView();
+    Q_INVOKABLE void redoView();
     Q_INVOKABLE void requestVisibleRegion();
     Q_INVOKABLE void zoom(double factor, double centerX, double centerY);
     Q_INVOKABLE void pan(double dxFraction, double dyFraction);
@@ -92,6 +112,9 @@ signals:
     void recordsChanged();
     void colorMaxChanged();
     void colorMapChanged();
+    void tracksChanged();
+    void annotationsChanged();
+    void viewHistoryChanged();
 
 private:
     struct TileResult {
@@ -112,9 +135,31 @@ private:
     chromosome chromosomeByName(const QString& name) const;
     qint64 chromosomeLength(const QString& name) const;
     void clampRegion();
+    void pushViewHistory();
+    void restoreView(const QVariantMap& view);
     void orientTileForRequestedAxes(HicTile& tile) const;
     void scheduleRequest();
     void startTileLoad(const HicTileKey& key, quint64 requestId);
+
+    struct TrackSegment {
+        QString name;
+        QString chr;
+        qint64 start = 0;
+        qint64 end = 0;
+        double value = 0.0;
+        QColor color = QColor("#4b7bec");
+    };
+
+    struct Annotation2D {
+        QString name;
+        QString chr1;
+        qint64 start1 = 0;
+        qint64 end1 = 0;
+        QString chr2;
+        qint64 start2 = 0;
+        qint64 end2 = 0;
+        QColor color = QColor("#111111");
+    };
 
     mutable QMutex m_mutex;
     QString m_filePath;
@@ -137,11 +182,16 @@ private:
     QColor m_customHighColor = QColor("#d7191c");
     HicFileMetadata m_metadata;
     std::vector<contactRecord> m_records;
+    std::vector<TrackSegment> m_tracks;
+    std::vector<Annotation2D> m_annotations;
     std::unique_ptr<HicTileCache> m_cache;
     QFutureWatcher<HicFileMetadata> m_metadataWatcher;
     QFutureWatcher<TileResult> m_tileWatcher;
     quint64 m_requestSerial = 0;
     bool m_reloadPending = false;
+    QVector<QVariantMap> m_undoStack;
+    QVector<QVariantMap> m_redoStack;
+    bool m_restoringView = false;
 };
 
 #endif

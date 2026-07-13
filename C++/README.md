@@ -27,6 +27,9 @@ The desktop app supports:
 8. Batched GPU heatmap rendering in a custom Qt Quick item
 9. Multiple independent tabs, each with its own file, viewport, cache, and display settings
 10. White-to-red default heatmap colors with Viridis, blue-white-red, grayscale, and custom low/high color options
+11. Right-click map actions for undo/redo zoom, jump to diagonal, copy genomic position, and layer loading/clearing
+12. Top and left 1D track panels for BED/bedGraph-like interval tracks
+13. 2D BEDPE-like annotation overlays with intrachromosomal reflection
 
 The debug executable `straw` supports two modes:
 1. Standard mode:
