@@ -1767,6 +1767,81 @@ public:
 
 int64_t HiCFile::totalFileSize = 0LL;
 
+vector<string> readAvailableNormalizationsFromFooter(istream &fin, int64_t master, int32_t version) {
+    set<string> normalizations;
+    normalizations.insert("NONE");
+
+    fin.seekg(master, ios::beg);
+    if (!fin) {
+        return vector<string>(normalizations.begin(), normalizations.end());
+    }
+
+    if (version > 8) {
+        readInt64FromFile(fin);
+    } else {
+        readInt32FromFile(fin);
+    }
+
+    int32_t nEntries = readInt32FromFile(fin);
+    for (int i = 0; i < nEntries; i++) {
+        string keyStr;
+        getline(fin, keyStr, '\0');
+        readInt64FromFile(fin);
+        readInt32FromFile(fin);
+    }
+
+    int32_t nExpectedValues = readInt32FromFile(fin);
+    vector<double> ignoredExpectedValues;
+    for (int i = 0; i < nExpectedValues; i++) {
+        string unit;
+        getline(fin, unit, '\0');
+        readInt32FromFile(fin);
+        int64_t nValues = version > 8 ? readInt64FromFile(fin) : static_cast<int64_t>(readInt32FromFile(fin));
+        readThroughExpectedVector(version, fin, ignoredExpectedValues, nValues, false, 0);
+        readThroughNormalizationFactors(fin, version, false, ignoredExpectedValues, -1);
+    }
+
+    nExpectedValues = readInt32FromFile(fin);
+    for (int i = 0; i < nExpectedValues; i++) {
+        string nType;
+        string unit;
+        getline(fin, nType, '\0');
+        getline(fin, unit, '\0');
+        readInt32FromFile(fin);
+        int64_t nValues = version > 8 ? readInt64FromFile(fin) : static_cast<int64_t>(readInt32FromFile(fin));
+        readThroughExpectedVector(version, fin, ignoredExpectedValues, nValues, false, 0);
+        readThroughNormalizationFactors(fin, version, false, ignoredExpectedValues, -1);
+    }
+
+    nEntries = readInt32FromFile(fin);
+    for (int i = 0; i < nEntries; i++) {
+        string normType;
+        string unit;
+        getline(fin, normType, '\0');
+        readInt32FromFile(fin);
+        getline(fin, unit, '\0');
+        readInt32FromFile(fin);
+        readInt64FromFile(fin);
+        if (version > 8) {
+            readInt64FromFile(fin);
+        } else {
+            readInt32FromFile(fin);
+        }
+        if (!normType.empty()) {
+            normalizations.insert(normType);
+        }
+    }
+
+    vector<string> ordered;
+    ordered.push_back("NONE");
+    for (const string &norm : normalizations) {
+        if (norm != "NONE") {
+            ordered.push_back(norm);
+        }
+    }
+    return ordered;
+}
+
 HicFileMetadata inspectHicFile(const string &fileName) {
     HiCFile hiCFile(fileName);
     HicFileMetadata metadata;
@@ -1778,6 +1853,13 @@ HicFileMetadata inspectHicFile(const string &fileName) {
     metadata.normalizationVectorIndexLength = hiCFile.nviLength;
     metadata.chromosomes = hiCFile.getChromosomes();
     metadata.bpResolutions = hiCFile.getResolutions();
+    metadata.normalizations.push_back("NONE");
+    if (std::strncmp(fileName.c_str(), hiCFile.prefix.c_str(), hiCFile.prefix.size()) != 0) {
+        ifstream fin(fileName, fstream::in | fstream::binary);
+        if (fin) {
+            metadata.normalizations = readAvailableNormalizationsFromFooter(fin, hiCFile.master, hiCFile.version);
+        }
+    }
     return metadata;
 }
 

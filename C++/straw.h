@@ -65,6 +65,7 @@ struct HicFileMetadata {
     int64_t normalizationVectorIndexLength = 0;
     std::vector<chromosome> chromosomes;
     std::vector<int32_t> bpResolutions;
+    std::vector<std::string> normalizations;
 };
 
 // this is for creating a stream from a byte array for ease of use

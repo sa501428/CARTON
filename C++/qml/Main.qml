@@ -69,6 +69,7 @@ ApplicationWindow {
         chromosomeX.model = activeController.chromosomeNames()
         chromosomeY.model = activeController.chromosomeNames()
         resolutionBox.model = activeController.resolutions()
+        normBox.model = activeController.normalizations()
         chromosomeX.currentIndex = Math.max(0, chromosomeX.find(activeController.chrX))
         chromosomeY.currentIndex = Math.max(0, chromosomeY.find(activeController.chrY))
         resolutionBox.currentIndex = Math.max(0, resolutionBox.find(String(activeController.resolution)))
@@ -163,7 +164,7 @@ ApplicationWindow {
             ComboBox {
                 id: normBox
                 Layout.preferredWidth: 120
-                model: ["NONE", "VC", "VC_SQRT", "KR"]
+                model: ["NONE"]
                 onActivated: if (activeController) activeController.norm = currentText
             }
 
@@ -358,14 +359,35 @@ ApplicationWindow {
                 Slider {
                     Layout.fillWidth: true
                     from: 1
-                    to: 500
+                    to: Math.max(500, activeController ? activeController.colorMax : 500)
                     value: activeController ? activeController.colorMax : 50
                     onMoved: if (activeController) activeController.colorMax = value
                 }
 
-                Label {
-                    text: activeController ? Math.round(activeController.colorMax).toString() : "-"
-                    color: "#5b6672"
+                RowLayout {
+                    Layout.fillWidth: true
+                    Label {
+                        text: "Max"
+                        color: "#5b6672"
+                    }
+                    TextField {
+                        id: colorMaxField
+                        Layout.fillWidth: true
+                        text: activeController ? activeController.colorMax.toString() : ""
+                        selectByMouse: true
+                        validator: DoubleValidator {
+                            bottom: 0.000001
+                            notation: DoubleValidator.ScientificNotation
+                        }
+                        onAccepted: {
+                            if (activeController && Number(text) > 0)
+                                activeController.colorMax = Number(text)
+                        }
+                        onEditingFinished: {
+                            if (activeController && Number(text) > 0)
+                                activeController.colorMax = Number(text)
+                        }
+                    }
                 }
 
                 Label {

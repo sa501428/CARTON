@@ -102,41 +102,53 @@ QSGNode* HicHeatmapItem::updatePaintNode(QSGNode* oldNode, UpdatePaintNodeData*)
     const qint64 y1 = m_controller->y1();
     const qint64 viewWidth = std::max<qint64>(1, x1 - x0);
     const qint64 viewHeight = std::max<qint64>(1, y1 - y0);
-    const double sx = width() / static_cast<double>(viewWidth);
-    const double sy = height() / static_cast<double>(viewHeight);
-    const double cellW = std::max(1.0, m_controller->resolution() * sx);
-    const double cellH = std::max(1.0, m_controller->resolution() * sy);
+    const double side = std::min(width(), height());
+    const double scale = side / static_cast<double>(std::max(viewWidth, viewHeight));
+    const double extentW = viewWidth * scale;
+    const double extentH = viewHeight * scale;
+    const double originX = (width() - extentW) * 0.5;
+    const double originY = (height() - extentH) * 0.5;
+    const double cellSize = std::max(1.0, m_controller->resolution() * scale);
+    const bool mirrorIntra = m_controller->chrX() == m_controller->chrY();
 
     const int stride = std::max(1, static_cast<int>(std::ceil(records.size() / static_cast<double>(kMaxRenderedRecords))));
     const int renderedRecords = static_cast<int>((records.size() + stride - 1) / stride);
+    const int verticesPerRecord = mirrorIntra ? 12 : 6;
     auto* node = new QSGGeometryNode;
-    auto* geometry = new QSGGeometry(QSGGeometry::defaultAttributes_ColoredPoint2D(), renderedRecords * 6);
+    auto* geometry = new QSGGeometry(QSGGeometry::defaultAttributes_ColoredPoint2D(), renderedRecords * verticesPerRecord);
     geometry->setDrawingMode(QSGGeometry::DrawTriangles);
     auto* vertices = geometry->vertexDataAsColoredPoint2D();
 
     int vi = 0;
-    for (std::size_t i = 0; i < records.size(); i += stride) {
-        const contactRecord& record = records[i];
-        const double px = (record.binX - x0) * sx;
-        const double py = (record.binY - y0) * sy;
-        if (px + cellW < 0 || py + cellH < 0 || px > width() || py > height()) {
-            continue;
+    auto appendQuad = [&](qint64 genomeX, qint64 genomeY, const QColor& color) {
+        const double px = originX + (genomeX - x0) * scale;
+        const double py = originY + (genomeY - y0) * scale;
+        if (px + cellSize < 0 || py + cellSize < 0 || px > width() || py > height()) {
+            return;
         }
-        const QColor color = colorForValue(record.counts);
         const uchar r = static_cast<uchar>(color.red());
         const uchar g = static_cast<uchar>(color.green());
         const uchar b = static_cast<uchar>(color.blue());
         const uchar a = static_cast<uchar>(color.alpha());
         const float left = static_cast<float>(px);
         const float top = static_cast<float>(py);
-        const float right = static_cast<float>(px + cellW);
-        const float bottom = static_cast<float>(py + cellH);
+        const float right = static_cast<float>(px + cellSize);
+        const float bottom = static_cast<float>(py + cellSize);
         vertices[vi++].set(left, top, r, g, b, a);
         vertices[vi++].set(right, top, r, g, b, a);
         vertices[vi++].set(left, bottom, r, g, b, a);
         vertices[vi++].set(right, top, r, g, b, a);
         vertices[vi++].set(right, bottom, r, g, b, a);
         vertices[vi++].set(left, bottom, r, g, b, a);
+    };
+
+    for (std::size_t i = 0; i < records.size(); i += stride) {
+        const contactRecord& record = records[i];
+        const QColor color = colorForValue(record.counts);
+        appendQuad(record.binX, record.binY, color);
+        if (mirrorIntra && record.binX != record.binY) {
+            appendQuad(record.binY, record.binX, color);
+        }
     }
     geometry->setVertexCount(vi);
 
@@ -157,7 +169,12 @@ void HicHeatmapItem::wheelEvent(QWheelEvent* event) {
     }
     const double factor = event->angleDelta().y() > 0 ? 1.35 : 0.74;
     const QPointF p = event->position();
-    m_controller->zoom(factor, p.x() / std::max(1.0, width()), p.y() / std::max(1.0, height()));
+    const double side = std::max(1.0, std::min(width(), height()));
+    const double originX = (width() - side) * 0.5;
+    const double originY = (height() - side) * 0.5;
+    m_controller->zoom(factor,
+                       std::clamp((p.x() - originX) / side, 0.0, 1.0),
+                       std::clamp((p.y() - originY) / side, 0.0, 1.0));
     event->accept();
 }
 
@@ -176,7 +193,8 @@ void HicHeatmapItem::mouseMoveEvent(QMouseEvent* event) {
     }
     const QPointF delta = event->position() - m_lastMousePosition;
     m_lastMousePosition = event->position();
-    m_controller->pan(-delta.x() / std::max(1.0, width()), -delta.y() / std::max(1.0, height()));
+    const double side = std::max(1.0, std::min(width(), height()));
+    m_controller->pan(-delta.x() / side, -delta.y() / side);
     event->accept();
 }
 

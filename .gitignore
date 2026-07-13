@@ -1,2 +1,10 @@
-/C++/build-carton
-/C++/build
+.DS_Store
+
+# CMake / Qt build outputs
+/C++/build/
+/C++/build-*/
+
+# Local test outputs
+*.log
+*.bin
+*.slc

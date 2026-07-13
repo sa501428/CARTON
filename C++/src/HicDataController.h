@@ -61,6 +61,7 @@ public:
     Q_INVOKABLE void openFile(const QUrl& url);
     Q_INVOKABLE QVariantList chromosomeNames() const;
     Q_INVOKABLE QVariantList resolutions() const;
+    Q_INVOKABLE QVariantList normalizations() const;
     Q_INVOKABLE void requestVisibleRegion();
     Q_INVOKABLE void zoom(double factor, double centerX, double centerY);
     Q_INVOKABLE void pan(double dxFraction, double dyFraction);
@@ -111,6 +112,7 @@ private:
     chromosome chromosomeByName(const QString& name) const;
     qint64 chromosomeLength(const QString& name) const;
     void clampRegion();
+    void orientTileForRequestedAxes(HicTile& tile) const;
     void scheduleRequest();
     void startTileLoad(const HicTileKey& key, quint64 requestId);
 

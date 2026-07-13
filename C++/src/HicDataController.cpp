@@ -34,9 +34,10 @@ HicDataController::HicDataController(QObject* parent)
             return;
         }
 
+        orientTileForRequestedAxes(result.tile);
         {
             QMutexLocker locker(&m_mutex);
-            m_records = std::move(result.tile.records);
+            m_records = result.tile.records;
         }
         if (!result.fromCache) {
             m_cache->put(std::move(result.tile));
@@ -123,6 +124,17 @@ QVariantList HicDataController::resolutions() const {
     QVariantList values;
     for (int32_t resolution : m_metadata.bpResolutions) {
         values.push_back(resolution);
+    }
+    return values;
+}
+
+QVariantList HicDataController::normalizations() const {
+    QVariantList values;
+    for (const std::string& norm : m_metadata.normalizations) {
+        values.push_back(QString::fromStdString(norm));
+    }
+    if (values.empty()) {
+        values.push_back(QStringLiteral("NONE"));
     }
     return values;
 }
@@ -298,6 +310,7 @@ void HicDataController::applyMetadata(const HicFileMetadata& metadata) {
     if (!metadata.bpResolutions.empty()) {
         m_resolution = metadata.bpResolutions.front();
     }
+    m_norm = QStringLiteral("NONE");
     for (const chromosome& chr : metadata.chromosomes) {
         if (chr.index > 0) {
             m_chrX = QString::fromStdString(chr.name);
@@ -335,6 +348,16 @@ void HicDataController::clampRegion() {
     m_y0 = std::clamp<qint64>(m_y0, 0, std::max<qint64>(0, maxY - height));
     m_x1 = m_x0 + width;
     m_y1 = m_y0 + height;
+}
+
+void HicDataController::orientTileForRequestedAxes(HicTile& tile) const {
+    const chromosome xChr = chromosomeByName(QString::fromStdString(tile.key.chrX));
+    const chromosome yChr = chromosomeByName(QString::fromStdString(tile.key.chrY));
+    if (xChr.index > yChr.index) {
+        for (contactRecord& record : tile.records) {
+            std::swap(record.binX, record.binY);
+        }
+    }
 }
 
 void HicDataController::scheduleRequest() {
