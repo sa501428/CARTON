@@ -21,6 +21,9 @@ ApplicationWindow {
     property bool hoverActive: false
     property real hoverPlotX: 0
     property real hoverPlotY: 0
+    property bool straightEdgeEnabled: false
+    property bool diagonalEdgeEnabled: false
+    property int pendingAnnotationLayerExport: -1
 
     function formatBp(value) {
         if (value >= 1000000000)
@@ -89,6 +92,7 @@ ApplicationWindow {
         chromosomeX.currentIndex = Math.max(0, chromosomeX.find(activeController.chrX))
         chromosomeY.currentIndex = Math.max(0, chromosomeY.find(activeController.chrY))
         resolutionBox.currentIndex = Math.max(0, resolutionBox.find(String(activeController.resolution)))
+        matrixBox.model = activeController.matrixTypes()
         matrixBox.currentIndex = Math.max(0, matrixBox.find(activeController.matrixType))
         normBox.currentIndex = Math.max(0, normBox.find(activeController.norm))
         colorMapBox.currentIndex = Math.max(0, colorMapBox.find(activeController.colorMap))
@@ -130,6 +134,126 @@ ApplicationWindow {
         onAccepted: if (activeController) activeController.loadAnnotations(selectedFile)
     }
 
+    FileDialog {
+        id: importStateDialog
+        title: "Import CARTON state"
+        nameFilters: ["CARTON state (*.json)", "All files (*)"]
+        onAccepted: if (activeController) activeController.importState(selectedFile)
+    }
+
+    FileDialog {
+        id: exportStateDialog
+        title: "Export CARTON state"
+        fileMode: FileDialog.SaveFile
+        defaultSuffix: "json"
+        nameFilters: ["CARTON state (*.json)", "All files (*)"]
+        onAccepted: if (activeController) activeController.exportState(selectedFile)
+    }
+
+    FileDialog {
+        id: exportPdfDialog
+        title: "Export PDF figure"
+        fileMode: FileDialog.SaveFile
+        defaultSuffix: "pdf"
+        nameFilters: ["PDF files (*.pdf)", "All files (*)"]
+        onAccepted: if (activeController) activeController.exportFigurePdf(selectedFile, exportWidth.value, exportHeight.value)
+    }
+
+    FileDialog {
+        id: exportAnnotationDialog
+        title: "Export annotation layer"
+        fileMode: FileDialog.SaveFile
+        defaultSuffix: "bedpe"
+        nameFilters: ["BEDPE files (*.bedpe)", "All files (*)"]
+        onAccepted: if (activeController && pendingAnnotationLayerExport >= 0) activeController.exportAnnotationLayer(pendingAnnotationLayerExport, selectedFile)
+    }
+
+    Dialog {
+        id: urlDialog
+        title: "Load Track from URL"
+        modal: true
+        standardButtons: Dialog.Ok | Dialog.Cancel
+        width: 520
+        ColumnLayout {
+            anchors.fill: parent
+            TextField {
+                id: urlField
+                Layout.fillWidth: true
+                placeholderText: "https://..."
+                selectByMouse: true
+            }
+        }
+        onAccepted: if (activeController) activeController.loadTrackFromPath(urlField.text)
+    }
+
+    Dialog {
+        id: saveNameDialog
+        property string mode: "location"
+        title: mode === "state" ? "Save Current State" : "Save Current Location"
+        modal: true
+        standardButtons: Dialog.Ok | Dialog.Cancel
+        width: 360
+        TextField {
+            id: saveNameField
+            anchors.fill: parent
+            placeholderText: "Name"
+            selectByMouse: true
+        }
+        onAccepted: {
+            if (activeController) {
+                if (mode === "state")
+                    activeController.saveCurrentState(saveNameField.text)
+                else
+                    activeController.saveCurrentLocation(saveNameField.text)
+            }
+        }
+    }
+
+    Dialog {
+        id: exportSizeDialog
+        title: "Export PDF Figure"
+        modal: true
+        standardButtons: Dialog.Ok | Dialog.Cancel
+        width: 360
+        GridLayout {
+            anchors.fill: parent
+            columns: 2
+            Label { text: "Width" }
+            SpinBox { id: exportWidth; from: 300; to: 10000; value: 1800; editable: true }
+            Label { text: "Height" }
+            SpinBox { id: exportHeight; from: 300; to: 10000; value: 1800; editable: true }
+        }
+        onAccepted: exportPdfDialog.open()
+    }
+
+    Dialog {
+        id: renameGenomeDialog
+        title: "Rename Genome"
+        modal: true
+        standardButtons: Dialog.Ok | Dialog.Cancel
+        width: 320
+        TextField {
+            id: genomeNameField
+            anchors.fill: parent
+            text: activeController ? activeController.genomeId : ""
+            selectByMouse: true
+        }
+        onAccepted: if (activeController) activeController.renameGenome(genomeNameField.text)
+    }
+
+    Dialog {
+        id: aboutDialog
+        title: "About CARTON"
+        modal: true
+        standardButtons: Dialog.Ok
+        width: 560
+        Label {
+            anchors.fill: parent
+            wrapMode: Text.WordWrap
+            text: "CARTON is a Qt/C++ desktop viewer for Hi-C contact maps, inspired by Juicebox core viewer workflows. It supports .hic maps, control maps, normalization, derived display modes, annotations, tracks, saved states, and GPU-backed rendering.\n\nIf using Juicebox-derived workflows in research, cite the original Juicebox publication: Durand, Robinson et al., Cell Systems 2016."
+        }
+    }
+
     ColorDialog {
         id: lowColorDialog
         title: "Low Value Color"
@@ -161,29 +285,111 @@ ApplicationWindow {
             title: "File"
             MenuItem { text: "Open Primary Hi-C..."; onTriggered: openDialog.open() }
             MenuItem { text: "Open Control Hi-C..."; onTriggered: controlDialog.open() }
+            Menu {
+                title: "Open Recent"
+                Repeater {
+                    model: activeController ? activeController.recentMaps() : []
+                    MenuItem {
+                        text: modelData
+                        onTriggered: activeController.openRecentMap(modelData)
+                    }
+                }
+            }
+            Menu {
+                title: "Open Recent as Control"
+                Repeater {
+                    model: activeController ? activeController.recentControlMaps() : []
+                    MenuItem {
+                        text: modelData
+                        onTriggered: activeController.openRecentControlMap(modelData)
+                    }
+                }
+            }
+            MenuSeparator {}
             MenuItem { text: "Load 1D Track..."; onTriggered: trackDialog.open() }
+            MenuItem { text: "Load 1D Track from URL..."; onTriggered: urlDialog.open() }
             MenuItem { text: "Load 2D Annotations..."; onTriggered: annotationDialog.open() }
+            MenuSeparator {}
+            MenuItem { text: "Import State..."; onTriggered: importStateDialog.open() }
+            MenuItem { text: "Export State..."; enabled: !!activeController; onTriggered: exportStateDialog.open() }
+            MenuItem { text: "Export PDF Figure..."; enabled: !!activeController; onTriggered: exportSizeDialog.open() }
             MenuSeparator {}
             MenuItem { text: "New Tab"; onTriggered: addTab() }
             MenuItem { text: "Close Tab"; enabled: controllers.length > 1; onTriggered: closeCurrentTab() }
+            MenuSeparator {}
+            MenuItem { text: "About CARTON"; onTriggered: aboutDialog.open() }
         }
         Menu {
             title: "Navigate"
             MenuItem { text: "Undo Zoom"; enabled: activeController && activeController.canUndoView; onTriggered: activeController.undoView() }
             MenuItem { text: "Redo Zoom"; enabled: activeController && activeController.canRedoView; onTriggered: activeController.redoView() }
             MenuItem { text: "Reset View"; enabled: activeController && activeController.filePath.length > 0; onTriggered: activeController.resetView() }
+            MenuItem { text: "Whole Genome All by All"; enabled: activeController && activeController.filePath.length > 0; onTriggered: activeController.setWholeGenomeView() }
             MenuItem { text: "Jump to Diagonal"; enabled: activeController && activeController.chrX === activeController.chrY; onTriggered: activeController.jumpToDiagonal(contextFx, contextFy) }
             MenuItem { text: "Copy Current Position"; enabled: !!activeController; onTriggered: activeController.copyPosition(contextFx, contextFy) }
+            MenuItem { text: "Copy Hover Text"; enabled: hoverText.length > 0; onTriggered: activeController.copyText(hoverText) }
+            MenuItem { text: "Copy Top Position"; enabled: !!activeController; onTriggered: activeController.copyTopPosition(contextFx) }
+            MenuItem { text: "Copy Left Position"; enabled: !!activeController; onTriggered: activeController.copyLeftPosition(contextFy) }
+            MenuSeparator {}
+            MenuItem {
+                text: "Save Current Location..."
+                enabled: !!activeController
+                onTriggered: {
+                    saveNameDialog.mode = "location"
+                    saveNameField.text = ""
+                    saveNameDialog.open()
+                }
+            }
+            Menu {
+                title: "Restore Saved Location"
+                Repeater {
+                    model: activeController ? activeController.savedLocations() : []
+                    MenuItem {
+                        text: modelData.name ? modelData.name : modelData.created
+                        onTriggered: activeController.restoreSavedLocation(index)
+                    }
+                }
+            }
+            MenuItem {
+                text: "Save Current State..."
+                enabled: !!activeController
+                onTriggered: {
+                    saveNameDialog.mode = "state"
+                    saveNameField.text = ""
+                    saveNameDialog.open()
+                }
+            }
+            Menu {
+                title: "Restore Saved State"
+                Repeater {
+                    model: activeController ? activeController.savedStates() : []
+                    MenuItem {
+                        text: modelData.name ? modelData.name : modelData.created
+                        onTriggered: activeController.restoreSavedState(index)
+                    }
+                }
+            }
         }
         Menu {
             title: "Display"
+            MenuItem { text: "Darkula Mode"; checkable: true; checked: activeController && activeController.darkMode; onTriggered: if (activeController) activeController.darkMode = checked }
+            MenuItem { text: "Gridlines"; checkable: true; checked: activeController && activeController.showGridlines; onTriggered: if (activeController) activeController.showGridlines = checked }
+            MenuItem { text: "Axis Endpoints Only"; checkable: true; checked: activeController && activeController.axisEndpointsOnly; onTriggered: if (activeController) activeController.axisEndpointsOnly = checked }
+            MenuItem { text: "Chromosome Context"; checkable: true; checked: activeController && activeController.showChromosomeContext; onTriggered: if (activeController) activeController.showChromosomeContext = checked }
+            MenuItem { text: "Display Tiles"; checkable: true; checked: activeController && activeController.showTilesDebug; onTriggered: if (activeController) activeController.showTilesDebug = checked }
+            MenuSeparator {}
             MenuItem { text: "White-Red"; checkable: true; checked: activeController && activeController.colorMap === "White-Red"; onTriggered: if (activeController) activeController.colorMap = "White-Red" }
             MenuItem { text: "Viridis"; checkable: true; checked: activeController && activeController.colorMap === "Viridis"; onTriggered: if (activeController) activeController.colorMap = "Viridis" }
             MenuItem { text: "Blue-White-Red"; checkable: true; checked: activeController && activeController.colorMap === "Blue-White-Red"; onTriggered: if (activeController) activeController.colorMap = "Blue-White-Red" }
             MenuItem { text: "Grayscale"; checkable: true; checked: activeController && activeController.colorMap === "Grayscale"; onTriggered: if (activeController) activeController.colorMap = "Grayscale" }
+            MenuItem { text: "Change Heatmap Low Color..."; onTriggered: lowColorDialog.open() }
+            MenuItem { text: "Change Heatmap High Color..."; onTriggered: highColorDialog.open() }
         }
         Menu {
             title: "Layers"
+            MenuItem { text: "Add Annotation Layer"; enabled: !!activeController; onTriggered: activeController.addAnnotationLayer("Layer") }
+            MenuItem { text: "Merge Visible Layers"; enabled: !!activeController; onTriggered: activeController.mergeVisibleAnnotationLayers("Merged") }
+            MenuSeparator {}
             MenuItem { text: "Clear 1D Tracks"; enabled: activeController && activeController.trackCount > 0; onTriggered: activeController.clearTracks() }
             MenuItem { text: "Clear 2D Annotations"; enabled: activeController && activeController.annotationCount > 0; onTriggered: activeController.clearAnnotations() }
         }
@@ -236,8 +442,8 @@ ApplicationWindow {
 
             ComboBox {
                 id: matrixBox
-                Layout.preferredWidth: 120
-                model: ["observed", "log", "oe", "expected", "vs"]
+                Layout.preferredWidth: 150
+                model: activeController ? activeController.matrixTypes() : ["observed", "log", "oe", "expected", "vs"]
                 onActivated: if (activeController) activeController.matrixType = currentText
             }
 
@@ -276,6 +482,12 @@ ApplicationWindow {
                 text: "Reset"
                 enabled: activeController && activeController.filePath.length > 0
                 onClicked: activeController.resetView()
+            }
+
+            ToolButton {
+                text: "All"
+                enabled: activeController && activeController.filePath.length > 0
+                onClicked: activeController.setWholeGenomeView()
             }
 
             ToolButton {
@@ -360,6 +572,8 @@ ApplicationWindow {
                             topTrackCanvas.requestPaint()
                             leftTrackCanvas.requestPaint()
                             annotationCanvas.requestPaint()
+                            guideCanvas.requestPaint()
+                            miniMapCanvas.requestPaint()
                         }
                         function onTracksChanged() {
                             topTrackCanvas.requestPaint()
@@ -370,6 +584,14 @@ ApplicationWindow {
                         }
                         function onRecordsChanged() {
                             annotationCanvas.requestPaint()
+                            miniMapCanvas.requestPaint()
+                        }
+                        function onDisplayOptionsChanged() {
+                            topTrackCanvas.requestPaint()
+                            leftTrackCanvas.requestPaint()
+                            annotationCanvas.requestPaint()
+                            guideCanvas.requestPaint()
+                            miniMapCanvas.requestPaint()
                         }
                     }
 
@@ -395,6 +617,52 @@ ApplicationWindow {
                             text: "Copy Position"
                             enabled: !!activeController
                             onTriggered: activeController.copyPosition(contextFx, contextFy)
+                        }
+                        MenuItem {
+                            text: "Copy Hover Text"
+                            enabled: hoverText.length > 0
+                            onTriggered: activeController.copyText(hoverText)
+                        }
+                        MenuItem {
+                            text: "Copy Top Position"
+                            enabled: !!activeController
+                            onTriggered: activeController.copyTopPosition(contextFx)
+                        }
+                        MenuItem {
+                            text: "Copy Left Position"
+                            enabled: !!activeController
+                            onTriggered: activeController.copyLeftPosition(contextFy)
+                        }
+                        MenuSeparator {}
+                        MenuItem {
+                            text: "Enable straight edge"
+                            checkable: true
+                            checked: straightEdgeEnabled
+                            onTriggered: {
+                                straightEdgeEnabled = checked
+                                if (checked) diagonalEdgeEnabled = false
+                                guideCanvas.requestPaint()
+                            }
+                        }
+                        MenuItem {
+                            text: "Enable diagonal edge"
+                            checkable: true
+                            checked: diagonalEdgeEnabled
+                            onTriggered: {
+                                diagonalEdgeEnabled = checked
+                                if (checked) straightEdgeEnabled = false
+                                guideCanvas.requestPaint()
+                            }
+                        }
+                        MenuItem {
+                            text: "Highlight Selected Feature"
+                            enabled: activeController && activeController.selectedAnnotationId.length > 0
+                            onTriggered: activeController.toggleSelectedAnnotationHighlight()
+                        }
+                        MenuItem {
+                            text: "Delete Selected Feature"
+                            enabled: activeController && activeController.selectedAnnotationId.length > 0
+                            onTriggered: activeController.deleteSelectedAnnotation()
                         }
                         MenuSeparator {}
                         MenuItem {
@@ -440,6 +708,12 @@ ApplicationWindow {
                                 var span = Math.max(1, activeController.x1 - activeController.x0)
                                 var axisLabelHeight = 18
                                 var axisY = height - axisLabelHeight - 0.5
+                                if (activeController.showChromosomeContext) {
+                                    ctx.fillStyle = activeController.wholeGenomeView ? "#e0f2fe" : "#dbeafe"
+                                    ctx.fillRect(0, 0, width, 8)
+                                    ctx.fillStyle = "#2563eb"
+                                    ctx.fillRect(0, 0, width, 8)
+                                }
                                 ctx.strokeStyle = "#8b949e"
                                 ctx.beginPath()
                                 ctx.moveTo(0, axisY)
@@ -448,7 +722,7 @@ ApplicationWindow {
                                 ctx.font = "11px sans-serif"
                                 ctx.fillStyle = "#4b5563"
                                 ctx.textBaseline = "top"
-                                var ticks = 5
+                                var ticks = activeController.axisEndpointsOnly ? 2 : 5
                                 for (var t = 0; t < ticks; t++) {
                                     var f = ticks === 1 ? 0 : t / (ticks - 1)
                                     var tx = f * width
@@ -488,6 +762,12 @@ ApplicationWindow {
                                 var span = Math.max(1, activeController.y1 - activeController.y0)
                                 var labelWidth = 42
                                 var axisX = width - 0.5
+                                if (activeController.showChromosomeContext) {
+                                    ctx.fillStyle = activeController.wholeGenomeView ? "#e0f2fe" : "#dbeafe"
+                                    ctx.fillRect(0, 0, 8, height)
+                                    ctx.fillStyle = "#2563eb"
+                                    ctx.fillRect(0, 0, 8, height)
+                                }
                                 ctx.strokeStyle = "#8b949e"
                                 ctx.beginPath()
                                 ctx.moveTo(axisX, 0)
@@ -497,7 +777,7 @@ ApplicationWindow {
                                 ctx.fillStyle = "#4b5563"
                                 ctx.textAlign = "left"
                                 ctx.textBaseline = "middle"
-                                var ticks = 5
+                                var ticks = activeController.axisEndpointsOnly ? 2 : 5
                                 for (var t = 0; t < ticks; t++) {
                                     var f = ticks === 1 ? 0 : t / (ticks - 1)
                                     var ty = f * height
@@ -547,17 +827,93 @@ ApplicationWindow {
                                     var scale = side / Math.max(spanX, spanY)
                                     var ox = (width - side) * 0.5
                                     var oy = (height - side) * 0.5
+                                    if (activeController.showGridlines) {
+                                        ctx.strokeStyle = "#22000000"
+                                        ctx.lineWidth = 1
+                                        var gridSteps = 10
+                                        for (var g = 1; g < gridSteps; g++) {
+                                            var gx = ox + side * g / gridSteps
+                                            var gy = oy + side * g / gridSteps
+                                            ctx.beginPath()
+                                            ctx.moveTo(gx, oy)
+                                            ctx.lineTo(gx, oy + side)
+                                            ctx.moveTo(ox, gy)
+                                            ctx.lineTo(ox + side, gy)
+                                            ctx.stroke()
+                                        }
+                                    }
+                                    if (activeController.wholeGenomeView) {
+                                        var boundaries = activeController.chromosomeBoundaries()
+                                        ctx.strokeStyle = "#77374151"
+                                        ctx.lineWidth = 1.2
+                                        for (var b = 0; b < boundaries.length; b++) {
+                                            var bx = ox + (boundaries[b].end - activeController.x0) / spanX * side
+                                            var by = oy + (boundaries[b].end - activeController.y0) / spanY * side
+                                            ctx.beginPath()
+                                            ctx.moveTo(bx, oy)
+                                            ctx.lineTo(bx, oy + side)
+                                            ctx.moveTo(ox, by)
+                                            ctx.lineTo(ox + side, by)
+                                            ctx.stroke()
+                                        }
+                                    }
+                                    if (activeController.showTilesDebug) {
+                                        ctx.strokeStyle = "#553b82f6"
+                                        ctx.lineWidth = 1
+                                        var tileCount = 8
+                                        for (var tt = 0; tt <= tileCount; tt++) {
+                                            var tx = ox + side * tt / tileCount
+                                            var ty = oy + side * tt / tileCount
+                                            ctx.beginPath()
+                                            ctx.moveTo(tx, oy)
+                                            ctx.lineTo(tx, oy + side)
+                                            ctx.moveTo(ox, ty)
+                                            ctx.lineTo(ox + side, ty)
+                                            ctx.stroke()
+                                        }
+                                    }
                                     ctx.lineWidth = 1.5
                                     for (var i = 0; i < annotations.length; i++) {
                                         var a = annotations[i]
                                         var x = ox + (a.x0 - activeController.x0) * scale
                                         var y = oy + (a.y0 - activeController.y0) * scale
-                                        var w = Math.max(2, (a.x1 - a.x0) * scale)
-                                        var h = Math.max(2, (a.y1 - a.y0) * scale)
+                                        var w = Math.max(a.enlarged ? 6 : 2, (a.x1 - a.x0) * scale)
+                                        var h = Math.max(a.enlarged ? 6 : 2, (a.y1 - a.y0) * scale)
+                                        ctx.globalAlpha = a.transparent ? 0.45 : 1.0
                                         ctx.strokeStyle = a.color
                                         ctx.strokeRect(x, y, w, h)
                                         if (w > 7 && h > 7)
                                             ctx.strokeRect(x + 1, y + 1, w - 2, h - 2)
+                                        ctx.globalAlpha = 1.0
+                                    }
+                                }
+                            }
+
+                            Canvas {
+                                id: guideCanvas
+                                anchors.fill: parent
+                                z: 10
+                                onPaint: {
+                                    var ctx = getContext("2d")
+                                    ctx.reset()
+                                    if (!hoverActive) return
+                                    ctx.strokeStyle = "#cc111827"
+                                    ctx.lineWidth = 1
+                                    ctx.setLineDash([5, 4])
+                                    if (straightEdgeEnabled) {
+                                        ctx.beginPath()
+                                        ctx.moveTo(hoverPlotX, 0)
+                                        ctx.lineTo(hoverPlotX, height)
+                                        ctx.moveTo(0, hoverPlotY)
+                                        ctx.lineTo(width, hoverPlotY)
+                                        ctx.stroke()
+                                    }
+                                    if (diagonalEdgeEnabled) {
+                                        ctx.beginPath()
+                                        var d = hoverPlotY - hoverPlotX
+                                        ctx.moveTo(Math.max(0, -d), Math.max(0, d))
+                                        ctx.lineTo(Math.min(width, height - d), Math.min(height, width + d))
+                                        ctx.stroke()
                                     }
                                 }
                             }
@@ -580,6 +936,7 @@ ApplicationWindow {
                                 property real startX: 0
                                 property real startY: 0
                                 property bool selecting: false
+                                property bool annotating: false
 
                                 function clamp01(v) {
                                     return Math.max(0, Math.min(1, v))
@@ -609,6 +966,7 @@ ApplicationWindow {
                                     contextFx = fractionX(mouse.x)
                                     contextFy = fractionY(mouse.y)
                                     hoverText = activeController.positionText(contextFx, contextFy)
+                                    guideCanvas.requestPaint()
                                 }
 
                                 onWheel: function(wheel) {
@@ -630,13 +988,15 @@ ApplicationWindow {
                                     lastY = mouse.y
                                     startX = mouse.x
                                     startY = mouse.y
-                                    selecting = (mouse.modifiers & Qt.ShiftModifier) !== 0
-                                    if (selecting) {
+                                    selecting = (mouse.modifiers & Qt.AltModifier) !== 0
+                                    annotating = (mouse.modifiers & Qt.ShiftModifier) !== 0
+                                    if (selecting || annotating) {
                                         selectionRect.x = mouse.x
                                         selectionRect.y = mouse.y
                                         selectionRect.width = 0
                                         selectionRect.height = 0
                                         selectionRect.visible = true
+                                        selectionRect.border.color = annotating ? "#f59e0b" : "#2f6fed"
                                     } else {
                                         activeController.beginInteraction()
                                     }
@@ -646,7 +1006,7 @@ ApplicationWindow {
                                     updateHover(mouse)
                                     if (!activeController || !(mouse.buttons & Qt.LeftButton))
                                         return
-                                    if (selecting) {
+                                    if (selecting || annotating) {
                                         selectionRect.x = Math.min(startX, mouse.x)
                                         selectionRect.y = Math.min(startY, mouse.y)
                                         selectionRect.width = Math.abs(mouse.x - startX)
@@ -662,21 +1022,30 @@ ApplicationWindow {
                                 onReleased: function(mouse) {
                                     if (!activeController)
                                         return
-                                    if (selecting && mouse.button === Qt.LeftButton) {
+                                    if ((selecting || annotating) && mouse.button === Qt.LeftButton) {
                                         selectionRect.visible = false
                                         if (Math.abs(mouse.x - startX) > 8 && Math.abs(mouse.y - startY) > 8) {
-                                            activeController.zoomToFractions(fractionX(startX), fractionY(startY),
-                                                                            fractionX(mouse.x), fractionY(mouse.y))
+                                            if (annotating)
+                                                activeController.addAnnotationFromFractions(fractionX(startX), fractionY(startY),
+                                                                                           fractionX(mouse.x), fractionY(mouse.y))
+                                            else
+                                                activeController.zoomToFractions(fractionX(startX), fractionY(startY),
+                                                                                fractionX(mouse.x), fractionY(mouse.y))
+                                        } else {
+                                            activeController.selectAnnotationAt(fractionX(mouse.x), fractionY(mouse.y))
                                         }
                                         selecting = false
+                                        annotating = false
                                     } else if (mouse.button === Qt.LeftButton) {
                                         activeController.endInteraction()
+                                        activeController.selectAnnotationAt(fractionX(mouse.x), fractionY(mouse.y))
                                     }
                                 }
 
                                 onCanceled: {
                                     selectionRect.visible = false
                                     selecting = false
+                                    annotating = false
                                     hoverActive = false
                                     if (activeController)
                                         activeController.endInteraction()
@@ -685,8 +1054,9 @@ ApplicationWindow {
                                 onExited: {
                                     hoverText = ""
                                     hoverActive = false
+                                    guideCanvas.requestPaint()
                                 }
-                                cursorShape: selecting ? Qt.CrossCursor : Qt.OpenHandCursor
+                                cursorShape: (selecting || annotating || straightEdgeEnabled || diagonalEdgeEnabled) ? Qt.CrossCursor : Qt.OpenHandCursor
                                 preventStealing: true
                                 propagateComposedEvents: false
                                 onDoubleClicked: function(mouse) {
@@ -796,6 +1166,68 @@ ApplicationWindow {
                 }
 
                 Label {
+                    text: "Navigator"
+                    color: "#20252b"
+                    font.weight: Font.DemiBold
+                }
+
+                Canvas {
+                    id: miniMapCanvas
+                    Layout.fillWidth: true
+                    Layout.preferredHeight: 180
+                    onPaint: {
+                        var ctx = getContext("2d")
+                        ctx.reset()
+                        ctx.fillStyle = activeController && activeController.darkMode ? "#111827" : "#ffffff"
+                        ctx.fillRect(0, 0, width, height)
+                        ctx.strokeStyle = "#9ca3af"
+                        ctx.strokeRect(0.5, 0.5, width - 1, height - 1)
+                        if (!activeController) return
+                        var lx = Math.max(1, activeController.wholeGenomeView ? activeController.x1 : activeController.x1 - activeController.x0)
+                        var ly = Math.max(1, activeController.wholeGenomeView ? activeController.y1 : activeController.y1 - activeController.y0)
+                        if (activeController.wholeGenomeView) {
+                            var bounds = activeController.chromosomeBoundaries()
+                            ctx.strokeStyle = "#d1d5db"
+                            for (var i = 0; i < bounds.length; i++) {
+                                var bx = bounds[i].end / Math.max(1, activeController.x1) * width
+                                var by = bounds[i].end / Math.max(1, activeController.y1) * height
+                                ctx.beginPath()
+                                ctx.moveTo(bx, 0)
+                                ctx.lineTo(bx, height)
+                                ctx.moveTo(0, by)
+                                ctx.lineTo(width, by)
+                                ctx.stroke()
+                            }
+                        }
+                        ctx.strokeStyle = "#ef4444"
+                        ctx.lineWidth = 2
+                        ctx.strokeRect(4, 4, width - 8, height - 8)
+                    }
+                }
+
+                RowLayout {
+                    Layout.fillWidth: true
+                    CheckBox {
+                        text: "Lock resolution"
+                        checked: activeController && activeController.resolutionLocked
+                        onToggled: if (activeController) activeController.resolutionLocked = checked
+                    }
+                    Slider {
+                        Layout.fillWidth: true
+                        enabled: activeController && !activeController.resolutionLocked
+                        from: 0
+                        to: activeController ? Math.max(0, activeController.resolutions().length - 1) : 0
+                        stepSize: 1
+                        snapMode: Slider.SnapAlways
+                        value: resolutionBox.currentIndex
+                        onMoved: {
+                            if (activeController && activeController.resolutions().length > value)
+                                activeController.resolution = Number(activeController.resolutions()[Math.round(value)])
+                        }
+                    }
+                }
+
+                Label {
                     text: "Color Scale"
                     color: "#20252b"
                     font.weight: Font.DemiBold
@@ -839,7 +1271,7 @@ ApplicationWindow {
 
                 Slider {
                     Layout.fillWidth: true
-                    from: 1
+                    from: activeController ? activeController.colorMin : 0
                     to: Math.max(500, activeController ? activeController.colorMax : 500)
                     value: activeController ? activeController.colorMax : 50
                     onMoved: if (activeController) activeController.colorMax = value
@@ -847,6 +1279,11 @@ ApplicationWindow {
 
                 RowLayout {
                     Layout.fillWidth: true
+                    Button {
+                        text: "-"
+                        enabled: !!activeController
+                        onClicked: if (activeController) activeController.colorMax = Math.max(0.1, activeController.colorMax / 2)
+                    }
                     Label {
                         text: activeController && activeController.colorMaxAuto ? "Max Auto" : "Max"
                         color: "#5b6672"
@@ -874,23 +1311,156 @@ ApplicationWindow {
                         enabled: activeController && !activeController.colorMaxAuto
                         onClicked: activeController.resetColorScale()
                     }
+                    Button {
+                        text: "+"
+                        enabled: !!activeController
+                        onClicked: if (activeController) activeController.colorMax = activeController.colorMax * 2
+                    }
                 }
 
                 Label {
-                    text: "Annotations"
+                    text: "Hover"
                     color: "#20252b"
                     font.weight: Font.DemiBold
                 }
 
-                ListView {
+                ScrollView {
+                    Layout.fillWidth: true
+                    Layout.preferredHeight: 96
+                    TextArea {
+                        text: hoverText
+                        readOnly: true
+                        wrapMode: Text.WordWrap
+                    }
+                }
+
+                TabBar {
+                    id: sideTabs
+                    Layout.fillWidth: true
+                    TabButton { text: "Layers" }
+                    TabButton { text: "Tracks" }
+                }
+
+                StackLayout {
                     Layout.fillWidth: true
                     Layout.fillHeight: true
-                    clip: true
-                    model: ["Selection", "Loops", "TADs", "Genes", "Tracks"]
-                    delegate: CheckDelegate {
-                        width: ListView.view.width
-                        text: modelData
-                        checked: modelData === "Selection"
+                    currentIndex: sideTabs.currentIndex
+
+                    ScrollView {
+                        clip: true
+                        ColumnLayout {
+                            width: parent.width
+                            spacing: 8
+                            RowLayout {
+                                Layout.fillWidth: true
+                                Button { text: "New"; onClicked: if (activeController) activeController.addAnnotationLayer("Layer") }
+                                Button { text: "Merge"; onClicked: if (activeController) activeController.mergeVisibleAnnotationLayers("Merged") }
+                                SpinBox {
+                                    from: 1
+                                    to: 1000000
+                                    value: activeController ? activeController.sparseFeatureLimit : 10000
+                                    editable: true
+                                    onValueModified: if (activeController) activeController.sparseFeatureLimit = value
+                                }
+                            }
+                            Repeater {
+                                model: activeController ? activeController.annotationLayerSummaries() : []
+                                Rectangle {
+                                    Layout.fillWidth: true
+                                    height: 92
+                                    radius: 6
+                                    color: modelData.active ? "#e0f2fe" : "#ffffff"
+                                    border.color: "#cbd5e1"
+                                    ColumnLayout {
+                                        anchors.fill: parent
+                                        anchors.margins: 6
+                                        spacing: 4
+                                        RowLayout {
+                                            Layout.fillWidth: true
+                                            CheckBox { checked: modelData.visible; onToggled: activeController.setAnnotationLayerVisible(modelData.index, checked) }
+                                            Label { text: modelData.name + " (" + modelData.count + ")"; Layout.fillWidth: true; elide: Text.ElideRight }
+                                            Button { text: "Active"; onClicked: activeController.setActiveAnnotationLayer(modelData.index) }
+                                        }
+                                        RowLayout {
+                                            Layout.fillWidth: true
+                                            CheckBox { text: "Trans"; checked: modelData.transparent; onToggled: activeController.setAnnotationLayerTransparent(modelData.index, checked) }
+                                            CheckBox { text: "Sparse"; checked: modelData.sparse; onToggled: activeController.setAnnotationLayerSparse(modelData.index, checked) }
+                                            CheckBox { text: "Large"; checked: modelData.enlarged; onToggled: activeController.setAnnotationLayerEnlarged(modelData.index, checked) }
+                                        }
+                                        RowLayout {
+                                            Button { text: "Dup"; onClicked: activeController.duplicateAnnotationLayer(modelData.index) }
+                                            Button { text: "Clear"; onClicked: activeController.clearAnnotationLayer(modelData.index) }
+                                            Button {
+                                                text: "Export"
+                                                onClicked: {
+                                                    pendingAnnotationLayerExport = modelData.index
+                                                    exportAnnotationDialog.open()
+                                                }
+                                            }
+                                            Button { text: "Del"; onClicked: activeController.removeAnnotationLayer(modelData.index) }
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
+
+                    ScrollView {
+                        clip: true
+                        ColumnLayout {
+                            width: parent.width
+                            spacing: 8
+                            RowLayout {
+                                Layout.fillWidth: true
+                                Button { text: "Load"; onClicked: trackDialog.open() }
+                                Button { text: "URL"; onClicked: urlDialog.open() }
+                                Button { text: "Clear"; enabled: activeController && activeController.trackCount > 0; onClicked: activeController.clearTracks() }
+                            }
+                            Repeater {
+                                model: activeController ? activeController.trackSummaries() : []
+                                Rectangle {
+                                    Layout.fillWidth: true
+                                    height: 112
+                                    radius: 6
+                                    color: "#ffffff"
+                                    border.color: "#cbd5e1"
+                                    ColumnLayout {
+                                        anchors.fill: parent
+                                        anchors.margins: 6
+                                        TextField {
+                                            Layout.fillWidth: true
+                                            text: modelData.name
+                                            selectByMouse: true
+                                            onAccepted: activeController.setTrackName(modelData.index, text)
+                                            onEditingFinished: activeController.setTrackName(modelData.index, text)
+                                        }
+                                        RowLayout {
+                                            Layout.fillWidth: true
+                                            CheckBox {
+                                                text: "Log"
+                                                checked: modelData.logScale
+                                                onToggled: activeController.setTrackRange(modelData.index, modelData.min, modelData.max, checked)
+                                            }
+                                            ComboBox {
+                                                model: ["mean", "max"]
+                                                currentIndex: modelData.reduction === "max" ? 1 : 0
+                                                onActivated: activeController.setTrackReduction(modelData.index, currentText)
+                                            }
+                                            Button { text: "Up"; enabled: modelData.index > 0; onClicked: activeController.moveTrack(modelData.index, modelData.index - 1) }
+                                            Button { text: "Down"; onClicked: activeController.moveTrack(modelData.index, modelData.index + 1) }
+                                            Button { text: "Del"; onClicked: activeController.removeTrack(modelData.index) }
+                                        }
+                                        RowLayout {
+                                            Layout.fillWidth: true
+                                            Label { text: "Min" }
+                                            TextField { text: String(modelData.min); Layout.fillWidth: true; onAccepted: activeController.setTrackRange(modelData.index, Number(text), modelData.max, modelData.logScale) }
+                                            Label { text: "Max" }
+                                            TextField { text: String(modelData.max); Layout.fillWidth: true; onAccepted: activeController.setTrackRange(modelData.index, modelData.min, Number(text), modelData.logScale) }
+                                        }
+                                    }
+                                }
+                            }
+                        }
                     }
                 }
 

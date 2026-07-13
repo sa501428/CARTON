@@ -223,26 +223,44 @@ void HicHeatmapItem::mouseReleaseEvent(QMouseEvent* event) {
 
 QColor HicHeatmapItem::colorForValue(float value) const {
     const double maxValue = m_controller ? m_controller->colorMax() : 50.0;
+    const double minValue = m_controller ? m_controller->colorMin() : 0.0;
+    const QString matrixType = m_controller ? m_controller->matrixType() : QStringLiteral("observed");
     if (!std::isfinite(value)) {
         return QColor("#808080");
     }
 
-    if (m_controller && m_controller->matrixType() == QStringLiteral("oe")) {
-        if (value <= 0.0f || maxValue <= 1.0) {
+    const bool pearson = matrixType.contains(QStringLiteral("pearson"));
+    const bool logRatio = matrixType == QStringLiteral("logratio") || matrixType == QStringLiteral("diff") ||
+                          matrixType == QStringLiteral("logoe") || matrixType == QStringLiteral("explogoe");
+    const bool ratioLike = matrixType == QStringLiteral("oe") || matrixType == QStringLiteral("controloe") ||
+                           matrixType == QStringLiteral("oeratio") || matrixType == QStringLiteral("oevs") ||
+                           matrixType == QStringLiteral("logeovs") || matrixType == QStringLiteral("ratio") ||
+                           matrixType == QStringLiteral("ratio1");
+    if (pearson || logRatio || ratioLike) {
+        if (!pearson && !logRatio && value <= 0.0f) {
             return QColor("#808080");
         }
-        const double threshold = std::log(maxValue);
-        double scaled = std::log(static_cast<double>(value));
+        double scaled = 0.0;
+        double threshold = 1.0;
+        if (pearson) {
+            scaled = std::clamp(static_cast<double>(value), -1.0, 1.0);
+            threshold = 1.0;
+        } else if (logRatio) {
+            threshold = std::max(std::abs(minValue), std::abs(maxValue));
+            scaled = std::clamp(static_cast<double>(value), -threshold, threshold);
+        } else {
+            threshold = std::log(std::max(1.01, maxValue));
+            scaled = std::clamp(std::log(static_cast<double>(value)), -threshold, threshold);
+        }
         int r = 255;
         int g = 255;
         int b = 255;
         if (scaled > 0.0) {
-            scaled = std::min(scaled, threshold);
             r = 255;
             g = static_cast<int>(255.0 * (threshold - scaled) / threshold);
             b = static_cast<int>(255.0 * (threshold - scaled) / threshold);
         } else {
-            scaled = std::min(-scaled, threshold);
+            scaled = std::abs(scaled);
             b = 255;
             r = static_cast<int>(255.0 * (threshold - scaled) / threshold);
             g = static_cast<int>(255.0 * (threshold - scaled) / threshold);
@@ -252,7 +270,7 @@ QColor HicHeatmapItem::colorForValue(float value) const {
 
     double scaledValue = static_cast<double>(std::max(0.0f, value));
     double scaledMax = std::max(1.0, maxValue);
-    if (m_controller && m_controller->matrixType() == QStringLiteral("log")) {
+    if (matrixType == QStringLiteral("log") || matrixType == QStringLiteral("logcontrol")) {
         scaledValue = std::log1p(scaledValue);
         scaledMax = std::log1p(scaledMax);
     }
