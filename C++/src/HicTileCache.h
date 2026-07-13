@@ -3,7 +3,6 @@
 
 #include <cstdint>
 #include <list>
-#include <optional>
 #include <unordered_map>
 #include <vector>
 
@@ -69,16 +68,16 @@ struct HicTile {
 
 class HicTileCache {
 public:
-    explicit HicTileCache(std::size_t maxRecords = 1500000)
-        : m_maxRecords(maxRecords) {}
+    explicit HicTileCache(std::size_t maxRecords = 1200000, std::size_t maxTiles = 24)
+        : m_maxRecords(maxRecords), m_maxTiles(maxTiles) {}
 
-    std::optional<HicTile> get(const HicTileKey& key) {
+    const HicTile* get(const HicTileKey& key) {
         auto found = m_entries.find(key);
         if (found == m_entries.end()) {
-            return std::nullopt;
+            return nullptr;
         }
         m_lru.splice(m_lru.begin(), m_lru, found->second);
-        return found->second->tile;
+        return &found->second->tile;
     }
 
     void put(HicTile tile) {
@@ -114,7 +113,7 @@ private:
     };
 
     void trim() {
-        while (m_recordCount > m_maxRecords && !m_lru.empty()) {
+        while ((m_recordCount > m_maxRecords || m_lru.size() > m_maxTiles) && !m_lru.empty()) {
             auto& oldest = m_lru.back();
             m_recordCount -= oldest.tile.records.size();
             m_entries.erase(oldest.tile.key);
@@ -123,6 +122,7 @@ private:
     }
 
     std::size_t m_maxRecords = 0;
+    std::size_t m_maxTiles = 0;
     std::size_t m_recordCount = 0;
     std::list<CacheEntry> m_lru;
     std::unordered_map<HicTileKey, std::list<CacheEntry>::iterator, HicTileKeyHash> m_entries;

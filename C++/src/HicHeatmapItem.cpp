@@ -91,8 +91,9 @@ QSGNode* HicHeatmapItem::updatePaintNode(QSGNode* oldNode, UpdatePaintNodeData*)
         return root;
     }
 
-    const std::vector<contactRecord> records = m_controller->recordsSnapshot();
-    const std::vector<contactRecord> controlRecords = m_controller->controlRecordsSnapshot();
+    std::vector<contactRecord> records;
+    std::vector<contactRecord> controlRecords;
+    m_controller->renderRecordsSnapshot(records, controlRecords, kMaxRenderedRecords);
     const QString matrixType = m_controller->matrixType();
     const bool isVsMode = (matrixType == QStringLiteral("vs") || matrixType.endsWith(QStringLiteral("vs"))) && !controlRecords.empty();
     if (records.empty() && controlRecords.empty()) {
@@ -113,10 +114,7 @@ QSGNode* HicHeatmapItem::updatePaintNode(QSGNode* oldNode, UpdatePaintNodeData*)
     const bool mirrorIntra = m_controller->chrX() == m_controller->chrY() && !isVsMode;
     const bool splitVsIntra = m_controller->chrX() == m_controller->chrY() && isVsMode;
 
-    const int stride = std::max(1, static_cast<int>(std::ceil(records.size() / static_cast<double>(kMaxRenderedRecords))));
-    const int controlStride = std::max(1, static_cast<int>(std::ceil(controlRecords.size() / static_cast<double>(kMaxRenderedRecords))));
-    const int renderedRecords = static_cast<int>((records.size() + stride - 1) / stride)
-                                + static_cast<int>((controlRecords.size() + controlStride - 1) / controlStride);
+    const int renderedRecords = static_cast<int>(records.size() + controlRecords.size());
     const int verticesPerRecord = mirrorIntra ? 12 : 6;
     auto* node = new QSGGeometryNode;
     auto* geometry = new QSGGeometry(QSGGeometry::defaultAttributes_ColoredPoint2D(), renderedRecords * verticesPerRecord);
@@ -146,7 +144,7 @@ QSGNode* HicHeatmapItem::updatePaintNode(QSGNode* oldNode, UpdatePaintNodeData*)
         vertices[vi++].set(left, bottom, r, g, b, a);
     };
 
-    for (std::size_t i = 0; i < records.size(); i += stride) {
+    for (std::size_t i = 0; i < records.size(); ++i) {
         const contactRecord& record = records[i];
         const QColor color = colorForValue(record.counts);
         if (splitVsIntra) {
@@ -158,7 +156,7 @@ QSGNode* HicHeatmapItem::updatePaintNode(QSGNode* oldNode, UpdatePaintNodeData*)
             appendQuad(record.binY, record.binX, color);
         }
     }
-    for (std::size_t i = 0; i < controlRecords.size(); i += controlStride) {
+    for (std::size_t i = 0; i < controlRecords.size(); ++i) {
         const contactRecord& record = controlRecords[i];
         const QColor color = colorForValue(record.counts);
         if (splitVsIntra) {

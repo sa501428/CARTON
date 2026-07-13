@@ -19,6 +19,7 @@ constexpr quint32 kBigWigMagic = 0x888FFC26U;
 constexpr quint32 kBigBedMagic = 0x8789F2EBU;
 constexpr quint32 kBPlusMagic = 0x78CA8C91U;
 constexpr quint32 kRTreeMagic = 0x2468ACE0U;
+constexpr qsizetype kMaxResidentTrackFeatures = 1000000;
 
 size_t appendBytes(void* contents, size_t size, size_t nmemb, void* userp) {
     const size_t total = size * nmemb;
@@ -179,6 +180,14 @@ QColor parseColor(const QString& token, const QColor& fallback) {
     return fallback;
 }
 
+bool appendTrackFeature(QVector<GenomicTrackFeature>& out, const GenomicTrackFeature& feature) {
+    if (out.size() >= kMaxResidentTrackFeatures) {
+        return false;
+    }
+    out.push_back(feature);
+    return true;
+}
+
 void appendBedLike(const QStringList& parts, QVector<GenomicTrackFeature>& out, const QString& defaultName) {
     if (parts.size() < 3) return;
     bool startOk = false, endOk = false;
@@ -199,7 +208,7 @@ void appendBedLike(const QStringList& parts, QVector<GenomicTrackFeature>& out, 
         feature.value = valueOk ? score : 1.0;
     }
     if (parts.size() > 8) feature.color = parseColor(parts[8], feature.color);
-    if (startOk && endOk && feature.end > feature.start) out.push_back(feature);
+    if (startOk && endOk && feature.end > feature.start) appendTrackFeature(out, feature);
 }
 
 GenomicTrackReadResult parseTextTrack(const QString& path, const QByteArray& bytes) {
@@ -263,7 +272,7 @@ GenomicTrackReadResult parseTextTrack(const QString& path, const QByteArray& byt
             f.end = wigPosition + wigSpan;
             f.value = parts[0].toDouble();
             f.name = defaultName;
-            result.features.push_back(f);
+            appendTrackFeature(result.features, f);
             wigPosition += wigStep;
         } else if (wigMode == WigMode::Variable && !wigChr.isEmpty() && parts.size() >= 2) {
             GenomicTrackFeature f;
@@ -272,7 +281,7 @@ GenomicTrackReadResult parseTextTrack(const QString& path, const QByteArray& byt
             f.end = f.start + wigSpan;
             f.value = parts[1].toDouble();
             f.name = defaultName;
-            result.features.push_back(f);
+            appendTrackFeature(result.features, f);
         } else if (parts.size() >= 4) {
             bool vOk = false;
             parts[3].toDouble(&vOk);
@@ -284,13 +293,17 @@ GenomicTrackReadResult parseTextTrack(const QString& path, const QByteArray& byt
                 f.end = parts[2].toLongLong();
                 f.value = parts[3].toDouble();
                 f.name = defaultName;
-                if (f.end > f.start) result.features.push_back(f);
+                if (f.end > f.start) appendTrackFeature(result.features, f);
             } else {
                 result.format = result.format.isEmpty() ? QStringLiteral("bed") : result.format;
                 appendBedLike(parts, result.features, defaultName);
             }
         } else {
             appendBedLike(parts, result.features, defaultName);
+        }
+        if (result.features.size() >= kMaxResidentTrackFeatures) {
+            result.warning = QStringLiteral("Track was capped at %1 intervals to keep memory bounded.").arg(kMaxResidentTrackFeatures);
+            break;
         }
     }
     if (result.format.isEmpty()) result.format = QStringLiteral("text");
@@ -445,7 +458,10 @@ GenomicTrackReadResult parseBigBinary(const QString& path, const QByteArray& byt
                 } else {
                     break;
                 }
-                if (!f.chr.isEmpty() && f.end > f.start) result.features.push_back(f);
+                if (!f.chr.isEmpty() && f.end > f.start && !appendTrackFeature(result.features, f)) {
+                    result.warning = QStringLiteral("Track was capped at %1 intervals to keep memory bounded.").arg(kMaxResidentTrackFeatures);
+                    return result;
+                }
             }
         } else {
             while (blockReader.remaining(13)) {
@@ -461,7 +477,10 @@ GenomicTrackReadResult parseBigBinary(const QString& path, const QByteArray& byt
                 const double score = fields.value(1).toDouble(&scoreOk);
                 f.value = scoreOk ? score : 1.0;
                 if (fields.size() > 5) f.color = parseColor(fields[5], f.color);
-                if (!f.chr.isEmpty() && f.end > f.start) result.features.push_back(f);
+                if (!f.chr.isEmpty() && f.end > f.start && !appendTrackFeature(result.features, f)) {
+                    result.warning = QStringLiteral("Track was capped at %1 intervals to keep memory bounded.").arg(kMaxResidentTrackFeatures);
+                    return result;
+                }
             }
         }
     }

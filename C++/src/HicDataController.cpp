@@ -108,6 +108,8 @@ HicDataController::HicDataController(QObject* parent)
             QMutexLocker locker(&m_mutex);
             m_records = std::move(displayRecords);
             m_controlRecords = std::move(displayControlRecords);
+            m_loadedKey = result.tile.key;
+            m_hasLoadedKey = true;
         }
         updateAutoColorScale(m_records, m_controlRecords);
         if (!result.fromCache) {
@@ -190,10 +192,13 @@ void HicDataController::openFile(const QUrl& url) {
 
     m_filePath = path;
     m_cache->clear();
+    clearLoadedRegion();
     {
         QMutexLocker locker(&m_mutex);
         m_records.clear();
         m_controlRecords.clear();
+        m_records.shrink_to_fit();
+        m_controlRecords.shrink_to_fit();
     }
     emit filePathChanged();
     emit recordsChanged();
@@ -212,9 +217,11 @@ void HicDataController::openControlFile(const QUrl& url) {
         return;
     }
     m_controlFilePath = path;
+    clearLoadedRegion();
     {
         QMutexLocker locker(&m_mutex);
         m_controlRecords.clear();
+        m_controlRecords.shrink_to_fit();
     }
     emit controlFilePathChanged();
     emit recordsChanged();
@@ -1010,6 +1017,7 @@ void HicDataController::setMatrixType(const QString& value) {
         return;
     }
     m_matrixType = value;
+    clearLoadedRegion();
     m_colorMaxAuto = true;
     if (matrixIsDivergent(m_matrixType)) {
         m_colorMin = matrixIsPearson(m_matrixType) ? -1.0 : -5.0;
@@ -1026,6 +1034,7 @@ void HicDataController::setMatrixType(const QString& value) {
 void HicDataController::setNorm(const QString& value) {
     if (m_norm == value) return;
     m_norm = value;
+    clearLoadedRegion();
     emit viewChanged();
     scheduleRequest();
 }
@@ -1037,6 +1046,7 @@ void HicDataController::setResolution(int value) {
         return;
     }
     m_resolution = value;
+    clearLoadedRegion();
     clampRegion();
     emit viewChanged();
     scheduleRequest();
@@ -1391,6 +1401,26 @@ std::vector<contactRecord> HicDataController::controlRecordsSnapshot() const {
     return m_controlRecords;
 }
 
+void HicDataController::renderRecordsSnapshot(std::vector<contactRecord>& records,
+                                              std::vector<contactRecord>& controlRecords,
+                                              int maxRecordsPerLayer) const {
+    QMutexLocker locker(&m_mutex);
+    auto sampleInto = [maxRecordsPerLayer](const std::vector<contactRecord>& source,
+                                           std::vector<contactRecord>& target) {
+        target.clear();
+        if (source.empty()) {
+            return;
+        }
+        const int stride = std::max(1, static_cast<int>(std::ceil(source.size() / static_cast<double>(std::max(1, maxRecordsPerLayer)))));
+        target.reserve((source.size() + static_cast<std::size_t>(stride) - 1) / static_cast<std::size_t>(stride));
+        for (std::size_t i = 0; i < source.size(); i += static_cast<std::size_t>(stride)) {
+            target.push_back(source[i]);
+        }
+    };
+    sampleInto(m_records, records);
+    sampleInto(m_controlRecords, controlRecords);
+}
+
 QString HicDataController::localPathFromUrl(const QUrl& url) {
     if (url.isLocalFile()) {
         return url.toLocalFile();
@@ -1437,6 +1467,7 @@ void HicDataController::setBusy(bool value) {
 
 void HicDataController::applyMetadata(const HicFileMetadata& metadata) {
     m_metadata = metadata;
+    clearLoadedRegion();
     m_genomeId = QString::fromStdString(metadata.genomeID);
     if (!metadata.bpResolutions.empty()) {
         m_resolution = metadata.bpResolutions.front();
@@ -1888,6 +1919,51 @@ void HicDataController::orientTileForRequestedAxes(HicTile& tile) const {
     }
 }
 
+HicTileKey HicDataController::paddedRequestKey(const HicTileKey& visibleKey) const {
+    HicTileKey key = visibleKey;
+    const qint64 resolution = std::max<qint64>(1, key.resolution);
+    const qint64 xSpan = std::max<qint64>(resolution, visibleKey.x1 - visibleKey.x0);
+    const qint64 ySpan = std::max<qint64>(resolution, visibleKey.y1 - visibleKey.y0);
+    const qint64 xPad = std::max<qint64>(resolution * 4LL, xSpan / 2);
+    const qint64 yPad = std::max<qint64>(resolution * 4LL, ySpan / 2);
+    const qint64 maxX = chromosomeLength(QString::fromStdString(key.chrX));
+    const qint64 maxY = chromosomeLength(QString::fromStdString(key.chrY));
+    auto alignDown = [resolution](qint64 value) {
+        return (value / resolution) * resolution;
+    };
+    auto alignUp = [resolution](qint64 value) {
+        return ((value + resolution - 1) / resolution) * resolution;
+    };
+    key.x0 = std::clamp<qint64>(alignDown(visibleKey.x0 - xPad), 0, std::max<qint64>(0, maxX));
+    key.y0 = std::clamp<qint64>(alignDown(visibleKey.y0 - yPad), 0, std::max<qint64>(0, maxY));
+    key.x1 = std::clamp<qint64>(alignUp(visibleKey.x1 + xPad), resolution, std::max<qint64>(resolution, maxX));
+    key.y1 = std::clamp<qint64>(alignUp(visibleKey.y1 + yPad), resolution, std::max<qint64>(resolution, maxY));
+    if (key.x1 <= key.x0) key.x1 = std::min<qint64>(maxX, key.x0 + resolution);
+    if (key.y1 <= key.y0) key.y1 = std::min<qint64>(maxY, key.y0 + resolution);
+    return key;
+}
+
+bool HicDataController::loadedKeyCoversCurrentView(const HicTileKey& visibleKey) const {
+    if (!m_hasLoadedKey) {
+        return false;
+    }
+    return m_loadedKey.filePath == visibleKey.filePath &&
+           m_loadedKey.matrixType == visibleKey.matrixType &&
+           m_loadedKey.norm == visibleKey.norm &&
+           m_loadedKey.unit == visibleKey.unit &&
+           m_loadedKey.chrX == visibleKey.chrX &&
+           m_loadedKey.chrY == visibleKey.chrY &&
+           m_loadedKey.resolution == visibleKey.resolution &&
+           m_loadedKey.x0 <= visibleKey.x0 &&
+           m_loadedKey.x1 >= visibleKey.x1 &&
+           m_loadedKey.y0 <= visibleKey.y0 &&
+           m_loadedKey.y1 >= visibleKey.y1;
+}
+
+void HicDataController::clearLoadedRegion() {
+    m_hasLoadedKey = false;
+}
+
 void HicDataController::scheduleRequest() {
     if (m_filePath.isEmpty()) {
         return;
@@ -1900,22 +1976,29 @@ void HicDataController::scheduleRequest() {
         return;
     }
     const QString dataMatrixType = primaryDataMatrixType(m_matrixType);
-    const HicTileKey key = makeKey(m_filePath, dataMatrixType, m_norm, m_chrX, m_chrY,
-                                   m_resolution, m_x0, m_x1, m_y0, m_y1);
+    const HicTileKey visibleKey = makeKey(m_filePath, dataMatrixType, m_norm, m_chrX, m_chrY,
+                                          m_resolution, m_x0, m_x1, m_y0, m_y1);
+    if (loadedKeyCoversCurrentView(visibleKey)) {
+        return;
+    }
+    const HicTileKey key = paddedRequestKey(visibleKey);
     const quint64 requestId = ++m_requestSerial;
 
     if (!matrixNeedsControl(m_matrixType) && matrixNeedsPrimary(m_matrixType)) {
-    if (auto cached = m_cache->get(key)) {
-        {
-            QMutexLocker locker(&m_mutex);
-            m_records = transformRecordsForDisplay(m_matrixType, cached->records, {});
-            m_controlRecords.clear();
+        if (const HicTile* cached = m_cache->get(key)) {
+            std::vector<contactRecord> displayRecords = transformRecordsForDisplay(m_matrixType, cached->records, {});
+            {
+                QMutexLocker locker(&m_mutex);
+                m_records = std::move(displayRecords);
+                m_controlRecords.clear();
+                m_loadedKey = cached->key;
+                m_hasLoadedKey = true;
+            }
+            updateAutoColorScale(m_records);
+            setStatus(QStringLiteral("%1 records in view (cached).").arg(recordCount()));
+            emit recordsChanged();
+            return;
         }
-        updateAutoColorScale(m_records);
-        setStatus(QStringLiteral("%1 records in view (cached).").arg(recordCount()));
-        emit recordsChanged();
-        return;
-    }
     }
 
     startTileLoad(key, requestId);

@@ -194,6 +194,9 @@ public:
 
     std::vector<contactRecord> recordsSnapshot() const;
     std::vector<contactRecord> controlRecordsSnapshot() const;
+    void renderRecordsSnapshot(std::vector<contactRecord>& records,
+                               std::vector<contactRecord>& controlRecords,
+                               int maxRecordsPerLayer) const;
 
 signals:
     void filePathChanged();
@@ -255,6 +258,9 @@ private:
     void pushViewHistory();
     void restoreView(const QVariantMap& view);
     void orientTileForRequestedAxes(HicTile& tile) const;
+    HicTileKey paddedRequestKey(const HicTileKey& visibleKey) const;
+    bool loadedKeyCoversCurrentView(const HicTileKey& visibleKey) const;
+    void clearLoadedRegion();
     std::vector<contactRecord> transformRecordsForDisplay(const QString& matrixType,
                                                           const std::vector<contactRecord>& primary,
                                                           const std::vector<contactRecord>& control) const;
@@ -349,6 +355,8 @@ private:
     bool m_showTilesDebug = false;
     int m_sparseFeatureLimit = 10000;
     std::unique_ptr<HicTileCache> m_cache;
+    HicTileKey m_loadedKey;
+    bool m_hasLoadedKey = false;
     QFutureWatcher<HicFileMetadata> m_metadataWatcher;
     QFutureWatcher<TileResult> m_tileWatcher;
     quint64 m_requestSerial = 0;
