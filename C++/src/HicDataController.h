@@ -32,6 +32,7 @@ class HicDataController : public QObject {
     Q_PROPERTY(qint64 y1 READ y1 WRITE setY1 NOTIFY viewChanged)
     Q_PROPERTY(int recordCount READ recordCount NOTIFY recordsChanged)
     Q_PROPERTY(double colorMax READ colorMax WRITE setColorMax NOTIFY colorMaxChanged)
+    Q_PROPERTY(bool colorMaxAuto READ colorMaxAuto NOTIFY colorMaxChanged)
     Q_PROPERTY(QString colorMap READ colorMap WRITE setColorMap NOTIFY colorMapChanged)
     Q_PROPERTY(QColor customLowColor READ customLowColor WRITE setCustomLowColor NOTIFY colorMapChanged)
     Q_PROPERTY(QColor customHighColor READ customHighColor WRITE setCustomHighColor NOTIFY colorMapChanged)
@@ -59,6 +60,7 @@ public:
     qint64 y1() const;
     int recordCount() const;
     double colorMax() const;
+    bool colorMaxAuto() const;
     QString colorMap() const;
     QColor customLowColor() const;
     QColor customHighColor() const;
@@ -80,8 +82,14 @@ public:
     Q_INVOKABLE QString positionText(double xFraction, double yFraction) const;
     Q_INVOKABLE void copyPosition(double xFraction, double yFraction) const;
     Q_INVOKABLE void jumpToDiagonal(double xFraction, double yFraction);
+    Q_INVOKABLE void goTo(const QString& xLocation, const QString& yLocation);
     Q_INVOKABLE void undoView();
     Q_INVOKABLE void redoView();
+    Q_INVOKABLE void beginInteraction();
+    Q_INVOKABLE void endInteraction();
+    Q_INVOKABLE void resetColorScale();
+    Q_INVOKABLE void zoomToFractions(double xStartFraction, double yStartFraction,
+                                     double xEndFraction, double yEndFraction);
     Q_INVOKABLE void requestVisibleRegion();
     Q_INVOKABLE void zoom(double factor, double centerX, double centerY);
     Q_INVOKABLE void pan(double dxFraction, double dyFraction);
@@ -135,6 +143,7 @@ private:
     chromosome chromosomeByName(const QString& name) const;
     qint64 chromosomeLength(const QString& name) const;
     void clampRegion();
+    void updateAutoColorScale(const std::vector<contactRecord>& records);
     void pushViewHistory();
     void restoreView(const QVariantMap& view);
     void orientTileForRequestedAxes(HicTile& tile) const;
@@ -177,6 +186,7 @@ private:
     qint64 m_y0 = 0;
     qint64 m_y1 = 0;
     double m_colorMax = 50.0;
+    bool m_colorMaxAuto = true;
     QString m_colorMap = "White-Red";
     QColor m_customLowColor = QColor("#ffffff");
     QColor m_customHighColor = QColor("#d7191c");
@@ -192,6 +202,7 @@ private:
     QVector<QVariantMap> m_undoStack;
     QVector<QVariantMap> m_redoStack;
     bool m_restoringView = false;
+    bool m_interactionActive = false;
 };
 
 #endif

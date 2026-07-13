@@ -26,10 +26,12 @@ The desktop app supports:
 7. Asynchronous visible-range loading with a bounded record cache
 8. Batched GPU heatmap rendering in a custom Qt Quick item
 9. Multiple independent tabs, each with its own file, viewport, cache, and display settings
-10. White-to-red default heatmap colors with Viridis, blue-white-red, grayscale, and custom low/high color options
+10. Juicebox-compatible coloring: observed/expected use a linear white-to-red scale with an automatic 95th-percentile range, while OE uses a log-ratio blue-white-red scale with default threshold 5
 11. Right-click map actions for undo/redo zoom, jump to diagonal, copy genomic position, and layer loading/clearing
 12. Top and left 1D track panels for BED/bedGraph-like interval tracks
 13. 2D BEDPE-like annotation overlays with intrachromosomal reflection
+14. Direct interaction layer for wheel zoom, drag pan, double-click zoom, and Shift-drag region zoom
+15. Coordinate lookup/jump fields and desktop menus for file, navigation, display, and layer actions
 
 The debug executable `straw` supports two modes:
 1. Standard mode:

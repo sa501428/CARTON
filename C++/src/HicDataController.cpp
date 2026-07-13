@@ -45,6 +45,7 @@ HicDataController::HicDataController(QObject* parent)
             QMutexLocker locker(&m_mutex);
             m_records = result.tile.records;
         }
+        updateAutoColorScale(result.tile.records);
         if (!result.fromCache) {
             m_cache->put(std::move(result.tile));
         }
@@ -81,6 +82,7 @@ qint64 HicDataController::x1() const { return m_x1; }
 qint64 HicDataController::y0() const { return m_y0; }
 qint64 HicDataController::y1() const { return m_y1; }
 double HicDataController::colorMax() const { return m_colorMax; }
+bool HicDataController::colorMaxAuto() const { return m_colorMaxAuto; }
 QString HicDataController::colorMap() const { return m_colorMap; }
 QColor HicDataController::customLowColor() const { return m_customLowColor; }
 QColor HicDataController::customHighColor() const { return m_customHighColor; }
@@ -328,6 +330,64 @@ void HicDataController::jumpToDiagonal(double xFraction, double yFraction) {
     scheduleRequest();
 }
 
+void HicDataController::goTo(const QString& xLocation, const QString& yLocation) {
+    auto parseLocation = [this](const QString& text, QString& chr, qint64& start, qint64& end) -> bool {
+        const QString cleaned = text.trimmed().remove(',');
+        const QStringList chrSplit = cleaned.split(':');
+        if (chrSplit.isEmpty() || chrSplit[0].isEmpty()) {
+            return false;
+        }
+        chr = chrSplit[0];
+        const qint64 chrLength = chromosomeLength(chr);
+        if (chrLength <= 0) {
+            return false;
+        }
+        if (chrSplit.size() == 1) {
+            start = 0;
+            end = chrLength;
+            return true;
+        }
+        const QStringList range = chrSplit[1].split('-');
+        bool okStart = false;
+        start = range.value(0).toLongLong(&okStart);
+        if (!okStart) return false;
+        if (range.size() > 1) {
+            bool okEnd = false;
+            end = range[1].toLongLong(&okEnd);
+            if (!okEnd) return false;
+        } else {
+            const qint64 span = std::max<qint64>(m_resolution * 100LL, m_x1 - m_x0);
+            end = start + span;
+        }
+        start = std::clamp<qint64>(start, 0, chrLength);
+        end = std::clamp<qint64>(end, start + m_resolution, chrLength);
+        return end > start;
+    };
+
+    QString nextChrX;
+    QString nextChrY;
+    qint64 nextX0 = 0, nextX1 = 0, nextY0 = 0, nextY1 = 0;
+    if (!parseLocation(xLocation, nextChrX, nextX0, nextX1)) {
+        setStatus(QStringLiteral("Could not parse top location."));
+        return;
+    }
+    if (!parseLocation(yLocation.isEmpty() ? xLocation : yLocation, nextChrY, nextY0, nextY1)) {
+        setStatus(QStringLiteral("Could not parse left location."));
+        return;
+    }
+
+    pushViewHistory();
+    m_chrX = nextChrX;
+    m_chrY = nextChrY;
+    m_x0 = nextX0;
+    m_x1 = nextX1;
+    m_y0 = nextY0;
+    m_y1 = nextY1;
+    clampRegion();
+    emit viewChanged();
+    scheduleRequest();
+}
+
 void HicDataController::undoView() {
     if (m_undoStack.isEmpty()) {
         return;
@@ -346,6 +406,47 @@ void HicDataController::redoView() {
     current["x0"] = m_x0; current["x1"] = m_x1; current["y0"] = m_y0; current["y1"] = m_y1;
     m_undoStack.push_back(current);
     restoreView(m_redoStack.takeLast());
+}
+
+void HicDataController::beginInteraction() {
+    if (m_interactionActive) {
+        return;
+    }
+    pushViewHistory();
+    m_interactionActive = true;
+}
+
+void HicDataController::endInteraction() {
+    m_interactionActive = false;
+}
+
+void HicDataController::zoomToFractions(double xStartFraction, double yStartFraction,
+                                        double xEndFraction, double yEndFraction) {
+    if (m_chrX.isEmpty() || m_chrY.isEmpty()) {
+        return;
+    }
+    const double xa = std::clamp(std::min(xStartFraction, xEndFraction), 0.0, 1.0);
+    const double xb = std::clamp(std::max(xStartFraction, xEndFraction), 0.0, 1.0);
+    const double ya = std::clamp(std::min(yStartFraction, yEndFraction), 0.0, 1.0);
+    const double yb = std::clamp(std::max(yStartFraction, yEndFraction), 0.0, 1.0);
+    if (xb - xa < 0.01 || yb - ya < 0.01) {
+        return;
+    }
+
+    pushViewHistory();
+    const qint64 width = std::max<qint64>(1, m_x1 - m_x0);
+    const qint64 height = std::max<qint64>(1, m_y1 - m_y0);
+    const qint64 nextX0 = m_x0 + static_cast<qint64>(width * xa);
+    const qint64 nextX1 = m_x0 + static_cast<qint64>(width * xb);
+    const qint64 nextY0 = m_y0 + static_cast<qint64>(height * ya);
+    const qint64 nextY1 = m_y0 + static_cast<qint64>(height * yb);
+    m_x0 = nextX0;
+    m_x1 = nextX1;
+    m_y0 = nextY0;
+    m_y1 = nextY1;
+    clampRegion();
+    emit viewChanged();
+    scheduleRequest();
 }
 
 void HicDataController::requestVisibleRegion() {
@@ -379,7 +480,9 @@ void HicDataController::zoom(double factor, double centerX, double centerY) {
 }
 
 void HicDataController::pan(double dxFraction, double dyFraction) {
-    pushViewHistory();
+    if (!m_interactionActive) {
+        pushViewHistory();
+    }
     const qint64 width = m_x1 - m_x0;
     const qint64 height = m_y1 - m_y0;
     const qint64 dx = static_cast<qint64>(width * dxFraction);
@@ -424,6 +527,9 @@ void HicDataController::setChrY(const QString& value) {
 void HicDataController::setMatrixType(const QString& value) {
     if (m_matrixType == value) return;
     m_matrixType = value;
+    m_colorMaxAuto = true;
+    m_colorMax = m_matrixType == QStringLiteral("oe") ? 5.0 : 50.0;
+    emit colorMaxChanged();
     emit viewChanged();
     scheduleRequest();
 }
@@ -449,8 +555,16 @@ void HicDataController::setY1(qint64 value) { if (m_y1 != value) { m_y1 = value;
 
 void HicDataController::setColorMax(double value) {
     if (qFuzzyCompare(m_colorMax, value)) return;
+    m_colorMaxAuto = false;
     m_colorMax = std::max(0.1, value);
     emit colorMaxChanged();
+}
+
+void HicDataController::resetColorScale() {
+    m_colorMaxAuto = true;
+    m_colorMax = m_matrixType == QStringLiteral("oe") ? 5.0 : 50.0;
+    emit colorMaxChanged();
+    scheduleRequest();
 }
 
 void HicDataController::setColorMap(const QString& value) {
@@ -562,6 +676,32 @@ void HicDataController::clampRegion() {
     m_y1 = m_y0 + height;
 }
 
+void HicDataController::updateAutoColorScale(const std::vector<contactRecord>& records) {
+    if (!m_colorMaxAuto) {
+        return;
+    }
+    if (m_matrixType == QStringLiteral("oe")) {
+        m_colorMax = 5.0;
+    } else {
+        std::vector<double> sampled;
+        sampled.reserve((records.size() / 10) + 1);
+        for (std::size_t i = 0; i < records.size(); i += 10) {
+            const contactRecord& rec = records[i];
+            if (rec.binX != rec.binY && std::isfinite(rec.counts) && rec.counts > 0.0f) {
+                sampled.push_back(rec.counts);
+            }
+        }
+        if (!sampled.empty()) {
+            const std::size_t index = static_cast<std::size_t>(std::floor(0.95 * (sampled.size() - 1)));
+            std::nth_element(sampled.begin(), sampled.begin() + index, sampled.end());
+            m_colorMax = std::max(1.0, sampled[index]);
+        } else {
+            m_colorMax = 1.0;
+        }
+    }
+    emit colorMaxChanged();
+}
+
 void HicDataController::pushViewHistory() {
     if (m_restoringView || m_chrX.isEmpty() || m_chrY.isEmpty()) {
         return;
@@ -622,6 +762,7 @@ void HicDataController::scheduleRequest() {
             QMutexLocker locker(&m_mutex);
             m_records = cached->records;
         }
+        updateAutoColorScale(cached->records);
         setStatus(QStringLiteral("%1 records in view (cached).").arg(recordCount()));
         emit recordsChanged();
         return;

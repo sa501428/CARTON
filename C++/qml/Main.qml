@@ -17,6 +17,7 @@ ApplicationWindow {
     property int tabSerial: 0
     property real contextFx: 0.5
     property real contextFy: 0.5
+    property string hoverText: ""
 
     ListModel { id: tabModel }
 
@@ -132,6 +133,38 @@ ApplicationWindow {
         }
     }
 
+    menuBar: MenuBar {
+        Menu {
+            title: "File"
+            MenuItem { text: "Open Hi-C..."; onTriggered: openDialog.open() }
+            MenuItem { text: "Load 1D Track..."; onTriggered: trackDialog.open() }
+            MenuItem { text: "Load 2D Annotations..."; onTriggered: annotationDialog.open() }
+            MenuSeparator {}
+            MenuItem { text: "New Tab"; onTriggered: addTab() }
+            MenuItem { text: "Close Tab"; enabled: controllers.length > 1; onTriggered: closeCurrentTab() }
+        }
+        Menu {
+            title: "Navigate"
+            MenuItem { text: "Undo Zoom"; enabled: activeController && activeController.canUndoView; onTriggered: activeController.undoView() }
+            MenuItem { text: "Redo Zoom"; enabled: activeController && activeController.canRedoView; onTriggered: activeController.redoView() }
+            MenuItem { text: "Reset View"; enabled: activeController && activeController.filePath.length > 0; onTriggered: activeController.resetView() }
+            MenuItem { text: "Jump to Diagonal"; enabled: activeController && activeController.chrX === activeController.chrY; onTriggered: activeController.jumpToDiagonal(contextFx, contextFy) }
+            MenuItem { text: "Copy Current Position"; enabled: !!activeController; onTriggered: activeController.copyPosition(contextFx, contextFy) }
+        }
+        Menu {
+            title: "Display"
+            MenuItem { text: "White-Red"; checkable: true; checked: activeController && activeController.colorMap === "White-Red"; onTriggered: if (activeController) activeController.colorMap = "White-Red" }
+            MenuItem { text: "Viridis"; checkable: true; checked: activeController && activeController.colorMap === "Viridis"; onTriggered: if (activeController) activeController.colorMap = "Viridis" }
+            MenuItem { text: "Blue-White-Red"; checkable: true; checked: activeController && activeController.colorMap === "Blue-White-Red"; onTriggered: if (activeController) activeController.colorMap = "Blue-White-Red" }
+            MenuItem { text: "Grayscale"; checkable: true; checked: activeController && activeController.colorMap === "Grayscale"; onTriggered: if (activeController) activeController.colorMap = "Grayscale" }
+        }
+        Menu {
+            title: "Layers"
+            MenuItem { text: "Clear 1D Tracks"; enabled: activeController && activeController.trackCount > 0; onTriggered: activeController.clearTracks() }
+            MenuItem { text: "Clear 2D Annotations"; enabled: activeController && activeController.annotationCount > 0; onTriggered: activeController.clearAnnotations() }
+        }
+    }
+
     header: ToolBar {
         height: 48
         background: Rectangle { color: "#20252b" }
@@ -182,6 +215,30 @@ ApplicationWindow {
                 Layout.preferredWidth: 120
                 model: ["NONE"]
                 onActivated: if (activeController) activeController.norm = currentText
+            }
+
+            TextField {
+                id: topLocationField
+                Layout.preferredWidth: 190
+                placeholderText: "chr:start-end"
+                enabled: activeController && activeController.filePath.length > 0
+                selectByMouse: true
+                onAccepted: if (activeController) activeController.goTo(text, leftLocationField.text.length > 0 ? leftLocationField.text : text)
+            }
+
+            TextField {
+                id: leftLocationField
+                Layout.preferredWidth: 190
+                placeholderText: "left / optional"
+                enabled: activeController && activeController.filePath.length > 0
+                selectByMouse: true
+                onAccepted: if (activeController) activeController.goTo(topLocationField.text, text.length > 0 ? text : topLocationField.text)
+            }
+
+            ToolButton {
+                text: "Go"
+                enabled: activeController && topLocationField.text.length > 0
+                onClicked: activeController.goTo(topLocationField.text, leftLocationField.text.length > 0 ? leftLocationField.text : topLocationField.text)
             }
 
             ToolButton {
@@ -439,17 +496,136 @@ ApplicationWindow {
                                 }
                             }
 
+                            Rectangle {
+                                id: selectionRect
+                                visible: false
+                                color: "#22578dff"
+                                border.color: "#2f6fed"
+                                border.width: 1
+                            }
+
                             MouseArea {
+                                id: interactionArea
                                 anchors.fill: parent
-                                acceptedButtons: Qt.RightButton
+                                hoverEnabled: true
+                                acceptedButtons: Qt.LeftButton | Qt.RightButton
+                                property real lastX: 0
+                                property real lastY: 0
+                                property real startX: 0
+                                property real startY: 0
+                                property bool selecting: false
+
+                                function clamp01(v) {
+                                    return Math.max(0, Math.min(1, v))
+                                }
+
+                                function fractionX(px) {
+                                    var spanX = Math.max(1, activeController ? activeController.x1 - activeController.x0 : 1)
+                                    var spanY = Math.max(1, activeController ? activeController.y1 - activeController.y0 : 1)
+                                    var side = Math.min(width, height)
+                                    var scale = side / Math.max(spanX, spanY)
+                                    var extentW = spanX * scale
+                                    var ox = (width - extentW) * 0.5
+                                    return clamp01((px - ox) / Math.max(1, extentW))
+                                }
+
+                                function fractionY(py) {
+                                    var spanX = Math.max(1, activeController ? activeController.x1 - activeController.x0 : 1)
+                                    var spanY = Math.max(1, activeController ? activeController.y1 - activeController.y0 : 1)
+                                    var side = Math.min(width, height)
+                                    var scale = side / Math.max(spanX, spanY)
+                                    var extentH = spanY * scale
+                                    var oy = (height - extentH) * 0.5
+                                    return clamp01((py - oy) / Math.max(1, extentH))
+                                }
+
+                                function updateHover(mouse) {
+                                    if (!activeController) {
+                                        hoverText = ""
+                                        return
+                                    }
+                                    contextFx = fractionX(mouse.x)
+                                    contextFy = fractionY(mouse.y)
+                                    hoverText = activeController.positionText(contextFx, contextFy)
+                                }
+
+                                onWheel: function(wheel) {
+                                    if (!activeController) return
+                                    contextFx = fractionX(wheel.x)
+                                    contextFy = fractionY(wheel.y)
+                                    activeController.zoom(wheel.angleDelta.y > 0 ? 1.35 : 0.74, contextFx, contextFy)
+                                    wheel.accepted = true
+                                }
+
                                 onPressed: function(mouse) {
                                     if (!activeController) return
-                                    var side = Math.max(1, Math.min(width, height))
-                                    var ox = (width - side) * 0.5
-                                    var oy = (height - side) * 0.5
-                                    contextFx = Math.max(0, Math.min(1, (mouse.x - ox) / side))
-                                    contextFy = Math.max(0, Math.min(1, (mouse.y - oy) / side))
-                                    heatmapMenu.popup()
+                                    updateHover(mouse)
+                                    if (mouse.button === Qt.RightButton) {
+                                        heatmapMenu.popup()
+                                        return
+                                    }
+                                    lastX = mouse.x
+                                    lastY = mouse.y
+                                    startX = mouse.x
+                                    startY = mouse.y
+                                    selecting = (mouse.modifiers & Qt.ShiftModifier) !== 0
+                                    if (selecting) {
+                                        selectionRect.x = mouse.x
+                                        selectionRect.y = mouse.y
+                                        selectionRect.width = 0
+                                        selectionRect.height = 0
+                                        selectionRect.visible = true
+                                    } else {
+                                        activeController.beginInteraction()
+                                    }
+                                }
+
+                                onPositionChanged: function(mouse) {
+                                    updateHover(mouse)
+                                    if (!activeController || !(mouse.buttons & Qt.LeftButton))
+                                        return
+                                    if (selecting) {
+                                        selectionRect.x = Math.min(startX, mouse.x)
+                                        selectionRect.y = Math.min(startY, mouse.y)
+                                        selectionRect.width = Math.abs(mouse.x - startX)
+                                        selectionRect.height = Math.abs(mouse.y - startY)
+                                    } else {
+                                        activeController.pan(-(mouse.x - lastX) / Math.max(1, width),
+                                                             -(mouse.y - lastY) / Math.max(1, height))
+                                        lastX = mouse.x
+                                        lastY = mouse.y
+                                    }
+                                }
+
+                                onReleased: function(mouse) {
+                                    if (!activeController)
+                                        return
+                                    if (selecting && mouse.button === Qt.LeftButton) {
+                                        selectionRect.visible = false
+                                        if (Math.abs(mouse.x - startX) > 8 && Math.abs(mouse.y - startY) > 8) {
+                                            activeController.zoomToFractions(fractionX(startX), fractionY(startY),
+                                                                            fractionX(mouse.x), fractionY(mouse.y))
+                                        }
+                                        selecting = false
+                                    } else if (mouse.button === Qt.LeftButton) {
+                                        activeController.endInteraction()
+                                    }
+                                }
+
+                                onCanceled: {
+                                    selectionRect.visible = false
+                                    selecting = false
+                                    if (activeController)
+                                        activeController.endInteraction()
+                                }
+
+                                onExited: hoverText = ""
+                                cursorShape: selecting ? Qt.CrossCursor : Qt.OpenHandCursor
+                                preventStealing: true
+                                propagateComposedEvents: false
+                                onDoubleClicked: function(mouse) {
+                                    if (!activeController) return
+                                    activeController.zoom(2.0, fractionX(mouse.x), fractionY(mouse.y))
                                 }
                             }
                         }
@@ -481,6 +657,12 @@ ApplicationWindow {
                             Label {
                                 text: activeController ? activeController.recordCount + " records" : ""
                                 color: "#f5f7fa"
+                            }
+                            Label {
+                                text: hoverText
+                                color: "#f5f7fa"
+                                elide: Text.ElideRight
+                                Layout.preferredWidth: 280
                             }
                         }
                     }
@@ -578,7 +760,7 @@ ApplicationWindow {
                 RowLayout {
                     Layout.fillWidth: true
                     Label {
-                        text: "Max"
+                        text: activeController && activeController.colorMaxAuto ? "Max Auto" : "Max"
                         color: "#5b6672"
                     }
                     TextField {
@@ -598,6 +780,11 @@ ApplicationWindow {
                             if (activeController && Number(text) > 0)
                                 activeController.colorMax = Number(text)
                         }
+                    }
+                    Button {
+                        text: "Auto"
+                        enabled: activeController && !activeController.colorMaxAuto
+                        onClicked: activeController.resetColorScale()
                     }
                 }
 

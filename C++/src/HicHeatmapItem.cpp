@@ -207,7 +207,34 @@ void HicHeatmapItem::mouseReleaseEvent(QMouseEvent* event) {
 
 QColor HicHeatmapItem::colorForValue(float value) const {
     const double maxValue = m_controller ? m_controller->colorMax() : 50.0;
-    const double t = std::clamp(std::log1p(std::max(0.0f, value)) / std::log1p(maxValue), 0.0, 1.0);
+    if (!std::isfinite(value)) {
+        return QColor("#808080");
+    }
+
+    if (m_controller && m_controller->matrixType() == QStringLiteral("oe")) {
+        if (value <= 0.0f || maxValue <= 1.0) {
+            return QColor("#808080");
+        }
+        const double threshold = std::log(maxValue);
+        double scaled = std::log(static_cast<double>(value));
+        int r = 255;
+        int g = 255;
+        int b = 255;
+        if (scaled > 0.0) {
+            scaled = std::min(scaled, threshold);
+            r = 255;
+            g = static_cast<int>(255.0 * (threshold - scaled) / threshold);
+            b = static_cast<int>(255.0 * (threshold - scaled) / threshold);
+        } else {
+            scaled = std::min(-scaled, threshold);
+            b = 255;
+            r = static_cast<int>(255.0 * (threshold - scaled) / threshold);
+            g = static_cast<int>(255.0 * (threshold - scaled) / threshold);
+        }
+        return QColor(std::clamp(r, 0, 255), std::clamp(g, 0, 255), std::clamp(b, 0, 255), 245);
+    }
+
+    const double t = std::clamp(static_cast<double>(std::max(0.0f, value)) / std::max(1.0, maxValue), 0.0, 1.0);
     const QString colorMap = m_controller ? m_controller->colorMap() : QStringLiteral("White-Red");
     QColor color;
     if (colorMap == QStringLiteral("Viridis")) {
