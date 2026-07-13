@@ -987,14 +987,6 @@ ApplicationWindow {
                                     guideCanvas.requestPaint()
                                 }
 
-                                onWheel: function(wheel) {
-                                    if (!activeController) return
-                                    contextFx = fractionX(wheel.x)
-                                    contextFy = fractionY(wheel.y)
-                                    activeController.zoom(wheel.angleDelta.y > 0 ? 1.35 : 0.74, contextFx, contextFy)
-                                    wheel.accepted = true
-                                }
-
                                 onPressed: function(mouse) {
                                     if (!activeController) return
                                     updateHover(mouse)

@@ -4,7 +4,6 @@
 #include <QSGFlatColorMaterial>
 #include <QSGGeometryNode>
 #include <QSGVertexColorMaterial>
-#include <QWheelEvent>
 
 #include <algorithm>
 #include <cmath>
@@ -110,7 +109,6 @@ QSGNode* HicHeatmapItem::updatePaintNode(QSGNode* oldNode, UpdatePaintNodeData*)
     const double scale = side / static_cast<double>(std::max(viewWidth, viewHeight));
     const double originX = (width() - side) * 0.5;
     const double originY = (height() - side) * 0.5;
-    const double cellSize = std::max(1.0, m_controller->resolution() * scale);
     const bool mirrorIntra = m_controller->chrX() == m_controller->chrY() && !isVsMode;
     const bool splitVsIntra = m_controller->chrX() == m_controller->chrY() && isVsMode;
 
@@ -123,19 +121,25 @@ QSGNode* HicHeatmapItem::updatePaintNode(QSGNode* oldNode, UpdatePaintNodeData*)
 
     int vi = 0;
     auto appendQuad = [&](qint64 genomeX, qint64 genomeY, const QColor& color) {
-        const double px = originX + (genomeX - x0) * scale;
-        const double py = originY + (genomeY - y0) * scale;
-        if (px + cellSize < 0 || py + cellSize < 0 || px > width() || py > height()) {
+        const double px0 = originX + (genomeX - x0) * scale;
+        const double py0 = originY + (genomeY - y0) * scale;
+        const double px1 = originX + (genomeX + m_controller->resolution() - x0) * scale;
+        const double py1 = originY + (genomeY + m_controller->resolution() - y0) * scale;
+        const double leftD = std::floor(std::max(0.0, std::min(px0, px1)));
+        const double topD = std::floor(std::max(0.0, std::min(py0, py1)));
+        const double rightD = std::ceil(std::min(static_cast<double>(width()), std::max(px0, px1)));
+        const double bottomD = std::ceil(std::min(static_cast<double>(height()), std::max(py0, py1)));
+        if (rightD <= 0.0 || bottomD <= 0.0 || leftD >= width() || topD >= height()) {
             return;
         }
         const uchar r = static_cast<uchar>(color.red());
         const uchar g = static_cast<uchar>(color.green());
         const uchar b = static_cast<uchar>(color.blue());
         const uchar a = static_cast<uchar>(color.alpha());
-        const float left = static_cast<float>(px);
-        const float top = static_cast<float>(py);
-        const float right = static_cast<float>(px + cellSize);
-        const float bottom = static_cast<float>(py + cellSize);
+        const float left = static_cast<float>(leftD);
+        const float top = static_cast<float>(topD);
+        const float right = static_cast<float>(std::min(static_cast<double>(width()), std::max(leftD + 1.0, rightD)));
+        const float bottom = static_cast<float>(std::min(static_cast<double>(height()), std::max(topD + 1.0, bottomD)));
         vertices[vi++].set(left, top, r, g, b, a);
         vertices[vi++].set(right, top, r, g, b, a);
         vertices[vi++].set(left, bottom, r, g, b, a);
@@ -175,22 +179,6 @@ QSGNode* HicHeatmapItem::updatePaintNode(QSGNode* oldNode, UpdatePaintNodeData*)
     root->appendChildNode(node);
 
     return root;
-}
-
-void HicHeatmapItem::wheelEvent(QWheelEvent* event) {
-    if (!m_controller) {
-        event->ignore();
-        return;
-    }
-    const double factor = event->angleDelta().y() > 0 ? 1.35 : 0.74;
-    const QPointF p = event->position();
-    const double side = std::max(1.0, std::min(width(), height()));
-    const double originX = (width() - side) * 0.5;
-    const double originY = (height() - side) * 0.5;
-    m_controller->zoom(factor,
-                       std::clamp((p.x() - originX) / side, 0.0, 1.0),
-                       std::clamp((p.y() - originY) / side, 0.0, 1.0));
-    event->accept();
 }
 
 void HicHeatmapItem::mousePressEvent(QMouseEvent* event) {

@@ -1930,8 +1930,8 @@ HicTileKey HicDataController::paddedRequestKey(const HicTileKey& visibleKey) con
     const qint64 resolution = std::max<qint64>(1, key.resolution);
     const qint64 xSpan = std::max<qint64>(resolution, visibleKey.x1 - visibleKey.x0);
     const qint64 ySpan = std::max<qint64>(resolution, visibleKey.y1 - visibleKey.y0);
-    const qint64 xPad = std::max<qint64>(resolution * 4LL, xSpan / 2);
-    const qint64 yPad = std::max<qint64>(resolution * 4LL, ySpan / 2);
+    const qint64 xPad = std::min<qint64>(resolution * 20LL, std::max<qint64>(resolution * 2LL, xSpan / 10));
+    const qint64 yPad = std::min<qint64>(resolution * 20LL, std::max<qint64>(resolution * 2LL, ySpan / 10));
     const qint64 maxX = chromosomeLength(QString::fromStdString(key.chrX));
     const qint64 maxY = chromosomeLength(QString::fromStdString(key.chrY));
     auto alignDown = [resolution](qint64 value) {
