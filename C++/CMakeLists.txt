@@ -129,7 +129,7 @@ install(TARGETS carton
 )
 install(TARGETS straw RUNTIME DESTINATION bin)
 
-# ── macOS Qt deployment (runs during `cmake --install`) ───────────────────────
+# ── macOS Qt deployment (runs during `cmake --install`) ──────────────────────
 if(APPLE)
     set(DEPLOY_SCRIPT "${CMAKE_CURRENT_BINARY_DIR}/deploy_macos.cmake")
     file(WRITE "${DEPLOY_SCRIPT}"
