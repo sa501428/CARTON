@@ -35,6 +35,9 @@ target_link_libraries(carton_hic
 add_executable(straw main.cpp)
 target_link_libraries(straw PRIVATE carton_hic)
 
+set(APP_ICON "${CMAKE_CURRENT_SOURCE_DIR}/carton.icns")
+set_source_files_properties("${APP_ICON}" PROPERTIES MACOSX_PACKAGE_LOCATION Resources)
+
 qt_add_executable(carton
     src/app_main.cpp
     src/HicDataController.cpp
@@ -44,6 +47,7 @@ qt_add_executable(carton
     src/HicHeatmapItem.cpp
     src/HicHeatmapItem.h
     src/HicTileCache.h
+    "${APP_ICON}"
 )
 
 qt_add_qml_module(carton
@@ -68,4 +72,53 @@ set_target_properties(carton PROPERTIES
     MACOSX_BUNDLE TRUE
     MACOSX_BUNDLE_GUI_IDENTIFIER org.carton.viewer
     MACOSX_BUNDLE_BUNDLE_NAME CARTON
+    MACOSX_BUNDLE_ICON_FILE carton.icns
+    MACOSX_BUNDLE_SHORT_VERSION_STRING ${PROJECT_VERSION}
+    MACOSX_BUNDLE_BUNDLE_VERSION ${PROJECT_VERSION}
+    MACOSX_BUNDLE_COPYRIGHT "Copyright © 2024 CARTON"
 )
+
+# ── Install ────────────────────────────────────────────────────────────────────
+install(TARGETS carton
+    BUNDLE  DESTINATION .
+    RUNTIME DESTINATION bin
+)
+install(TARGETS straw RUNTIME DESTINATION bin)
+
+# ── macOS Qt deployment (runs during `cmake --install`) ───────────────────────
+if(APPLE)
+    set(DEPLOY_SCRIPT "${CMAKE_CURRENT_BINARY_DIR}/deploy_macos.cmake")
+    file(WRITE "${DEPLOY_SCRIPT}"
+        "execute_process(\n"
+        "    COMMAND \"/opt/homebrew/bin/macdeployqt\" \"\${CMAKE_INSTALL_PREFIX}/carton.app\""
+        " \"-qmldir=${CMAKE_CURRENT_SOURCE_DIR}/qml\"\n"
+        "    RESULT_VARIABLE _r\n"
+        ")\n"
+        "if(NOT _r EQUAL 0)\n"
+        "    message(FATAL_ERROR \"macdeployqt failed\")\n"
+        "endif()\n"
+        # macdeployqt rewrites load commands (rpaths) after the linker's ad-hoc
+        # signature was embedded, which invalidates it; re-sign or launch fails
+        # with a "Code Signature Invalid" SIGKILL.
+        "execute_process(\n"
+        "    COMMAND \"codesign\" \"--force\" \"--deep\" \"--sign\" \"-\" \"\${CMAKE_INSTALL_PREFIX}/carton.app\"\n"
+        "    RESULT_VARIABLE _rs\n"
+        ")\n"
+        "if(NOT _rs EQUAL 0)\n"
+        "    message(FATAL_ERROR \"codesign failed\")\n"
+        "endif()\n"
+    )
+    install(SCRIPT "${DEPLOY_SCRIPT}")
+endif()
+
+# ── CPack DragNDrop DMG ────────────────────────────────────────────────────────
+set(CPACK_GENERATOR "DragNDrop")
+set(CPACK_PACKAGE_NAME "CARTON")
+set(CPACK_PACKAGE_VENDOR "CARTON")
+set(CPACK_PACKAGE_DESCRIPTION_SUMMARY "CARTON Hi-C desktop viewer")
+set(CPACK_PACKAGE_VERSION ${PROJECT_VERSION})
+set(CPACK_PACKAGE_FILE_NAME "CARTON-${PROJECT_VERSION}-macOS")
+set(CPACK_DMG_VOLUME_NAME "CARTON")
+set(CPACK_DMG_FORMAT "UDZO")
+set(CPACK_STRIP_FILES TRUE)
+include(CPack)
