@@ -37,7 +37,7 @@ Button {
         color: !control.enabled
                ? Theme.textDisabled
                : control.highlighted
-                 ? Theme.onAccent
+                 ? Theme.accentForeground
                  : control.tonal ? Theme.accent : Theme.textPrimary
         horizontalAlignment: Text.AlignHCenter
         verticalAlignment: Text.AlignVCenter

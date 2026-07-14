@@ -252,6 +252,7 @@ private:
     QString controlDataMatrixType(const QString& matrixType) const;
     bool validateMatrixMode(const QString& matrixType);
     void clampRegion();
+    void adaptResolutionToSpan(qint64 span);
     void updateAutoColorScale(const std::vector<contactRecord>& records);
     void updateAutoColorScale(const std::vector<contactRecord>& records,
                               const std::vector<contactRecord>& controlRecords);
@@ -276,12 +277,18 @@ private:
     void scheduleRequest();
     void startTileLoad(const HicTileKey& key, quint64 requestId);
 
-    struct TrackSegment {
-        QString name;
+    struct TrackFeature {
         QString chr;
         qint64 start = 0;
         qint64 end = 0;
         double value = 0.0;
+        QColor color = QColor("#4b7bec");
+        QString label;
+    };
+
+    struct TrackLayer {
+        QString name;
+        QVector<TrackFeature> features;
         QColor color = QColor("#4b7bec");
         QColor negativeColor = QColor("#d1495b");
         double minValue = 0.0;
@@ -343,7 +350,7 @@ private:
     HicFileMetadata m_metadata;
     std::vector<contactRecord> m_records;
     std::vector<contactRecord> m_controlRecords;
-    std::vector<TrackSegment> m_tracks;
+    std::vector<TrackLayer> m_tracks;
     QVector<AnnotationLayer> m_annotationLayers;
     int m_activeAnnotationLayer = 0;
     QString m_selectedAnnotationId;

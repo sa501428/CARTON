@@ -105,10 +105,8 @@ QSGNode* HicHeatmapItem::updatePaintNode(QSGNode* oldNode, UpdatePaintNodeData*)
     const qint64 y1 = m_controller->y1();
     const qint64 viewWidth = std::max<qint64>(1, x1 - x0);
     const qint64 viewHeight = std::max<qint64>(1, y1 - y0);
-    const double side = std::min(width(), height());
-    const double scale = side / static_cast<double>(std::max(viewWidth, viewHeight));
-    const double originX = (width() - side) * 0.5;
-    const double originY = (height() - side) * 0.5;
+    const double scaleX = width() / static_cast<double>(viewWidth);
+    const double scaleY = height() / static_cast<double>(viewHeight);
     const bool mirrorIntra = m_controller->chrX() == m_controller->chrY() && !isVsMode;
     const bool splitVsIntra = m_controller->chrX() == m_controller->chrY() && isVsMode;
 
@@ -121,10 +119,10 @@ QSGNode* HicHeatmapItem::updatePaintNode(QSGNode* oldNode, UpdatePaintNodeData*)
 
     int vi = 0;
     auto appendQuad = [&](qint64 genomeX, qint64 genomeY, const QColor& color) {
-        const double px0 = originX + (genomeX - x0) * scale;
-        const double py0 = originY + (genomeY - y0) * scale;
-        const double px1 = originX + (genomeX + m_controller->resolution() - x0) * scale;
-        const double py1 = originY + (genomeY + m_controller->resolution() - y0) * scale;
+        const double px0 = (genomeX - x0) * scaleX;
+        const double py0 = (genomeY - y0) * scaleY;
+        const double px1 = (genomeX + m_controller->resolution() - x0) * scaleX;
+        const double py1 = (genomeY + m_controller->resolution() - y0) * scaleY;
         const double leftD = std::floor(std::max(0.0, std::min(px0, px1)));
         const double topD = std::floor(std::max(0.0, std::min(py0, py1)));
         const double rightD = std::ceil(std::min(static_cast<double>(width()), std::max(px0, px1)));
@@ -268,7 +266,8 @@ QColor HicHeatmapItem::colorForValue(float value) const {
     double scaledValue = static_cast<double>(std::max(0.0f, value));
     double scaledMin = minValue;
     double scaledMax = maxValue;
-    if (matrixType == QStringLiteral("log") || matrixType == QStringLiteral("logcontrol")) {
+    if (matrixType == QStringLiteral("log") || matrixType == QStringLiteral("logcontrol") ||
+        matrixType == QStringLiteral("logvs")) {
         scaledValue = std::log1p(scaledValue);
         scaledMin = std::log1p(std::max(0.0, scaledMin));
         scaledMax = std::log1p(std::max(0.0, scaledMax));

@@ -25,6 +25,7 @@
 #include <cmath>
 #include <exception>
 #include <functional>
+#include <limits>
 #include <numeric>
 #include <unordered_map>
 
@@ -92,9 +93,6 @@ HicDataController::HicDataController(QObject* parent)
                 displayControlRecords = transformPearsonLike(result.controlTile.records);
             } else if (m_matrixType == QStringLiteral("logvs")) {
                 displayControlRecords = result.controlTile.records;
-                for (contactRecord& record : displayControlRecords) {
-                    record.counts = record.counts > 0 ? static_cast<float>(std::log(record.counts)) : 0.0f;
-                }
             } else if (m_matrixType == QStringLiteral("logeovs")) {
                 displayControlRecords = result.controlTile.records;
                 for (contactRecord& record : displayControlRecords) {
@@ -254,22 +252,35 @@ void HicDataController::loadTrackFromPath(const QString& path) {
                       : parsed.warning);
         return;
     }
-    int loaded = 0;
+    TrackLayer track;
+    track.name = QFileInfo(path).baseName();
+    track.source = path;
+    double minValue = std::numeric_limits<double>::infinity();
+    double maxValue = -std::numeric_limits<double>::infinity();
     for (const GenomicTrackFeature& feature : parsed.features) {
-        TrackSegment segment;
+        TrackFeature segment;
         segment.chr = feature.chr;
         segment.start = feature.start;
         segment.end = feature.end;
-        segment.name = feature.name.isEmpty() ? QFileInfo(path).baseName() : feature.name;
-        segment.source = path;
+        segment.label = feature.name;
         segment.value = feature.value;
         segment.color = feature.color;
         if (segment.end > segment.start) {
-            segment.maxValue = std::max(1.0, std::abs(segment.value));
-            m_tracks.push_back(segment);
-            ++loaded;
+            track.features.push_back(segment);
+            minValue = std::min(minValue, segment.value);
+            maxValue = std::max(maxValue, segment.value);
         }
     }
+    if (track.features.isEmpty()) {
+        setStatus(QStringLiteral("No valid intervals found in 1D track: %1").arg(path));
+        return;
+    }
+    track.minValue = std::min(0.0, minValue);
+    track.maxValue = std::max(0.0, maxValue);
+    if (track.maxValue <= track.minValue) track.maxValue = track.minValue + 1.0;
+    track.color = track.features.front().color;
+    const int loaded = track.features.size();
+    m_tracks.push_back(std::move(track));
     setStatus(QStringLiteral("Loaded %1 %2 track intervals%3.")
                   .arg(loaded)
                   .arg(parsed.format.isEmpty() ? QStringLiteral("genomics") : parsed.format)
@@ -428,7 +439,7 @@ QVariantList HicDataController::matrixTypes() const {
 QVariantList HicDataController::trackSummaries() const {
     QVariantList values;
     for (int i = 0; i < static_cast<int>(m_tracks.size()); ++i) {
-        const TrackSegment& track = m_tracks[static_cast<std::size_t>(i)];
+        const TrackLayer& track = m_tracks[static_cast<std::size_t>(i)];
         QVariantMap item;
         item["index"] = i;
         item["name"] = track.name;
@@ -441,6 +452,7 @@ QVariantList HicDataController::trackSummaries() const {
         item["reduction"] = track.reduction;
         item["coverage"] = track.coverage;
         item["eigenvector"] = track.eigenvector;
+        item["featureCount"] = track.features.size();
         values.push_back(item);
     }
     return values;
@@ -471,21 +483,27 @@ QVariantList HicDataController::visibleTrackSegments(bool xAxis) const {
     const QString chr = xAxis ? m_chrX : m_chrY;
     const qint64 start = xAxis ? m_x0 : m_y0;
     const qint64 end = xAxis ? m_x1 : m_y1;
-    for (const TrackSegment& segment : m_tracks) {
-        if (segment.chr != chr || segment.end < start || segment.start > end) {
-            continue;
+    for (int trackIndex = 0; trackIndex < static_cast<int>(m_tracks.size()); ++trackIndex) {
+        const TrackLayer& track = m_tracks[static_cast<std::size_t>(trackIndex)];
+        const auto signedLog = [](double value) { return std::copysign(std::log1p(std::abs(value)), value); };
+        const double displayMin = track.logScale ? signedLog(track.minValue) : track.minValue;
+        const double displayMax = track.logScale ? signedLog(track.maxValue) : track.maxValue;
+        for (const TrackFeature& segment : track.features) {
+            if (segment.chr != chr || segment.end <= start || segment.start >= end) continue;
+            QVariantMap item;
+            item["trackIndex"] = trackIndex;
+            item["trackName"] = track.name;
+            item["name"] = segment.label;
+            item["start"] = segment.start;
+            item["end"] = segment.end;
+            const double value = track.logScale ? signedLog(segment.value) : segment.value;
+            item["rawValue"] = segment.value;
+            item["value"] = value;
+            item["min"] = displayMin;
+            item["max"] = displayMax;
+            item["color"] = value < 0 ? track.negativeColor : (segment.color.isValid() ? segment.color : track.color);
+            values.push_back(item);
         }
-        QVariantMap item;
-        item["name"] = segment.name;
-        item["start"] = segment.start;
-        item["end"] = segment.end;
-        double value = segment.value;
-        if (segment.logScale) {
-            value = std::log1p(std::abs(value));
-        }
-        item["value"] = value;
-        item["color"] = value < 0 ? segment.negativeColor : segment.color;
-        values.push_back(item);
     }
     return values;
 }
@@ -524,7 +542,8 @@ QVariantList HicDataController::visibleAnnotations() const {
         values.push_back(item);
         ++emitted;
 
-        if (m_chrX == m_chrY && annotation.chr1 == annotation.chr2) {
+        if (m_chrX == m_chrY && annotation.chr1 == annotation.chr2 &&
+            (annotation.start1 != annotation.start2 || annotation.end1 != annotation.end2)) {
             QVariantMap mirror = item;
             mirror["x0"] = item["y0"];
             mirror["x1"] = item["y1"];
@@ -574,6 +593,38 @@ QString HicDataController::positionText(double xFraction, double yFraction) cons
     if (hasControlCount) {
         text += QStringLiteral(" | control %1").arg(QString::number(controlCount, 'g', 5));
     }
+    QStringList trackHits;
+    for (const TrackLayer& track : m_tracks) {
+        QStringList values;
+        for (const TrackFeature& feature : track.features) {
+            if ((feature.chr == m_chrX && x >= feature.start && x < feature.end) ||
+                (feature.chr == m_chrY && y >= feature.start && y < feature.end)) {
+                const QString label = feature.label.isEmpty() ? QString() : feature.label + QStringLiteral("=");
+                values.push_back(label + QString::number(feature.value, 'g', 5));
+                if (values.size() >= 3) break;
+            }
+        }
+        if (!values.isEmpty()) trackHits.push_back(track.name + QStringLiteral(": ") + values.join(QStringLiteral(", ")));
+    }
+    if (!trackHits.isEmpty()) text += QStringLiteral(" | tracks ") + trackHits.join(QStringLiteral("; "));
+
+    QStringList annotationHits;
+    for (const AnnotationLayer& layer : m_annotationLayers) {
+        if (!layer.visible) continue;
+        for (const Annotation2D& annotation : layer.annotations) {
+            const bool direct = annotation.chr1 == m_chrX && annotation.chr2 == m_chrY &&
+                                x >= annotation.start1 && x < annotation.end1 &&
+                                y >= annotation.start2 && y < annotation.end2;
+            const bool mirrored = m_chrX == m_chrY && annotation.chr1 == annotation.chr2 &&
+                                  x >= annotation.start2 && x < annotation.end2 &&
+                                  y >= annotation.start1 && y < annotation.end1;
+            if (direct || mirrored) {
+                annotationHits.push_back(annotation.name.isEmpty() ? layer.name : annotation.name);
+                if (annotationHits.size() >= 4) break;
+            }
+        }
+    }
+    if (!annotationHits.isEmpty()) text += QStringLiteral(" | 2D ") + annotationHits.join(QStringLiteral(", "));
     return text;
 }
 
@@ -641,14 +692,17 @@ void HicDataController::goTo(const QString& xLocation, const QString& yLocation)
     };
 
     auto findGene = [this](const QString& gene, QString& chr, qint64& start, qint64& end) -> bool {
-        for (const TrackSegment& segment : m_tracks) {
-            if (segment.name.compare(gene, Qt::CaseInsensitive) == 0) {
-                chr = segment.chr;
-                const qint64 span = std::max<qint64>(m_resolution * 100LL, segment.end - segment.start);
-                const qint64 mid = (segment.start + segment.end) / 2;
-                start = std::max<qint64>(0, mid - span / 2);
-                end = std::min<qint64>(chromosomeLength(chr), start + span);
-                return true;
+        for (const TrackLayer& track : m_tracks) {
+            for (const TrackFeature& segment : track.features) {
+                if (track.name.compare(gene, Qt::CaseInsensitive) == 0 ||
+                    segment.label.compare(gene, Qt::CaseInsensitive) == 0) {
+                    chr = segment.chr;
+                    const qint64 span = std::max<qint64>(m_resolution * 100LL, segment.end - segment.start);
+                    const qint64 mid = (segment.start + segment.end) / 2;
+                    start = std::max<qint64>(0, mid - span / 2);
+                    end = std::min<qint64>(chromosomeLength(chr), start + span);
+                    return true;
+                }
             }
         }
         return false;
@@ -959,6 +1013,7 @@ void HicDataController::zoom(double factor, double centerX, double centerY) {
     m_x1 = m_x0 + nextWidth;
     m_y0 = centerGenomeY - nextHeight / 2;
     m_y1 = m_y0 + nextHeight;
+    adaptResolutionToSpan(std::max(nextWidth, nextHeight));
     clampRegion();
     emit viewChanged();
     scheduleRequest();
@@ -990,6 +1045,7 @@ void HicDataController::resetView() {
     m_y0 = 0;
     m_x1 = chromosomeLength(m_chrX);
     m_y1 = chromosomeLength(m_chrY);
+    adaptResolutionToSpan(std::max(m_x1 - m_x0, m_y1 - m_y0));
     clampRegion();
     emit viewChanged();
     scheduleRequest();
@@ -1159,15 +1215,18 @@ void HicDataController::setTrackName(int index, const QString& name) {
 
 void HicDataController::setTrackColor(int index, const QColor& positiveColor, const QColor& negativeColor) {
     if (index < 0 || index >= static_cast<int>(m_tracks.size())) return;
-    TrackSegment& track = m_tracks[static_cast<std::size_t>(index)];
-    if (positiveColor.isValid()) track.color = positiveColor;
+    TrackLayer& track = m_tracks[static_cast<std::size_t>(index)];
+    if (positiveColor.isValid()) {
+        track.color = positiveColor;
+        for (TrackFeature& feature : track.features) feature.color = positiveColor;
+    }
     if (negativeColor.isValid()) track.negativeColor = negativeColor;
     emit tracksChanged();
 }
 
 void HicDataController::setTrackRange(int index, double minValue, double maxValue, bool logScale) {
     if (index < 0 || index >= static_cast<int>(m_tracks.size())) return;
-    TrackSegment& track = m_tracks[static_cast<std::size_t>(index)];
+    TrackLayer& track = m_tracks[static_cast<std::size_t>(index)];
     track.minValue = minValue;
     track.maxValue = std::max(minValue + 0.0001, maxValue);
     track.logScale = logScale;
@@ -1606,13 +1665,29 @@ void HicDataController::clampRegion() {
     const qint64 maxX = std::max<qint64>(m_resolution, chromosomeLength(m_chrX));
     const qint64 maxY = std::max<qint64>(m_resolution, chromosomeLength(m_chrY));
     const qint64 minSpan = std::max<qint64>(m_resolution, m_resolution * 20LL);
-    qint64 span = std::max<qint64>(minSpan, std::max<qint64>(m_x1 - m_x0, m_y1 - m_y0));
-    span = std::min(span, std::min(maxX, maxY));
-    span = std::max<qint64>(m_resolution, span);
-    m_x0 = std::clamp<qint64>(m_x0, 0, std::max<qint64>(0, maxX - span));
-    m_y0 = std::clamp<qint64>(m_y0, 0, std::max<qint64>(0, maxY - span));
-    m_x1 = m_x0 + span;
-    m_y1 = m_y0 + span;
+    const qint64 spanX = std::clamp<qint64>(std::max<qint64>(minSpan, m_x1 - m_x0), m_resolution, maxX);
+    const qint64 spanY = std::clamp<qint64>(std::max<qint64>(minSpan, m_y1 - m_y0), m_resolution, maxY);
+    m_x0 = std::clamp<qint64>(m_x0, 0, std::max<qint64>(0, maxX - spanX));
+    m_y0 = std::clamp<qint64>(m_y0, 0, std::max<qint64>(0, maxY - spanY));
+    m_x1 = m_x0 + spanX;
+    m_y1 = m_y0 + spanY;
+}
+
+void HicDataController::adaptResolutionToSpan(qint64 span) {
+    if (m_resolutionLocked || m_metadata.bpResolutions.empty() || span <= 0) return;
+    constexpr double targetVisibleBins = 650.0;
+    const double ideal = std::max(1.0, static_cast<double>(span) / targetVisibleBins);
+    int best = m_metadata.bpResolutions.front();
+    double bestDistance = std::numeric_limits<double>::infinity();
+    for (const int candidate : m_metadata.bpResolutions) {
+        if (candidate <= 0) continue;
+        const double distance = std::abs(std::log(static_cast<double>(candidate) / ideal));
+        if (distance < bestDistance) {
+            bestDistance = distance;
+            best = candidate;
+        }
+    }
+    m_resolution = best;
 }
 
 std::vector<contactRecord> HicDataController::transformRecordsForDisplay(const QString& matrixType,
@@ -1620,21 +1695,10 @@ std::vector<contactRecord> HicDataController::transformRecordsForDisplay(const Q
                                                                           const std::vector<contactRecord>& control) const {
     if (matrixType == QStringLiteral("control") || matrixType == QStringLiteral("logcontrol") ||
         matrixType == QStringLiteral("controloe")) {
-        if (matrixType == QStringLiteral("logcontrol")) {
-            std::vector<contactRecord> out = control;
-            for (contactRecord& record : out) {
-                record.counts = record.counts > 0 ? static_cast<float>(std::log(record.counts)) : 0.0f;
-            }
-            return out;
-        }
         return control;
     }
     if (matrixType == QStringLiteral("log") || matrixType == QStringLiteral("logvs")) {
-        std::vector<contactRecord> out = primary;
-        for (contactRecord& record : out) {
-            record.counts = record.counts > 0 ? static_cast<float>(std::log(record.counts)) : 0.0f;
-        }
-        return out;
+        return primary;
     }
     if (matrixType == QStringLiteral("pearson")) {
         return transformPearsonLike(primary);

@@ -18,6 +18,7 @@ find_library(ZSTD_LIBRARY zstd REQUIRED)
 find_path(ZSTD_INCLUDE_DIR zstd.h REQUIRED)
 
 qt_standard_project_setup(REQUIRES 6.5)
+qt_policy(SET QTP0004 NEW)
 
 add_library(carton_hic STATIC
     straw.cpp
@@ -50,9 +51,14 @@ qt_add_executable(carton
     "${APP_ICON}"
 )
 
+# Singleton metadata must be present before qt_add_qml_module generates the
+# qmldir; setting this afterwards leaves Theme unresolved at runtime.
+set_source_files_properties(qml/Theme.qml PROPERTIES QT_QML_SINGLETON_TYPE true)
+
 qt_add_qml_module(carton
     URI Carton
     VERSION 1.0
+    NO_IMPORT_SCAN
     QML_FILES
         qml/Main.qml
         qml/Theme.qml
@@ -65,8 +71,6 @@ qt_add_qml_module(carton
         qml/Card.qml
         qml/DialogFrame.qml
 )
-
-set_source_files_properties(qml/Theme.qml PROPERTIES QT_QML_SINGLETON_TYPE true)
 
 target_include_directories(carton PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
 target_link_libraries(carton

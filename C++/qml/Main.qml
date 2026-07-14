@@ -21,7 +21,7 @@ ApplicationWindow {
         button: Theme.surface
         buttonText: Theme.textPrimary
         highlight: Theme.accent
-        highlightedText: Theme.onAccent
+        highlightedText: Theme.accentForeground
         mid: Theme.border
         dark: Theme.borderStrong
         placeholderText: Theme.textMuted
@@ -669,6 +669,7 @@ ApplicationWindow {
                     Connections {
                         target: activeController
                         function onViewChanged() {
+                            resolutionBox.currentIndex = Math.max(0, resolutionBox.find(String(activeController.resolution)))
                             topTrackCanvas.requestPaint()
                             leftTrackCanvas.requestPaint()
                             annotationCanvas.requestPaint()
@@ -790,7 +791,7 @@ ApplicationWindow {
                         anchors.centerIn: parent
                         width: Math.max(240, Math.min(parent.width - 58, parent.height - 90))
                         height: width
-                        property int axisSize: 72
+                        property int axisSize: activeController ? Math.min(150, 72 + Math.max(0, activeController.trackCount - 1) * 20) : 72
 
                         Rectangle {
                             id: shadowSource
@@ -862,13 +863,24 @@ ApplicationWindow {
                                     ctx.textAlign = t === 0 ? "left" : (t === ticks - 1 ? "right" : "center")
                                     ctx.fillText(label, tx, axisY + 6)
                                 }
+                                var laneCount = Math.max(1, activeController.trackCount)
+                                var trackTop = activeController.showChromosomeContext ? 10 : 2
+                                var trackBottom = axisY - 3
+                                var laneHeight = Math.max(8, (trackBottom - trackTop) / laneCount)
                                 for (var i = 0; i < segments.length; i++) {
                                     var s = segments[i]
                                     var x0 = (s.start - activeController.x0) / span * width
                                     var x1 = (s.end - activeController.x0) / span * width
-                                    var h = Math.max(2, Math.min(axisY - 6, Math.abs(s.value) * 8))
+                                    var laneY = trackTop + s.trackIndex * laneHeight
+                                    var range = Math.max(0.000001, s.max - s.min)
+                                    var zero = laneY + laneHeight - (0 - s.min) / range * laneHeight
+                                    var valueY = laneY + laneHeight - (s.value - s.min) / range * laneHeight
+                                    zero = Math.max(laneY, Math.min(laneY + laneHeight, zero))
+                                    valueY = Math.max(laneY, Math.min(laneY + laneHeight, valueY))
+                                    var barTop = Math.min(zero, valueY)
+                                    var h = Math.max(1.5, Math.abs(valueY - zero))
                                     ctx.fillStyle = s.color
-                                    ctx.fillRect(Math.max(0, x0), axisY - h - 2, Math.max(1, x1 - x0), h)
+                                    ctx.fillRect(Math.max(0, x0), barTop, Math.max(1, x1 - x0), h)
                                 }
                             }
                         }
@@ -916,13 +928,24 @@ ApplicationWindow {
                                     ctx.stroke()
                                     ctx.fillText(label, 2, Math.max(8, Math.min(height - 8, ty)))
                                 }
+                                var laneCount = Math.max(1, activeController.trackCount)
+                                var trackLeft = activeController.showChromosomeContext ? 10 : 2
+                                var trackRight = axisX - labelWidth - 2
+                                var laneWidth = Math.max(7, (trackRight - trackLeft) / laneCount)
                                 for (var i = 0; i < segments.length; i++) {
                                     var s = segments[i]
                                     var y0 = (s.start - activeController.y0) / span * height
                                     var y1 = (s.end - activeController.y0) / span * height
-                                    var w = Math.max(2, Math.min(width - labelWidth - 8, Math.abs(s.value) * 8))
+                                    var laneX = trackLeft + s.trackIndex * laneWidth
+                                    var range = Math.max(0.000001, s.max - s.min)
+                                    var zero = laneX + (0 - s.min) / range * laneWidth
+                                    var valueX = laneX + (s.value - s.min) / range * laneWidth
+                                    zero = Math.max(laneX, Math.min(laneX + laneWidth, zero))
+                                    valueX = Math.max(laneX, Math.min(laneX + laneWidth, valueX))
+                                    var barLeft = Math.min(zero, valueX)
+                                    var w = Math.max(1.5, Math.abs(valueX - zero))
                                     ctx.fillStyle = s.color
-                                    ctx.fillRect(axisX - w - 2, Math.max(0, y0), w, Math.max(1, y1 - y0))
+                                    ctx.fillRect(barLeft, Math.max(0, y0), w, Math.max(1, y1 - y0))
                                 }
                             }
                         }
@@ -950,10 +973,11 @@ ApplicationWindow {
                                     var annotations = activeController.visibleAnnotations()
                                     var spanX = Math.max(1, activeController.x1 - activeController.x0)
                                     var spanY = Math.max(1, activeController.y1 - activeController.y0)
+                                    var scaleX = width / spanX
+                                    var scaleY = height / spanY
+                                    var ox = 0
+                                    var oy = 0
                                     var side = Math.min(width, height)
-                                    var scale = side / Math.max(spanX, spanY)
-                                    var ox = (width - side) * 0.5
-                                    var oy = (height - side) * 0.5
                                     if (activeController.showGridlines) {
                                         ctx.strokeStyle = Theme.gridline
                                         ctx.lineWidth = 1
@@ -974,8 +998,8 @@ ApplicationWindow {
                                         ctx.strokeStyle = Theme.boundaryLine
                                         ctx.lineWidth = 1.2
                                         for (var b = 0; b < boundaries.length; b++) {
-                                            var bx = ox + (boundaries[b].end - activeController.x0) / spanX * side
-                                            var by = oy + (boundaries[b].end - activeController.y0) / spanY * side
+                                            var bx = (boundaries[b].end - activeController.x0) * scaleX
+                                            var by = (boundaries[b].end - activeController.y0) * scaleY
                                             ctx.beginPath()
                                             ctx.moveTo(bx, oy)
                                             ctx.lineTo(bx, oy + side)
@@ -1002,10 +1026,10 @@ ApplicationWindow {
                                     ctx.lineWidth = 1.5
                                     for (var i = 0; i < annotations.length; i++) {
                                         var a = annotations[i]
-                                        var x = ox + (a.x0 - activeController.x0) * scale
-                                        var y = oy + (a.y0 - activeController.y0) * scale
-                                        var w = Math.max(a.enlarged ? 6 : 2, (a.x1 - a.x0) * scale)
-                                        var h = Math.max(a.enlarged ? 6 : 2, (a.y1 - a.y0) * scale)
+                                        var x = (a.x0 - activeController.x0) * scaleX
+                                        var y = (a.y0 - activeController.y0) * scaleY
+                                        var w = Math.max(a.enlarged ? 6 : 2, (a.x1 - a.x0) * scaleX)
+                                        var h = Math.max(a.enlarged ? 6 : 2, (a.y1 - a.y0) * scaleY)
                                         ctx.globalAlpha = a.transparent ? 0.45 : 1.0
                                         ctx.strokeStyle = a.color
                                         ctx.strokeRect(x, y, w, h)
@@ -1038,8 +1062,17 @@ ApplicationWindow {
                                     if (diagonalEdgeEnabled) {
                                         ctx.beginPath()
                                         var d = hoverPlotY - hoverPlotX
-                                        ctx.moveTo(Math.max(0, -d), Math.max(0, d))
-                                        ctx.lineTo(Math.min(width, height - d), Math.min(height, width + d))
+                                        // Parallel diagonal through the cursor and its reflection
+                                        // across the matrix diagonal.
+                                        ctx.moveTo(-height, -height + d)
+                                        ctx.lineTo(width + height, width + height + d)
+                                        ctx.moveTo(-height, -height - d)
+                                        ctx.lineTo(width + height, width + height - d)
+                                        // Perpendicular diagonal through the cursor (the reflected
+                                        // cursor lies on this same line because x + y is invariant).
+                                        var sum = hoverPlotX + hoverPlotY
+                                        ctx.moveTo(-height, sum + height)
+                                        ctx.lineTo(width + height, sum - width - height)
                                         ctx.stroke()
                                     }
                                 }
@@ -1065,6 +1098,7 @@ ApplicationWindow {
                                 property real startY: 0
                                 property bool selecting: false
                                 property bool annotating: false
+                                property bool moved: false
 
                                 function clamp01(v) {
                                     return Math.max(0, Math.min(1, v))
@@ -1108,6 +1142,7 @@ ApplicationWindow {
                                     lastY = mouse.y
                                     startX = mouse.x
                                     startY = mouse.y
+                                    moved = false
                                     selecting = (mouse.modifiers & Qt.AltModifier) !== 0
                                     annotating = (mouse.modifiers & Qt.ShiftModifier) !== 0
                                     if (selecting || annotating) {
@@ -1129,6 +1164,8 @@ ApplicationWindow {
                                     updateHover(mouse)
                                     if (!activeController || !(mouse.buttons & Qt.LeftButton))
                                         return
+                                    if (Math.abs(mouse.x - startX) > 4 || Math.abs(mouse.y - startY) > 4)
+                                        moved = true
                                     if (selecting || annotating) {
                                         selectionRect.x = Math.min(startX, mouse.x)
                                         selectionRect.y = Math.min(startY, mouse.y)
@@ -1161,7 +1198,10 @@ ApplicationWindow {
                                         annotating = false
                                     } else if (mouse.button === Qt.LeftButton) {
                                         activeController.endInteraction()
-                                        activeController.selectAnnotationAt(fractionX(mouse.x), fractionY(mouse.y))
+                                        if (!moved) {
+                                            activeController.selectAnnotationAt(fractionX(mouse.x), fractionY(mouse.y))
+                                            activeController.zoom(2.0, fractionX(mouse.x), fractionY(mouse.y))
+                                        }
                                     }
                                 }
 
@@ -1182,9 +1222,13 @@ ApplicationWindow {
                                 cursorShape: (selecting || annotating || straightEdgeEnabled || diagonalEdgeEnabled) ? Qt.CrossCursor : Qt.OpenHandCursor
                                 preventStealing: true
                                 propagateComposedEvents: false
-                                onDoubleClicked: function(mouse) {
+                                onWheel: function(wheel) {
                                     if (!activeController) return
-                                    activeController.zoom(2.0, fractionX(mouse.x), fractionY(mouse.y))
+                                    var delta = wheel.angleDelta.y !== 0 ? wheel.angleDelta.y : wheel.pixelDelta.y
+                                    if (delta === 0) return
+                                    var factor = Math.pow(2.0, delta / 360.0)
+                                    activeController.zoom(factor, fractionX(wheel.x), fractionY(wheel.y))
+                                    wheel.accepted = true
                                 }
                             }
 
@@ -1192,7 +1236,7 @@ ApplicationWindow {
                                 id: hoverBadge
                                 z: 20
                                 visible: hoverActive && hoverText.length > 0
-                                width: hoverBadgeLabel.implicitWidth + 16
+                                width: Math.min(parent.width - 16, hoverBadgeLabel.implicitWidth + 16)
                                 height: hoverBadgeLabel.implicitHeight + 10
                                 x: Math.max(8, Math.min(parent.width - width - 8, hoverPlotX + 14))
                                 y: Math.max(8, Math.min(parent.height - height - 8, hoverPlotY + 14))
@@ -1204,9 +1248,11 @@ ApplicationWindow {
                                 Label {
                                     id: hoverBadgeLabel
                                     anchors.centerIn: parent
+                                    width: parent.width - 16
                                     text: hoverText
                                     color: "#ffffff"
                                     font.pixelSize: 12
+                                    wrapMode: Text.Wrap
                                 }
                             }
                         }
@@ -1718,7 +1764,7 @@ ApplicationWindow {
                                                     RowLayout {
                                                         Layout.fillWidth: true
                                                         AppCheckBox { checked: modelData.visible; onToggled: activeController.setAnnotationLayerVisible(modelData.index, checked) }
-                                                        Label { text: modelData.name + " (" + modelData.count + ")"; color: Theme.textPrimary; Layout.fillWidth: true; elide: Text.ElideRight }
+                                                        Label { text: modelData.name + "  ·  " + modelData.count; color: Theme.textPrimary; Layout.fillWidth: true; elide: Text.ElideRight }
                                                         AppButton { text: "Active"; tonal: true; onClicked: activeController.setActiveAnnotationLayer(modelData.index) }
                                                     }
                                                     RowLayout {
@@ -1776,6 +1822,11 @@ ApplicationWindow {
                                                         text: modelData.name
                                                         onAccepted: activeController.setTrackName(modelData.index, text)
                                                         onEditingFinished: activeController.setTrackName(modelData.index, text)
+                                                    }
+                                                    Label {
+                                                        text: modelData.featureCount + " intervals"
+                                                        color: Theme.textMuted
+                                                        font.pixelSize: Theme.textXs
                                                     }
                                                     RowLayout {
                                                         Layout.fillWidth: true

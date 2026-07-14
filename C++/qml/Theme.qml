@@ -38,7 +38,7 @@ QtObject {
     readonly property color accentPressed: dark ? "#6f79ea" : "#3b3ec0"
     readonly property color accentSoft: dark ? "#262a4a" : "#ecedfd"
     readonly property color accentSoftHover: dark ? "#2f3459" : "#e2e3fc"
-    readonly property color onAccent: "#ffffff"
+    readonly property color accentForeground: "#ffffff"
 
     // Status accents used sparingly
     readonly property color warn: dark ? "#fbbf24" : "#c2790a"
