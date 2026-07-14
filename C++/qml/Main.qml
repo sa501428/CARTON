@@ -2,6 +2,7 @@ import QtQuick
 import QtQuick.Controls
 import QtQuick.Dialogs
 import QtQuick.Layouts
+import QtQuick.Effects
 import Carton
 
 ApplicationWindow {
@@ -10,7 +11,27 @@ ApplicationWindow {
     height: 940
     visible: true
     title: activeController && activeController.filePath.length > 0 ? "CARTON - " + activeController.filePath : "CARTON"
-    color: "#f5f6f8"
+    color: Theme.appBg
+
+    palette {
+        window: Theme.surface
+        windowText: Theme.textPrimary
+        base: Theme.surface
+        text: Theme.textPrimary
+        button: Theme.surface
+        buttonText: Theme.textPrimary
+        highlight: Theme.accent
+        highlightedText: Theme.onAccent
+        mid: Theme.border
+        dark: Theme.borderStrong
+        placeholderText: Theme.textMuted
+    }
+
+    Binding {
+        target: Theme
+        property: "dark"
+        value: activeController ? activeController.darkMode : false
+    }
 
     property var controllers: []
     property var activeController: null
@@ -192,13 +213,13 @@ ApplicationWindow {
         modal: true
         standardButtons: Dialog.Ok | Dialog.Cancel
         width: 520
+        background: DialogFrame {}
         ColumnLayout {
             anchors.fill: parent
-            TextField {
+            AppTextField {
                 id: urlField
                 Layout.fillWidth: true
                 placeholderText: "https://..."
-                selectByMouse: true
             }
         }
         onAccepted: if (activeController) activeController.loadTrackFromPath(urlField.text)
@@ -211,11 +232,11 @@ ApplicationWindow {
         modal: true
         standardButtons: Dialog.Ok | Dialog.Cancel
         width: 360
-        TextField {
+        background: DialogFrame {}
+        AppTextField {
             id: saveNameField
             anchors.fill: parent
             placeholderText: "Name"
-            selectByMouse: true
         }
         onAccepted: {
             if (activeController) {
@@ -233,12 +254,15 @@ ApplicationWindow {
         modal: true
         standardButtons: Dialog.Ok | Dialog.Cancel
         width: 360
+        background: DialogFrame {}
         GridLayout {
             anchors.fill: parent
             columns: 2
-            Label { text: "Width" }
+            rowSpacing: 10
+            columnSpacing: 12
+            Label { text: "Width"; color: Theme.textSecondary }
             SpinBox { id: exportWidth; from: 300; to: 10000; value: 1800; editable: true }
-            Label { text: "Height" }
+            Label { text: "Height"; color: Theme.textSecondary }
             SpinBox { id: exportHeight; from: 300; to: 10000; value: 1800; editable: true }
         }
         onAccepted: exportPdfDialog.open()
@@ -250,11 +274,11 @@ ApplicationWindow {
         modal: true
         standardButtons: Dialog.Ok | Dialog.Cancel
         width: 320
-        TextField {
+        background: DialogFrame {}
+        AppTextField {
             id: genomeNameField
             anchors.fill: parent
             text: activeController ? activeController.genomeId : ""
-            selectByMouse: true
         }
         onAccepted: if (activeController) activeController.renameGenome(genomeNameField.text)
     }
@@ -265,9 +289,11 @@ ApplicationWindow {
         modal: true
         standardButtons: Dialog.Ok
         width: 560
+        background: DialogFrame {}
         Label {
             anchors.fill: parent
             wrapMode: Text.WordWrap
+            color: Theme.textPrimary
             text: "CARTON is a Qt/C++ desktop viewer for Hi-C contact maps, inspired by Juicebox core viewer workflows. It supports .hic maps, control maps, normalization, derived display modes, annotations, tracks, saved states, and GPU-backed rendering.\n\nIf using Juicebox-derived workflows in research, cite the original Juicebox publication: Durand, Robinson et al., Cell Systems 2016."
         }
     }
@@ -414,107 +440,143 @@ ApplicationWindow {
     }
 
     header: ToolBar {
-        height: 48
-        background: Rectangle { color: "#20252b" }
+        height: 56
+        background: Rectangle {
+            color: Theme.chromeBg
+            Rectangle {
+                anchors.left: parent.left
+                anchors.right: parent.right
+                anchors.bottom: parent.bottom
+                height: 1
+                color: Theme.chromeBorder
+            }
+        }
         RowLayout {
             anchors.fill: parent
-            anchors.leftMargin: 12
-            anchors.rightMargin: 12
+            anchors.leftMargin: 16
+            anchors.rightMargin: 16
             spacing: 10
 
-            Button {
+            RowLayout {
+                spacing: 8
+                Rectangle {
+                    width: 9
+                    height: 9
+                    radius: 3
+                    color: Theme.accent
+                }
+                Label {
+                    text: "CARTON"
+                    color: Theme.chromeText
+                    font.pixelSize: 15
+                    font.weight: Font.Bold
+                    font.letterSpacing: 0.4
+                }
+            }
+
+            Rectangle { Layout.preferredWidth: 1; Layout.preferredHeight: 24; color: Theme.chromeBorder }
+
+            AppButton {
                 text: "Open Hi-C"
                 highlighted: true
                 onClicked: openDialog.open()
             }
 
-            Button {
+            AppButton {
                 text: "Control"
+                tonal: true
                 enabled: !!activeController
                 onClicked: controlDialog.open()
             }
 
-            ComboBox {
+            Rectangle { Layout.preferredWidth: 1; Layout.preferredHeight: 24; color: Theme.chromeBorder }
+
+            AppComboBox {
                 id: chromosomeX
-                Layout.preferredWidth: 130
+                Layout.preferredWidth: 118
                 model: []
                 enabled: activeController && model.length > 0
                 onActivated: if (activeController) activeController.chrX = currentText
             }
 
-            ComboBox {
+            Label { text: "×"; color: Theme.chromeTextMuted; font.pixelSize: Theme.textBase }
+
+            AppComboBox {
                 id: chromosomeY
-                Layout.preferredWidth: 130
+                Layout.preferredWidth: 118
                 model: []
                 enabled: activeController && model.length > 0
                 onActivated: if (activeController) activeController.chrY = currentText
             }
 
-            ComboBox {
+            AppComboBox {
                 id: resolutionBox
-                Layout.preferredWidth: 130
+                Layout.preferredWidth: 118
                 model: []
                 enabled: activeController && model.length > 0
                 onActivated: if (activeController) activeController.resolution = Number(currentText)
             }
 
-            ComboBox {
+            AppComboBox {
                 id: matrixBox
-                Layout.preferredWidth: 150
+                Layout.preferredWidth: 136
                 model: activeController ? activeController.matrixTypes() : ["observed", "log", "oe", "expected", "vs"]
                 onActivated: if (activeController) activeController.matrixType = currentText
             }
 
-            ComboBox {
+            AppComboBox {
                 id: normBox
-                Layout.preferredWidth: 120
+                Layout.preferredWidth: 110
                 model: ["NONE"]
                 onActivated: if (activeController) activeController.norm = currentText
             }
 
-            TextField {
+            Rectangle { Layout.preferredWidth: 1; Layout.preferredHeight: 24; color: Theme.chromeBorder }
+
+            AppTextField {
                 id: topLocationField
-                Layout.preferredWidth: 190
+                Layout.preferredWidth: 180
                 placeholderText: "chr:start-end"
                 enabled: activeController && activeController.filePath.length > 0
-                selectByMouse: true
                 onAccepted: if (activeController) activeController.goTo(text, leftLocationField.text.length > 0 ? leftLocationField.text : text)
             }
 
-            TextField {
+            AppTextField {
                 id: leftLocationField
-                Layout.preferredWidth: 190
+                Layout.preferredWidth: 180
                 placeholderText: "left / optional"
                 enabled: activeController && activeController.filePath.length > 0
-                selectByMouse: true
                 onAccepted: if (activeController) activeController.goTo(topLocationField.text, text.length > 0 ? text : topLocationField.text)
             }
 
-            ToolButton {
+            AppButton {
                 text: "Go"
+                tonal: true
                 enabled: activeController && topLocationField.text.length > 0
                 onClicked: activeController.goTo(topLocationField.text, leftLocationField.text.length > 0 ? leftLocationField.text : topLocationField.text)
             }
 
-            ToolButton {
+            AppToolButton {
                 text: "Reset"
                 enabled: activeController && activeController.filePath.length > 0
                 onClicked: activeController.resetView()
             }
 
-            ToolButton {
+            AppToolButton {
                 text: "All"
                 enabled: activeController && activeController.filePath.length > 0
                 onClicked: activeController.setWholeGenomeView()
             }
 
-            ToolButton {
+            Rectangle { Layout.preferredWidth: 1; Layout.preferredHeight: 24; color: Theme.chromeBorder }
+
+            AppToolButton {
                 text: "Track"
                 enabled: !!activeController
                 onClicked: trackDialog.open()
             }
 
-            ToolButton {
+            AppToolButton {
                 text: "2D"
                 enabled: !!activeController
                 onClicked: annotationDialog.open()
@@ -522,11 +584,20 @@ ApplicationWindow {
 
             Item { Layout.fillWidth: true }
 
-            BusyIndicator {
-                running: activeController && activeController.busy
-                visible: running
-                Layout.preferredWidth: 28
-                Layout.preferredHeight: 28
+            RowLayout {
+                spacing: 8
+                visible: activeController && activeController.busy
+                BusyIndicator {
+                    running: parent.visible
+                    Layout.preferredWidth: 20
+                    Layout.preferredHeight: 20
+                    palette.dark: Theme.accent
+                }
+                Label {
+                    text: "Loading…"
+                    color: Theme.chromeTextMuted
+                    font.pixelSize: Theme.textSm
+                }
             }
         }
     }
@@ -538,7 +609,7 @@ ApplicationWindow {
         Rectangle {
             SplitView.fillWidth: true
             SplitView.fillHeight: true
-            color: "#eef1f4"
+            color: Theme.appBg
 
             ColumnLayout {
                 anchors.fill: parent
@@ -551,28 +622,41 @@ ApplicationWindow {
                     TabBar {
                         id: tabBar
                         Layout.fillWidth: true
-                        background: Rectangle { color: "#dfe4ea" }
+                        background: Rectangle {
+                            color: Theme.surface
+                            Rectangle {
+                                anchors.left: parent.left
+                                anchors.right: parent.right
+                                anchors.bottom: parent.bottom
+                                height: 1
+                                color: Theme.border
+                            }
+                        }
                         onCurrentIndexChanged: setActiveTab(currentIndex)
 
                         Repeater {
                             model: tabModel
-                            TabButton {
+                            AppTabButton {
                                 text: model.title
                                 width: Math.max(140, implicitWidth)
                             }
                         }
                     }
 
-                    ToolButton {
+                    AppToolButton {
                         text: "+"
-                        Layout.preferredWidth: 42
+                        onLightSurface: true
+                        contentColor: Theme.textSecondary
+                        Layout.preferredWidth: 40
                         onClicked: addTab()
                     }
 
-                    ToolButton {
-                        text: "x"
+                    AppToolButton {
+                        text: "×"
+                        onLightSurface: true
+                        contentColor: Theme.textSecondary
                         enabled: controllers.length > 1
-                        Layout.preferredWidth: 42
+                        Layout.preferredWidth: 40
                         onClicked: closeCurrentTab()
                     }
                 }
@@ -580,9 +664,7 @@ ApplicationWindow {
                 Rectangle {
                     Layout.fillWidth: true
                     Layout.fillHeight: true
-                    color: "#eef1f4"
-                    border.color: "#c8d0d8"
-                    border.width: 1
+                    color: Theme.appBg
 
                     Connections {
                         target: activeController
@@ -710,6 +792,33 @@ ApplicationWindow {
                         height: width
                         property int axisSize: 72
 
+                        Rectangle {
+                            id: shadowSource
+                            anchors.fill: parent
+                            radius: Theme.radiusMd
+                            color: "black"
+                            visible: false
+                        }
+
+                        MultiEffect {
+                            anchors.fill: shadowSource
+                            source: shadowSource
+                            shadowEnabled: true
+                            shadowColor: Theme.shadow
+                            shadowVerticalOffset: 3
+                            shadowBlur: 0.6
+                            shadowOpacity: 0.55
+                            blurMax: 28
+                        }
+
+                        Rectangle {
+                            anchors.fill: parent
+                            radius: Theme.radiusMd
+                            color: Theme.surfaceSunken
+                            border.color: Theme.border
+                            border.width: 1
+                        }
+
                         Canvas {
                             id: topTrackCanvas
                             x: plotFrame.axisSize
@@ -719,7 +828,7 @@ ApplicationWindow {
                             onPaint: {
                                 var ctx = getContext("2d")
                                 ctx.reset()
-                                ctx.fillStyle = "#f7f8fa"
+                                ctx.fillStyle = Theme.surfaceSunken
                                 ctx.fillRect(0, 0, width, height)
                                 if (!activeController) return
                                 var segments = activeController.visibleTrackSegments(true)
@@ -727,25 +836,25 @@ ApplicationWindow {
                                 var axisLabelHeight = 18
                                 var axisY = height - axisLabelHeight - 0.5
                                 if (activeController.showChromosomeContext) {
-                                    ctx.fillStyle = activeController.wholeGenomeView ? "#e5e7eb" : "#edf0f3"
+                                    ctx.fillStyle = activeController.wholeGenomeView ? Theme.borderStrong : Theme.surfaceHover
                                     ctx.fillRect(0, 0, width, 8)
-                                    ctx.fillStyle = "#6b7280"
+                                    ctx.fillStyle = Theme.textMuted
                                     ctx.fillRect(0, 0, width, 8)
                                 }
-                                ctx.strokeStyle = "#8b949e"
+                                ctx.strokeStyle = Theme.borderStrong
                                 ctx.beginPath()
                                 ctx.moveTo(0, axisY)
                                 ctx.lineTo(width, axisY)
                                 ctx.stroke()
                                 ctx.font = "11px sans-serif"
-                                ctx.fillStyle = "#4b5563"
+                                ctx.fillStyle = Theme.textSecondary
                                 ctx.textBaseline = "top"
                                 var ticks = activeController.axisEndpointsOnly ? 2 : 5
                                 for (var t = 0; t < ticks; t++) {
                                     var f = ticks === 1 ? 0 : t / (ticks - 1)
                                     var tx = f * width
                                     var label = formatBp(activeController.x0 + f * span)
-                                    ctx.strokeStyle = "#8b949e"
+                                    ctx.strokeStyle = Theme.borderStrong
                                     ctx.beginPath()
                                     ctx.moveTo(tx + 0.5, axisY)
                                     ctx.lineTo(tx + 0.5, axisY + 5)
@@ -773,7 +882,7 @@ ApplicationWindow {
                             onPaint: {
                                 var ctx = getContext("2d")
                                 ctx.reset()
-                                ctx.fillStyle = "#f7f8fa"
+                                ctx.fillStyle = Theme.surfaceSunken
                                 ctx.fillRect(0, 0, width, height)
                                 if (!activeController) return
                                 var segments = activeController.visibleTrackSegments(false)
@@ -781,18 +890,18 @@ ApplicationWindow {
                                 var labelWidth = 42
                                 var axisX = width - 0.5
                                 if (activeController.showChromosomeContext) {
-                                    ctx.fillStyle = activeController.wholeGenomeView ? "#e5e7eb" : "#edf0f3"
+                                    ctx.fillStyle = activeController.wholeGenomeView ? Theme.borderStrong : Theme.surfaceHover
                                     ctx.fillRect(0, 0, 8, height)
-                                    ctx.fillStyle = "#6b7280"
+                                    ctx.fillStyle = Theme.textMuted
                                     ctx.fillRect(0, 0, 8, height)
                                 }
-                                ctx.strokeStyle = "#8b949e"
+                                ctx.strokeStyle = Theme.borderStrong
                                 ctx.beginPath()
                                 ctx.moveTo(axisX, 0)
                                 ctx.lineTo(axisX, height)
                                 ctx.stroke()
                                 ctx.font = "11px sans-serif"
-                                ctx.fillStyle = "#4b5563"
+                                ctx.fillStyle = Theme.textSecondary
                                 ctx.textAlign = "left"
                                 ctx.textBaseline = "middle"
                                 var ticks = activeController.axisEndpointsOnly ? 2 : 5
@@ -800,7 +909,7 @@ ApplicationWindow {
                                     var f = ticks === 1 ? 0 : t / (ticks - 1)
                                     var ty = f * height
                                     var label = formatBp(activeController.y0 + f * span)
-                                    ctx.strokeStyle = "#8b949e"
+                                    ctx.strokeStyle = Theme.borderStrong
                                     ctx.beginPath()
                                     ctx.moveTo(axisX - 5, ty + 0.5)
                                     ctx.lineTo(axisX, ty + 0.5)
@@ -846,7 +955,7 @@ ApplicationWindow {
                                     var ox = (width - side) * 0.5
                                     var oy = (height - side) * 0.5
                                     if (activeController.showGridlines) {
-                                        ctx.strokeStyle = "#22000000"
+                                        ctx.strokeStyle = Theme.gridline
                                         ctx.lineWidth = 1
                                         var gridSteps = 10
                                         for (var g = 1; g < gridSteps; g++) {
@@ -862,7 +971,7 @@ ApplicationWindow {
                                     }
                                     if (activeController.wholeGenomeView) {
                                         var boundaries = activeController.chromosomeBoundaries()
-                                        ctx.strokeStyle = "#77374151"
+                                        ctx.strokeStyle = Theme.boundaryLine
                                         ctx.lineWidth = 1.2
                                         for (var b = 0; b < boundaries.length; b++) {
                                             var bx = ox + (boundaries[b].end - activeController.x0) / spanX * side
@@ -876,7 +985,7 @@ ApplicationWindow {
                                         }
                                     }
                                     if (activeController.showTilesDebug) {
-                                        ctx.strokeStyle = "#553b82f6"
+                                        ctx.strokeStyle = Theme.tileDebugLine
                                         ctx.lineWidth = 1
                                         var tileCount = 8
                                         for (var tt = 0; tt <= tileCount; tt++) {
@@ -915,7 +1024,7 @@ ApplicationWindow {
                                     var ctx = getContext("2d")
                                     ctx.reset()
                                     if (!hoverActive) return
-                                    ctx.strokeStyle = "#cc111827"
+                                    ctx.strokeStyle = Theme.guideLine
                                     ctx.lineWidth = 1
                                     ctx.setLineDash([5, 4])
                                     if (straightEdgeEnabled) {
@@ -939,8 +1048,9 @@ ApplicationWindow {
                             Rectangle {
                                 id: selectionRect
                                 visible: false
-                                color: "#22578dff"
-                                border.color: "#2f6fed"
+                                radius: 2
+                                color: Qt.rgba(Theme.accent.r, Theme.accent.g, Theme.accent.b, 0.16)
+                                border.color: Theme.accent
                                 border.width: 1
                             }
 
@@ -1006,7 +1116,10 @@ ApplicationWindow {
                                         selectionRect.width = 0
                                         selectionRect.height = 0
                                         selectionRect.visible = true
-                                        selectionRect.border.color = annotating ? "#f59e0b" : "#2f6fed"
+                                        selectionRect.border.color = annotating ? Theme.warn : Theme.accent
+                                        selectionRect.color = annotating
+                                            ? Qt.rgba(Theme.warn.r, Theme.warn.g, Theme.warn.b, 0.16)
+                                            : Qt.rgba(Theme.accent.r, Theme.accent.g, Theme.accent.b, 0.16)
                                     } else {
                                         activeController.beginInteraction()
                                     }
@@ -1083,9 +1196,9 @@ ApplicationWindow {
                                 height: hoverBadgeLabel.implicitHeight + 10
                                 x: Math.max(8, Math.min(parent.width - width - 8, hoverPlotX + 14))
                                 y: Math.max(8, Math.min(parent.height - height - 8, hoverPlotY + 14))
-                                radius: 4
-                                color: "#ee111827"
-                                border.color: "#66374151"
+                                radius: Theme.radiusSm
+                                color: Theme.tooltipBg
+                                border.color: Theme.chromeBorder
                                 border.width: 1
 
                                 Label {
@@ -1104,31 +1217,35 @@ ApplicationWindow {
                         anchors.right: parent.right
                         anchors.bottom: parent.bottom
                         height: 32
-                        color: "#dd20252b"
+                        color: Theme.footerBg
                         RowLayout {
                             anchors.fill: parent
-                            anchors.leftMargin: 12
-                            anchors.rightMargin: 12
-                            spacing: 12
+                            anchors.leftMargin: 16
+                            anchors.rightMargin: 16
+                            spacing: 14
                             Label {
                                 text: activeController ? activeController.chrX + ":" + activeController.x0 + "-" + activeController.x1 : ""
-                                color: "#f5f7fa"
+                                color: Theme.chromeText
+                                font.pixelSize: Theme.textSm
                                 elide: Text.ElideRight
                                 Layout.fillWidth: true
                             }
                             Label {
                                 text: activeController ? activeController.chrY + ":" + activeController.y0 + "-" + activeController.y1 : ""
-                                color: "#f5f7fa"
+                                color: Theme.chromeText
+                                font.pixelSize: Theme.textSm
                                 elide: Text.ElideRight
                                 Layout.fillWidth: true
                             }
                             Label {
                                 text: activeController ? activeController.recordCount + " records" : ""
-                                color: "#f5f7fa"
+                                color: Theme.chromeTextMuted
+                                font.pixelSize: Theme.textSm
                             }
                             Label {
                                 text: hoverText
-                                color: "#f5f7fa"
+                                color: Theme.chromeText
+                                font.pixelSize: Theme.textSm
                                 elide: Text.ElideRight
                                 Layout.preferredWidth: 280
                             }
@@ -1139,388 +1256,571 @@ ApplicationWindow {
         }
 
         Rectangle {
-            SplitView.preferredWidth: 340
-            SplitView.minimumWidth: 300
-            color: "#f7f8fa"
-            border.color: "#c8d0d8"
+            SplitView.preferredWidth: 360
+            SplitView.minimumWidth: 320
+            color: Theme.surfaceAlt
+            border.color: Theme.border
 
-            ColumnLayout {
+            ScrollView {
                 anchors.fill: parent
-                anchors.margins: 14
-                spacing: 14
+                clip: true
+                contentWidth: availableWidth
 
-                Label {
-                    text: "Inspector"
-                    color: "#20252b"
-                    font.pixelSize: 18
-                    font.weight: Font.DemiBold
-                }
+                ColumnLayout {
+                    width: parent.width
+                    spacing: 16
 
-                GridLayout {
-                    columns: 2
-                    columnSpacing: 12
-                    rowSpacing: 10
-                    Layout.fillWidth: true
-
-                    Label { text: "Genome"; color: "#5b6672" }
-                    Label { text: activeController && activeController.genomeId ? activeController.genomeId : "-"; color: "#20252b"; elide: Text.ElideRight; Layout.fillWidth: true }
-
-                    Label { text: "Resolution"; color: "#5b6672" }
-                    Label { text: activeController && activeController.resolution > 0 ? activeController.resolution + " bp" : "-"; color: "#20252b" }
-
-                    Label { text: "Matrix"; color: "#5b6672" }
-                    Label { text: activeController ? activeController.matrixType : "-"; color: "#20252b" }
-
-                    Label { text: "Norm"; color: "#5b6672" }
-                    Label { text: activeController ? activeController.norm : "-"; color: "#20252b" }
-                }
-
-                Label {
-                    text: "Navigator"
-                    color: "#20252b"
-                    font.weight: Font.DemiBold
-                }
-
-                Canvas {
-                    id: miniMapCanvas
-                    Layout.fillWidth: true
-                    Layout.preferredHeight: 180
-                    onPaint: {
-                        var ctx = getContext("2d")
-                        ctx.reset()
-                        ctx.fillStyle = activeController && activeController.darkMode ? "#111827" : "#ffffff"
-                        ctx.fillRect(0, 0, width, height)
-                        ctx.strokeStyle = "#9ca3af"
-                        ctx.strokeRect(0.5, 0.5, width - 1, height - 1)
-                        if (!activeController) return
-                        var lx = Math.max(1, activeController.wholeGenomeView ? activeController.x1 : activeController.x1 - activeController.x0)
-                        var ly = Math.max(1, activeController.wholeGenomeView ? activeController.y1 : activeController.y1 - activeController.y0)
-                        if (activeController.wholeGenomeView) {
-                            var bounds = activeController.chromosomeBoundaries()
-                            ctx.strokeStyle = "#d1d5db"
-                            for (var i = 0; i < bounds.length; i++) {
-                                var bx = bounds[i].end / Math.max(1, activeController.x1) * width
-                                var by = bounds[i].end / Math.max(1, activeController.y1) * height
-                                ctx.beginPath()
-                                ctx.moveTo(bx, 0)
-                                ctx.lineTo(bx, height)
-                                ctx.moveTo(0, by)
-                                ctx.lineTo(width, by)
-                                ctx.stroke()
-                            }
-                        }
-                        ctx.strokeStyle = "#ef4444"
-                        ctx.lineWidth = 2
-                        ctx.strokeRect(4, 4, width - 8, height - 8)
-                    }
-                }
-
-                RowLayout {
-                    Layout.fillWidth: true
-                    CheckBox {
-                        text: "Lock resolution"
-                        checked: activeController && activeController.resolutionLocked
-                        onToggled: if (activeController) activeController.resolutionLocked = checked
-                    }
-                    Slider {
+                    ColumnLayout {
                         Layout.fillWidth: true
-                        enabled: activeController && !activeController.resolutionLocked
-                        from: 0
-                        to: activeController ? Math.max(0, activeController.resolutions().length - 1) : 0
-                        stepSize: 1
-                        snapMode: Slider.SnapAlways
-                        value: resolutionBox.currentIndex
-                        onMoved: {
-                            if (activeController && activeController.resolutions().length > value)
-                                activeController.resolution = Number(activeController.resolutions()[Math.round(value)])
+                        Layout.margins: 16
+                        Layout.topMargin: 16
+                        Layout.bottomMargin: 0
+                        spacing: 2
+                        Label {
+                            text: "Inspector"
+                            color: Theme.textPrimary
+                            font.pixelSize: Theme.textXl
+                            font.weight: Font.Bold
+                        }
+                        Label {
+                            text: activeController && activeController.filePath.length > 0 ? activeController.filePath : "No file loaded"
+                            color: Theme.textMuted
+                            font.pixelSize: Theme.textSm
+                            elide: Text.ElideMiddle
+                            Layout.fillWidth: true
                         }
                     }
-                }
 
-                RowLayout {
-                    Layout.fillWidth: true
-                    CheckBox {
-                        text: "Gridlines"
-                        checked: activeController && activeController.showGridlines
-                        onToggled: if (activeController) activeController.showGridlines = checked
-                    }
-                    CheckBox {
-                        text: "Chromosome context"
-                        checked: activeController && activeController.showChromosomeContext
-                        onToggled: if (activeController) activeController.showChromosomeContext = checked
-                    }
-                }
-
-                Label {
-                    text: "Color Scale"
-                    color: "#20252b"
-                    font.weight: Font.DemiBold
-                }
-
-                ComboBox {
-                    id: colorMapBox
-                    Layout.fillWidth: true
-                    model: ["White-Red", "Viridis", "Blue-White-Red", "Grayscale", "Custom"]
-                    onActivated: if (activeController) activeController.colorMap = currentText
-                }
-
-                RowLayout {
-                    Layout.fillWidth: true
-                    enabled: activeController && activeController.colorMap === "Custom"
-                    Button {
-                        text: "Low"
+                    Card {
                         Layout.fillWidth: true
-                        onClicked: lowColorDialog.open()
+                        Layout.leftMargin: 16
+                        Layout.rightMargin: 16
+                        implicitHeight: overviewGrid.implicitHeight + 24
+
+                        GridLayout {
+                            id: overviewGrid
+                            anchors.fill: parent
+                            anchors.margins: 12
+                            columns: 2
+                            columnSpacing: 12
+                            rowSpacing: 10
+
+                            Label { text: "Genome"; color: Theme.textSecondary; font.pixelSize: Theme.textSm }
+                            Label { text: activeController && activeController.genomeId ? activeController.genomeId : "—"; color: Theme.textPrimary; elide: Text.ElideRight; Layout.fillWidth: true }
+
+                            Label { text: "Resolution"; color: Theme.textSecondary; font.pixelSize: Theme.textSm }
+                            Label { text: activeController && activeController.resolution > 0 ? activeController.resolution + " bp" : "—"; color: Theme.textPrimary }
+
+                            Label { text: "Matrix"; color: Theme.textSecondary; font.pixelSize: Theme.textSm }
+                            Label { text: activeController ? activeController.matrixType : "—"; color: Theme.textPrimary }
+
+                            Label { text: "Norm"; color: Theme.textSecondary; font.pixelSize: Theme.textSm }
+                            Label { text: activeController ? activeController.norm : "—"; color: Theme.textPrimary }
+                        }
                     }
-                    Rectangle {
-                        Layout.preferredWidth: 28
-                        Layout.preferredHeight: 28
-                        radius: 4
-                        border.color: "#8b949e"
-                        color: activeController ? activeController.customLowColor : "white"
-                    }
-                    Button {
-                        text: "High"
+
+                    Card {
                         Layout.fillWidth: true
-                        onClicked: highColorDialog.open()
-                    }
-                    Rectangle {
-                        Layout.preferredWidth: 28
-                        Layout.preferredHeight: 28
-                        radius: 4
-                        border.color: "#8b949e"
-                        color: activeController ? activeController.customHighColor : "#d7191c"
-                    }
-                }
+                        Layout.leftMargin: 16
+                        Layout.rightMargin: 16
+                        implicitHeight: navigatorColumn.implicitHeight + 24
 
-                RangeSlider {
-                    Layout.fillWidth: true
-                    from: colorRangeLower()
-                    to: colorRangeUpper()
-                    first.value: activeController ? activeController.colorMin : 0
-                    second.value: activeController ? activeController.colorMax : 50
-                    first.onMoved: if (activeController) activeController.colorMin = first.value
-                    second.onMoved: if (activeController) activeController.colorMax = second.value
-                }
-
-                RowLayout {
-                    Layout.fillWidth: true
-                    Button {
-                        text: "-"
-                        enabled: !!activeController
-                        onClicked: if (activeController) {
-                            var center = (activeController.colorMin + activeController.colorMax) * 0.5
-                            var half = Math.max(0.000001, (activeController.colorMax - activeController.colorMin) * 0.25)
-                            activeController.colorMin = center - half
-                            activeController.colorMax = center + half
-                        }
-                    }
-                    Label {
-                        text: activeController && activeController.colorMaxAuto ? "Auto" : "Min / Max"
-                        color: "#5b6672"
-                    }
-                    TextField {
-                        id: colorMinField
-                        Layout.fillWidth: true
-                        text: activeController ? activeController.colorMin.toString() : ""
-                        selectByMouse: true
-                        validator: DoubleValidator {
-                            notation: DoubleValidator.ScientificNotation
-                        }
-                        onAccepted: {
-                            if (activeController && isFinite(Number(text)))
-                                activeController.colorMin = Number(text)
-                        }
-                        onEditingFinished: {
-                            if (activeController && isFinite(Number(text)))
-                                activeController.colorMin = Number(text)
-                        }
-                    }
-                    TextField {
-                        id: colorMaxField
-                        Layout.fillWidth: true
-                        text: activeController ? activeController.colorMax.toString() : ""
-                        selectByMouse: true
-                        validator: DoubleValidator {
-                            notation: DoubleValidator.ScientificNotation
-                        }
-                        onAccepted: {
-                            if (activeController && isFinite(Number(text)))
-                                activeController.colorMax = Number(text)
-                        }
-                        onEditingFinished: {
-                            if (activeController && isFinite(Number(text)))
-                                activeController.colorMax = Number(text)
-                        }
-                    }
-                    Button {
-                        text: "Auto"
-                        enabled: activeController && !activeController.colorMaxAuto
-                        onClicked: activeController.resetColorScale()
-                    }
-                    Button {
-                        text: "+"
-                        enabled: !!activeController
-                        onClicked: if (activeController) {
-                            var center = (activeController.colorMin + activeController.colorMax) * 0.5
-                            var half = Math.max(0.000001, activeController.colorMax - activeController.colorMin)
-                            activeController.colorMin = center - half
-                            activeController.colorMax = center + half
-                        }
-                    }
-                }
-
-                Label {
-                    text: "Hover"
-                    color: "#20252b"
-                    font.weight: Font.DemiBold
-                }
-
-                ScrollView {
-                    Layout.fillWidth: true
-                    Layout.preferredHeight: 96
-                    TextArea {
-                        text: hoverText
-                        readOnly: true
-                        wrapMode: Text.WordWrap
-                    }
-                }
-
-                TabBar {
-                    id: sideTabs
-                    Layout.fillWidth: true
-                    TabButton { text: "Layers" }
-                    TabButton { text: "Tracks" }
-                }
-
-                StackLayout {
-                    Layout.fillWidth: true
-                    Layout.fillHeight: true
-                    currentIndex: sideTabs.currentIndex
-
-                    ScrollView {
-                        clip: true
                         ColumnLayout {
-                            width: parent.width
-                            spacing: 8
-                            RowLayout {
+                            id: navigatorColumn
+                            anchors.fill: parent
+                            anchors.margins: 12
+                            spacing: 10
+
+                            Label {
+                                text: "Navigator"
+                                color: Theme.textPrimary
+                                font.pixelSize: Theme.textMd
+                                font.weight: Font.DemiBold
+                            }
+
+                            Canvas {
+                                id: miniMapCanvas
                                 Layout.fillWidth: true
-                                Button { text: "New"; onClicked: if (activeController) activeController.addAnnotationLayer("Layer") }
-                                Button { text: "Merge"; onClicked: if (activeController) activeController.mergeVisibleAnnotationLayers("Merged") }
-                                SpinBox {
-                                    from: 1
-                                    to: 1000000
-                                    value: activeController ? activeController.sparseFeatureLimit : 10000
-                                    editable: true
-                                    onValueModified: if (activeController) activeController.sparseFeatureLimit = value
+                                Layout.preferredHeight: 160
+                                onPaint: {
+                                    var ctx = getContext("2d")
+                                    ctx.reset()
+                                    ctx.fillStyle = Theme.surfaceSunken
+                                    ctx.fillRect(0, 0, width, height)
+                                    ctx.strokeStyle = Theme.borderStrong
+                                    ctx.strokeRect(0.5, 0.5, width - 1, height - 1)
+                                    if (!activeController) return
+                                    var lx = Math.max(1, activeController.wholeGenomeView ? activeController.x1 : activeController.x1 - activeController.x0)
+                                    var ly = Math.max(1, activeController.wholeGenomeView ? activeController.y1 : activeController.y1 - activeController.y0)
+                                    if (activeController.wholeGenomeView) {
+                                        var bounds = activeController.chromosomeBoundaries()
+                                        ctx.strokeStyle = Theme.border
+                                        for (var i = 0; i < bounds.length; i++) {
+                                            var bx = bounds[i].end / Math.max(1, activeController.x1) * width
+                                            var by = bounds[i].end / Math.max(1, activeController.y1) * height
+                                            ctx.beginPath()
+                                            ctx.moveTo(bx, 0)
+                                            ctx.lineTo(bx, height)
+                                            ctx.moveTo(0, by)
+                                            ctx.lineTo(width, by)
+                                            ctx.stroke()
+                                        }
+                                    }
+                                    ctx.strokeStyle = Theme.danger
+                                    ctx.lineWidth = 2
+                                    ctx.strokeRect(4, 4, width - 8, height - 8)
                                 }
                             }
-                            Repeater {
-                                model: activeController ? activeController.annotationLayerSummaries() : []
-                                Rectangle {
+
+                            RowLayout {
+                                Layout.fillWidth: true
+                                spacing: 10
+                                AppCheckBox {
+                                    text: "Lock resolution"
+                                    checked: activeController && activeController.resolutionLocked
+                                    onToggled: if (activeController) activeController.resolutionLocked = checked
+                                }
+                                Slider {
+                                    id: resolutionSlider
                                     Layout.fillWidth: true
-                                    height: 92
-                                    radius: 6
-                                    color: modelData.active ? "#e0f2fe" : "#ffffff"
-                                    border.color: "#cbd5e1"
+                                    enabled: activeController && !activeController.resolutionLocked
+                                    from: 0
+                                    to: activeController ? Math.max(0, activeController.resolutions().length - 1) : 0
+                                    stepSize: 1
+                                    snapMode: Slider.SnapAlways
+                                    value: resolutionBox.currentIndex
+                                    onMoved: {
+                                        if (activeController && activeController.resolutions().length > value)
+                                            activeController.resolution = Number(activeController.resolutions()[Math.round(value)])
+                                    }
+                                    background: Rectangle {
+                                        x: resolutionSlider.leftPadding
+                                        y: resolutionSlider.topPadding + resolutionSlider.availableHeight / 2 - height / 2
+                                        width: resolutionSlider.availableWidth
+                                        height: 4
+                                        radius: 2
+                                        color: Theme.border
+                                        Rectangle {
+                                            width: resolutionSlider.visualPosition * parent.width
+                                            height: parent.height
+                                            radius: 2
+                                            color: Theme.accent
+                                        }
+                                    }
+                                    handle: Rectangle {
+                                        x: resolutionSlider.leftPadding + resolutionSlider.visualPosition * (resolutionSlider.availableWidth - width)
+                                        y: resolutionSlider.topPadding + resolutionSlider.availableHeight / 2 - height / 2
+                                        width: 16
+                                        height: 16
+                                        radius: 8
+                                        color: Theme.surface
+                                        border.width: 2
+                                        border.color: Theme.accent
+                                    }
+                                }
+                            }
+
+                            RowLayout {
+                                Layout.fillWidth: true
+                                spacing: 16
+                                AppCheckBox {
+                                    text: "Gridlines"
+                                    checked: activeController && activeController.showGridlines
+                                    onToggled: if (activeController) activeController.showGridlines = checked
+                                }
+                                AppCheckBox {
+                                    text: "Chromosome context"
+                                    checked: activeController && activeController.showChromosomeContext
+                                    onToggled: if (activeController) activeController.showChromosomeContext = checked
+                                }
+                            }
+                        }
+                    }
+
+                    Card {
+                        Layout.fillWidth: true
+                        Layout.leftMargin: 16
+                        Layout.rightMargin: 16
+                        implicitHeight: colorScaleColumn.implicitHeight + 24
+
+                        ColumnLayout {
+                            id: colorScaleColumn
+                            anchors.fill: parent
+                            anchors.margins: 12
+                            spacing: 10
+
+                            Label {
+                                text: "Color Scale"
+                                color: Theme.textPrimary
+                                font.pixelSize: Theme.textMd
+                                font.weight: Font.DemiBold
+                            }
+
+                            AppComboBox {
+                                id: colorMapBox
+                                Layout.fillWidth: true
+                                model: ["White-Red", "Viridis", "Blue-White-Red", "Grayscale", "Custom"]
+                                onActivated: if (activeController) activeController.colorMap = currentText
+                            }
+
+                            RowLayout {
+                                Layout.fillWidth: true
+                                enabled: activeController && activeController.colorMap === "Custom"
+                                spacing: 8
+                                AppButton {
+                                    text: "Low"
+                                    tonal: true
+                                    Layout.fillWidth: true
+                                    onClicked: lowColorDialog.open()
+                                }
+                                Rectangle {
+                                    Layout.preferredWidth: 26
+                                    Layout.preferredHeight: 26
+                                    radius: Theme.radiusSm
+                                    border.color: Theme.border
+                                    color: activeController ? activeController.customLowColor : "white"
+                                }
+                                AppButton {
+                                    text: "High"
+                                    tonal: true
+                                    Layout.fillWidth: true
+                                    onClicked: highColorDialog.open()
+                                }
+                                Rectangle {
+                                    Layout.preferredWidth: 26
+                                    Layout.preferredHeight: 26
+                                    radius: Theme.radiusSm
+                                    border.color: Theme.border
+                                    color: activeController ? activeController.customHighColor : "#d7191c"
+                                }
+                            }
+
+                            RangeSlider {
+                                id: colorRangeSlider
+                                Layout.fillWidth: true
+                                Layout.topMargin: 4
+                                from: colorRangeLower()
+                                to: colorRangeUpper()
+                                first.value: activeController ? activeController.colorMin : 0
+                                second.value: activeController ? activeController.colorMax : 50
+                                first.onMoved: if (activeController) activeController.colorMin = first.value
+                                second.onMoved: if (activeController) activeController.colorMax = second.value
+
+                                background: Rectangle {
+                                    x: colorRangeSlider.leftPadding
+                                    y: colorRangeSlider.topPadding + colorRangeSlider.availableHeight / 2 - height / 2
+                                    width: colorRangeSlider.availableWidth
+                                    height: 4
+                                    radius: 2
+                                    color: Theme.border
+                                    Rectangle {
+                                        x: colorRangeSlider.first.visualPosition * parent.width
+                                        width: (colorRangeSlider.second.visualPosition - colorRangeSlider.first.visualPosition) * parent.width
+                                        height: parent.height
+                                        radius: 2
+                                        color: Theme.accent
+                                    }
+                                }
+                                first.handle: Rectangle {
+                                    x: colorRangeSlider.leftPadding + colorRangeSlider.first.visualPosition * (colorRangeSlider.availableWidth - width)
+                                    y: colorRangeSlider.topPadding + colorRangeSlider.availableHeight / 2 - height / 2
+                                    width: 16
+                                    height: 16
+                                    radius: 8
+                                    color: Theme.surface
+                                    border.width: 2
+                                    border.color: Theme.accent
+                                }
+                                second.handle: Rectangle {
+                                    x: colorRangeSlider.leftPadding + colorRangeSlider.second.visualPosition * (colorRangeSlider.availableWidth - width)
+                                    y: colorRangeSlider.topPadding + colorRangeSlider.availableHeight / 2 - height / 2
+                                    width: 16
+                                    height: 16
+                                    radius: 8
+                                    color: Theme.surface
+                                    border.width: 2
+                                    border.color: Theme.accent
+                                }
+                            }
+
+                            RowLayout {
+                                Layout.fillWidth: true
+                                spacing: 6
+                                AppToolButton {
+                                    text: "−"
+                                    onLightSurface: true
+                                    contentColor: Theme.textPrimary
+                                    enabled: !!activeController
+                                    onClicked: if (activeController) {
+                                        var center = (activeController.colorMin + activeController.colorMax) * 0.5
+                                        var half = Math.max(0.000001, (activeController.colorMax - activeController.colorMin) * 0.25)
+                                        activeController.colorMin = center - half
+                                        activeController.colorMax = center + half
+                                    }
+                                }
+                                Label {
+                                    text: activeController && activeController.colorMaxAuto ? "Auto" : "Min / Max"
+                                    color: Theme.textSecondary
+                                    font.pixelSize: Theme.textSm
+                                }
+                                AppTextField {
+                                    id: colorMinField
+                                    Layout.fillWidth: true
+                                    text: activeController ? activeController.colorMin.toString() : ""
+                                    validator: DoubleValidator {
+                                        notation: DoubleValidator.ScientificNotation
+                                    }
+                                    onAccepted: {
+                                        if (activeController && isFinite(Number(text)))
+                                            activeController.colorMin = Number(text)
+                                    }
+                                    onEditingFinished: {
+                                        if (activeController && isFinite(Number(text)))
+                                            activeController.colorMin = Number(text)
+                                    }
+                                }
+                                AppTextField {
+                                    id: colorMaxField
+                                    Layout.fillWidth: true
+                                    text: activeController ? activeController.colorMax.toString() : ""
+                                    validator: DoubleValidator {
+                                        notation: DoubleValidator.ScientificNotation
+                                    }
+                                    onAccepted: {
+                                        if (activeController && isFinite(Number(text)))
+                                            activeController.colorMax = Number(text)
+                                    }
+                                    onEditingFinished: {
+                                        if (activeController && isFinite(Number(text)))
+                                            activeController.colorMax = Number(text)
+                                    }
+                                }
+                                AppButton {
+                                    text: "Auto"
+                                    tonal: true
+                                    enabled: activeController && !activeController.colorMaxAuto
+                                    onClicked: activeController.resetColorScale()
+                                }
+                                AppToolButton {
+                                    text: "+"
+                                    onLightSurface: true
+                                    contentColor: Theme.textPrimary
+                                    enabled: !!activeController
+                                    onClicked: if (activeController) {
+                                        var center = (activeController.colorMin + activeController.colorMax) * 0.5
+                                        var half = Math.max(0.000001, activeController.colorMax - activeController.colorMin)
+                                        activeController.colorMin = center - half
+                                        activeController.colorMax = center + half
+                                    }
+                                }
+                            }
+                        }
+                    }
+
+                    Card {
+                        Layout.fillWidth: true
+                        Layout.leftMargin: 16
+                        Layout.rightMargin: 16
+                        implicitHeight: hoverColumn.implicitHeight + 24
+
+                        ColumnLayout {
+                            id: hoverColumn
+                            anchors.fill: parent
+                            anchors.margins: 12
+                            spacing: 8
+
+                            Label {
+                                text: "Hover"
+                                color: Theme.textPrimary
+                                font.pixelSize: Theme.textMd
+                                font.weight: Font.DemiBold
+                            }
+
+                            Rectangle {
+                                Layout.fillWidth: true
+                                Layout.preferredHeight: 84
+                                radius: Theme.radiusSm
+                                color: Theme.surfaceSunken
+                                border.color: Theme.borderSubtle
+
+                                ScrollView {
+                                    anchors.fill: parent
+                                    anchors.margins: 8
+                                    clip: true
+                                    TextArea {
+                                        text: hoverText
+                                        readOnly: true
+                                        wrapMode: Text.WordWrap
+                                        color: Theme.textPrimary
+                                        font.pixelSize: Theme.textSm
+                                        background: null
+                                    }
+                                }
+                            }
+                        }
+                    }
+
+                    ColumnLayout {
+                        Layout.fillWidth: true
+                        Layout.leftMargin: 16
+                        Layout.rightMargin: 16
+                        Layout.bottomMargin: 16
+                        Layout.preferredHeight: 420
+                        spacing: 0
+
+                        TabBar {
+                            id: sideTabs
+                            Layout.fillWidth: true
+                            background: Rectangle { color: "transparent" }
+                            AppTabButton { text: "Layers" }
+                            AppTabButton { text: "Tracks" }
+                        }
+
+                        Card {
+                            Layout.fillWidth: true
+                            Layout.fillHeight: true
+
+                            StackLayout {
+                                anchors.fill: parent
+                                anchors.margins: 12
+                                currentIndex: sideTabs.currentIndex
+
+                                ScrollView {
+                                    clip: true
                                     ColumnLayout {
-                                        anchors.fill: parent
-                                        anchors.margins: 6
-                                        spacing: 4
+                                        width: parent.width
+                                        spacing: 8
                                         RowLayout {
                                             Layout.fillWidth: true
-                                            CheckBox { checked: modelData.visible; onToggled: activeController.setAnnotationLayerVisible(modelData.index, checked) }
-                                            Label { text: modelData.name + " (" + modelData.count + ")"; Layout.fillWidth: true; elide: Text.ElideRight }
-                                            Button { text: "Active"; onClicked: activeController.setActiveAnnotationLayer(modelData.index) }
+                                            spacing: 8
+                                            AppButton { text: "New"; tonal: true; onClicked: if (activeController) activeController.addAnnotationLayer("Layer") }
+                                            AppButton { text: "Merge"; tonal: true; onClicked: if (activeController) activeController.mergeVisibleAnnotationLayers("Merged") }
+                                            SpinBox {
+                                                from: 1
+                                                to: 1000000
+                                                value: activeController ? activeController.sparseFeatureLimit : 10000
+                                                editable: true
+                                                onValueModified: if (activeController) activeController.sparseFeatureLimit = value
+                                            }
                                         }
-                                        RowLayout {
-                                            Layout.fillWidth: true
-                                            CheckBox { text: "Trans"; checked: modelData.transparent; onToggled: activeController.setAnnotationLayerTransparent(modelData.index, checked) }
-                                            CheckBox { text: "Sparse"; checked: modelData.sparse; onToggled: activeController.setAnnotationLayerSparse(modelData.index, checked) }
-                                            CheckBox { text: "Large"; checked: modelData.enlarged; onToggled: activeController.setAnnotationLayerEnlarged(modelData.index, checked) }
-                                        }
-                                        RowLayout {
-                                            Button { text: "Dup"; onClicked: activeController.duplicateAnnotationLayer(modelData.index) }
-                                            Button { text: "Clear"; onClicked: activeController.clearAnnotationLayer(modelData.index) }
-                                            Button {
-                                                text: "Export"
-                                                onClicked: {
-                                                    pendingAnnotationLayerExport = modelData.index
-                                                    exportAnnotationDialog.open()
+                                        Repeater {
+                                            model: activeController ? activeController.annotationLayerSummaries() : []
+                                            Rectangle {
+                                                Layout.fillWidth: true
+                                                height: 100
+                                                radius: Theme.radiusMd
+                                                color: modelData.active ? Theme.accentSoft : Theme.surface
+                                                border.color: modelData.active ? Theme.accent : Theme.border
+                                                ColumnLayout {
+                                                    anchors.fill: parent
+                                                    anchors.margins: 8
+                                                    spacing: 6
+                                                    RowLayout {
+                                                        Layout.fillWidth: true
+                                                        AppCheckBox { checked: modelData.visible; onToggled: activeController.setAnnotationLayerVisible(modelData.index, checked) }
+                                                        Label { text: modelData.name + " (" + modelData.count + ")"; color: Theme.textPrimary; Layout.fillWidth: true; elide: Text.ElideRight }
+                                                        AppButton { text: "Active"; tonal: true; onClicked: activeController.setActiveAnnotationLayer(modelData.index) }
+                                                    }
+                                                    RowLayout {
+                                                        Layout.fillWidth: true
+                                                        AppCheckBox { text: "Trans"; checked: modelData.transparent; onToggled: activeController.setAnnotationLayerTransparent(modelData.index, checked) }
+                                                        AppCheckBox { text: "Sparse"; checked: modelData.sparse; onToggled: activeController.setAnnotationLayerSparse(modelData.index, checked) }
+                                                        AppCheckBox { text: "Large"; checked: modelData.enlarged; onToggled: activeController.setAnnotationLayerEnlarged(modelData.index, checked) }
+                                                    }
+                                                    RowLayout {
+                                                        spacing: 6
+                                                        AppButton { text: "Dup"; tonal: true; onClicked: activeController.duplicateAnnotationLayer(modelData.index) }
+                                                        AppButton { text: "Clear"; tonal: true; onClicked: activeController.clearAnnotationLayer(modelData.index) }
+                                                        AppButton {
+                                                            text: "Export"
+                                                            tonal: true
+                                                            onClicked: {
+                                                                pendingAnnotationLayerExport = modelData.index
+                                                                exportAnnotationDialog.open()
+                                                            }
+                                                        }
+                                                        AppButton { text: "Del"; tonal: true; onClicked: activeController.removeAnnotationLayer(modelData.index) }
+                                                    }
                                                 }
                                             }
-                                            Button { text: "Del"; onClicked: activeController.removeAnnotationLayer(modelData.index) }
                                         }
                                     }
                                 }
-                            }
-                        }
-                    }
 
-                    ScrollView {
-                        clip: true
-                        ColumnLayout {
-                            width: parent.width
-                            spacing: 8
-                            RowLayout {
-                                Layout.fillWidth: true
-                                Button { text: "Load"; onClicked: trackDialog.open() }
-                                Button { text: "URL"; onClicked: urlDialog.open() }
-                                Button { text: "Clear"; enabled: activeController && activeController.trackCount > 0; onClicked: activeController.clearTracks() }
-                            }
-                            Repeater {
-                                model: activeController ? activeController.trackSummaries() : []
-                                Rectangle {
-                                    Layout.fillWidth: true
-                                    height: 112
-                                    radius: 6
-                                    color: "#ffffff"
-                                    border.color: "#cbd5e1"
+                                ScrollView {
+                                    clip: true
                                     ColumnLayout {
-                                        anchors.fill: parent
-                                        anchors.margins: 6
-                                        TextField {
-                                            Layout.fillWidth: true
-                                            text: modelData.name
-                                            selectByMouse: true
-                                            onAccepted: activeController.setTrackName(modelData.index, text)
-                                            onEditingFinished: activeController.setTrackName(modelData.index, text)
-                                        }
+                                        width: parent.width
+                                        spacing: 8
                                         RowLayout {
                                             Layout.fillWidth: true
-                                            CheckBox {
-                                                text: "Log"
-                                                checked: modelData.logScale
-                                                onToggled: activeController.setTrackRange(modelData.index, modelData.min, modelData.max, checked)
-                                            }
-                                            ComboBox {
-                                                model: ["mean", "max"]
-                                                currentIndex: modelData.reduction === "max" ? 1 : 0
-                                                onActivated: activeController.setTrackReduction(modelData.index, currentText)
-                                            }
-                                            Button { text: "Up"; enabled: modelData.index > 0; onClicked: activeController.moveTrack(modelData.index, modelData.index - 1) }
-                                            Button { text: "Down"; onClicked: activeController.moveTrack(modelData.index, modelData.index + 1) }
-                                            Button { text: "Del"; onClicked: activeController.removeTrack(modelData.index) }
+                                            spacing: 8
+                                            AppButton { text: "Load"; tonal: true; onClicked: trackDialog.open() }
+                                            AppButton { text: "URL"; tonal: true; onClicked: urlDialog.open() }
+                                            AppButton { text: "Clear"; tonal: true; enabled: activeController && activeController.trackCount > 0; onClicked: activeController.clearTracks() }
                                         }
-                                        RowLayout {
-                                            Layout.fillWidth: true
-                                            Label { text: "Min" }
-                                            TextField { text: String(modelData.min); Layout.fillWidth: true; onAccepted: activeController.setTrackRange(modelData.index, Number(text), modelData.max, modelData.logScale) }
-                                            Label { text: "Max" }
-                                            TextField { text: String(modelData.max); Layout.fillWidth: true; onAccepted: activeController.setTrackRange(modelData.index, modelData.min, Number(text), modelData.logScale) }
+                                        Repeater {
+                                            model: activeController ? activeController.trackSummaries() : []
+                                            Rectangle {
+                                                Layout.fillWidth: true
+                                                height: 122
+                                                radius: Theme.radiusMd
+                                                color: Theme.surface
+                                                border.color: Theme.border
+                                                ColumnLayout {
+                                                    anchors.fill: parent
+                                                    anchors.margins: 8
+                                                    spacing: 6
+                                                    AppTextField {
+                                                        Layout.fillWidth: true
+                                                        text: modelData.name
+                                                        onAccepted: activeController.setTrackName(modelData.index, text)
+                                                        onEditingFinished: activeController.setTrackName(modelData.index, text)
+                                                    }
+                                                    RowLayout {
+                                                        Layout.fillWidth: true
+                                                        AppCheckBox {
+                                                            text: "Log"
+                                                            checked: modelData.logScale
+                                                            onToggled: activeController.setTrackRange(modelData.index, modelData.min, modelData.max, checked)
+                                                        }
+                                                        AppComboBox {
+                                                            Layout.preferredWidth: 90
+                                                            model: ["mean", "max"]
+                                                            currentIndex: modelData.reduction === "max" ? 1 : 0
+                                                            onActivated: activeController.setTrackReduction(modelData.index, currentText)
+                                                        }
+                                                        AppButton { text: "Up"; tonal: true; enabled: modelData.index > 0; onClicked: activeController.moveTrack(modelData.index, modelData.index - 1) }
+                                                        AppButton { text: "Down"; tonal: true; onClicked: activeController.moveTrack(modelData.index, modelData.index + 1) }
+                                                        AppButton { text: "Del"; tonal: true; onClicked: activeController.removeTrack(modelData.index) }
+                                                    }
+                                                    RowLayout {
+                                                        Layout.fillWidth: true
+                                                        spacing: 6
+                                                        Label { text: "Min"; color: Theme.textSecondary; font.pixelSize: Theme.textSm }
+                                                        AppTextField { text: String(modelData.min); Layout.fillWidth: true; onAccepted: activeController.setTrackRange(modelData.index, Number(text), modelData.max, modelData.logScale) }
+                                                        Label { text: "Max"; color: Theme.textSecondary; font.pixelSize: Theme.textSm }
+                                                        AppTextField { text: String(modelData.max); Layout.fillWidth: true; onAccepted: activeController.setTrackRange(modelData.index, modelData.min, Number(text), modelData.logScale) }
+                                                    }
+                                                }
+                                            }
                                         }
                                     }
                                 }
                             }
                         }
                     }
-                }
 
-                Label {
-                    text: activeController ? activeController.status : ""
-                    color: "#374151"
-                    wrapMode: Text.WordWrap
-                    Layout.fillWidth: true
+                    Label {
+                        Layout.fillWidth: true
+                        Layout.leftMargin: 16
+                        Layout.rightMargin: 16
+                        Layout.bottomMargin: 16
+                        text: activeController ? activeController.status : ""
+                        color: Theme.textSecondary
+                        font.pixelSize: Theme.textSm
+                        wrapMode: Text.WordWrap
+                    }
                 }
             }
         }

@@ -55,7 +55,18 @@ qt_add_qml_module(carton
     VERSION 1.0
     QML_FILES
         qml/Main.qml
+        qml/Theme.qml
+        qml/AppButton.qml
+        qml/AppToolButton.qml
+        qml/AppComboBox.qml
+        qml/AppTextField.qml
+        qml/AppCheckBox.qml
+        qml/AppTabButton.qml
+        qml/Card.qml
+        qml/DialogFrame.qml
 )
+
+set_source_files_properties(qml/Theme.qml PROPERTIES QT_QML_SINGLETON_TYPE true)
 
 target_include_directories(carton PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
 target_link_libraries(carton

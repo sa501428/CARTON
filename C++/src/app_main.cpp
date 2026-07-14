@@ -18,7 +18,7 @@ int main(int argc, char* argv[]) {
 #else
     QQuickWindow::setGraphicsApi(QSGRendererInterface::Unknown);
 #endif
-    QQuickStyle::setStyle(QStringLiteral("Fusion"));
+    QQuickStyle::setStyle(QStringLiteral("Basic"));
 
     qmlRegisterType<HicDataController>("Carton", 1, 0, "HicDataController");
     qmlRegisterType<HicHeatmapItem>("Carton", 1, 0, "HicHeatmapItem");
