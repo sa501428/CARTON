@@ -2,6 +2,8 @@ cmake_minimum_required(VERSION 3.21)
 
 project(CARTON VERSION 0.1.0 LANGUAGES C CXX)
 
+include(CTest)
+
 set(CMAKE_CXX_STANDARD 20)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 set(CMAKE_CXX_EXTENSIONS OFF)
@@ -39,15 +41,28 @@ target_link_libraries(straw PRIVATE carton_hic)
 set(APP_ICON "${CMAKE_CURRENT_SOURCE_DIR}/carton.icns")
 set_source_files_properties("${APP_ICON}" PROPERTIES MACOSX_PACKAGE_LOCATION Resources)
 
-qt_add_executable(carton
-    src/app_main.cpp
+add_library(carton_core STATIC
     src/HicDataController.cpp
     src/HicDataController.h
     src/GenomicTrackReader.cpp
     src/GenomicTrackReader.h
+    src/HicTileCache.h
+    src/WorkspaceListModel.cpp
+    src/WorkspaceListModel.h
+)
+target_include_directories(carton_core PUBLIC ${CMAKE_CURRENT_SOURCE_DIR} ${CMAKE_CURRENT_SOURCE_DIR}/src)
+target_link_libraries(carton_core
+    PUBLIC
+        carton_hic
+        Qt6::Core
+        Qt6::Gui
+        Qt6::Concurrent
+)
+
+qt_add_executable(carton
+    src/app_main.cpp
     src/HicHeatmapItem.cpp
     src/HicHeatmapItem.h
-    src/HicTileCache.h
     "${APP_ICON}"
 )
 
@@ -70,18 +85,32 @@ qt_add_qml_module(carton
         qml/AppTabButton.qml
         qml/Card.qml
         qml/DialogFrame.qml
+        qml/SvgIcon.qml
+        qml/NavigationPanel.qml
+        qml/ComparisonViewport.qml
+    RESOURCES
+        qml/icons/navigation.svg
+        qml/icons/compare.svg
+        qml/icons/inspector.svg
 )
 
 target_include_directories(carton PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
 target_link_libraries(carton
     PRIVATE
-        carton_hic
+        carton_core
         Qt6::Core
         Qt6::Gui
         Qt6::Quick
         Qt6::QuickControls2
         Qt6::Concurrent
 )
+
+if(BUILD_TESTING)
+    add_executable(carton_core_smoke tests/controller_smoke.cpp)
+    target_link_libraries(carton_core_smoke PRIVATE carton_core Qt6::Gui)
+    add_test(NAME carton_core_smoke COMMAND carton_core_smoke)
+    set_tests_properties(carton_core_smoke PROPERTIES ENVIRONMENT "QT_QPA_PLATFORM=offscreen")
+endif()
 
 set_target_properties(carton PROPERTIES
     MACOSX_BUNDLE TRUE

@@ -5,7 +5,7 @@ import Carton
 ComboBox {
     id: control
 
-    implicitHeight: 32
+    implicitHeight: Theme.controlHeight
     leftPadding: 12
     rightPadding: 30
     hoverEnabled: true
@@ -19,7 +19,7 @@ ComboBox {
                : control.pressed ? Theme.surfacePressed : (control.hovered ? Theme.surfaceHover : Theme.surface)
         border.width: 1
         border.color: control.activeFocus ? Theme.accent : Theme.border
-        Behavior on border.color { ColorAnimation { duration: 90 } }
+        Behavior on border.color { ColorAnimation { duration: Theme.reducedMotion ? 0 : Theme.animationFast } }
     }
 
     contentItem: Text {

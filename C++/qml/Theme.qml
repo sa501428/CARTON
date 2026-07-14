@@ -4,7 +4,10 @@ import QtQuick
 QtObject {
     id: theme
 
-    property bool dark: false
+    property bool dark: true
+    property real uiScale: 1.0
+    property real fontScale: 1.0
+    property bool reducedMotion: false
 
     // Base surfaces
     readonly property color appBg: dark ? "#0e1014" : "#f2f3f7"
@@ -14,6 +17,9 @@ QtObject {
     readonly property color surfaceHover: dark ? "#242833" : "#eef0f4"
     readonly property color surfacePressed: dark ? "#2a2f3c" : "#e5e8ee"
     readonly property color surfaceDisabled: dark ? "#181a20" : "#f1f2f5"
+    readonly property color panelBg: dark ? "#11161d" : "#f7f9fc"
+    readonly property color hoverSurface: dark ? "#202833" : "#edf2f7"
+    readonly property color selectedSurface: dark ? "#263447" : "#e5edff"
 
     // Chrome (header / footer / sidebar frame)
     readonly property color chromeBg: dark ? "#0a0b0f" : "#171a21"
@@ -43,6 +49,8 @@ QtObject {
     // Status accents used sparingly
     readonly property color warn: dark ? "#fbbf24" : "#c2790a"
     readonly property color danger: dark ? "#f87171" : "#dc2626"
+    readonly property color success: dark ? "#34d399" : "#15803d"
+    readonly property color missingData: dark ? "#4b5563" : "#94a3b8"
 
     // Shadow
     readonly property color shadow: dark ? "#70000000" : "#33222833"
@@ -71,13 +79,18 @@ QtObject {
     readonly property int space16: 16
     readonly property int space20: 20
     readonly property int space24: 24
+    readonly property int controlHeight: Math.round(32 * uiScale)
+    readonly property int sidebarWidth: 272
+    readonly property int inspectorWidth: 336
+    readonly property int trackHeaderHeight: 28
+    readonly property int animationFast: 100
 
     // Typography
     readonly property string fontFamily: "Helvetica Neue"
-    readonly property int textXs: 11
-    readonly property int textSm: 12
-    readonly property int textBase: 13
-    readonly property int textMd: 14
-    readonly property int textLg: 16
-    readonly property int textXl: 19
+    readonly property int textXs: Math.round(11 * uiScale * fontScale)
+    readonly property int textSm: Math.round(12 * uiScale * fontScale)
+    readonly property int textBase: Math.round(13 * uiScale * fontScale)
+    readonly property int textMd: Math.round(14 * uiScale * fontScale)
+    readonly property int textLg: Math.round(16 * uiScale * fontScale)
+    readonly property int textXl: Math.round(19 * uiScale * fontScale)
 }

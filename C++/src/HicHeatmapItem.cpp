@@ -12,6 +12,35 @@
 namespace {
 constexpr int kMaxRenderedRecords = 220000;
 
+class HeatmapRootNode final : public QSGNode {
+public:
+    HeatmapRootNode() {
+        background = new QSGGeometryNode;
+        auto* backgroundGeometry = new QSGGeometry(QSGGeometry::defaultAttributes_Point2D(), 4);
+        backgroundGeometry->setDrawingMode(QSGGeometry::DrawTriangleStrip);
+        background->setGeometry(backgroundGeometry);
+        background->setFlag(QSGNode::OwnsGeometry);
+        auto* backgroundMaterial = new QSGFlatColorMaterial;
+        backgroundMaterial->setColor(QColor("#ffffff"));
+        background->setMaterial(backgroundMaterial);
+        background->setFlag(QSGNode::OwnsMaterial);
+        appendChildNode(background);
+
+        heatmap = new QSGGeometryNode;
+        auto* heatmapGeometry = new QSGGeometry(QSGGeometry::defaultAttributes_ColoredPoint2D(), 0);
+        heatmapGeometry->setDrawingMode(QSGGeometry::DrawTriangles);
+        heatmap->setGeometry(heatmapGeometry);
+        heatmap->setFlag(QSGNode::OwnsGeometry);
+        heatmap->setMaterial(new QSGVertexColorMaterial);
+        heatmap->setFlag(QSGNode::OwnsMaterial);
+        appendChildNode(heatmap);
+    }
+
+    QSGGeometryNode* background = nullptr;
+    QSGGeometryNode* heatmap = nullptr;
+    int vertexCapacity = 0;
+};
+
 QColor interpolateColor(const QColor& a, const QColor& b, double t) {
     t = std::clamp(t, 0.0, 1.0);
     return QColor(
@@ -67,26 +96,20 @@ void HicHeatmapItem::setController(HicDataController* controller) {
 }
 
 QSGNode* HicHeatmapItem::updatePaintNode(QSGNode* oldNode, UpdatePaintNodeData*) {
-    delete oldNode;
+    auto* root = static_cast<HeatmapRootNode*>(oldNode);
+    if (!root) root = new HeatmapRootNode;
 
-    auto* root = new QSGNode;
-    auto* background = new QSGGeometryNode;
-    auto* backgroundGeometry = new QSGGeometry(QSGGeometry::defaultAttributes_Point2D(), 4);
-    backgroundGeometry->setDrawingMode(QSGGeometry::DrawTriangleStrip);
+    auto* backgroundGeometry = root->background->geometry();
     auto* bgVertices = backgroundGeometry->vertexDataAsPoint2D();
     bgVertices[0].set(0, 0);
     bgVertices[1].set(static_cast<float>(width()), 0);
     bgVertices[2].set(0, static_cast<float>(height()));
     bgVertices[3].set(static_cast<float>(width()), static_cast<float>(height()));
-    background->setGeometry(backgroundGeometry);
-    background->setFlag(QSGNode::OwnsGeometry);
-    auto* backgroundMaterial = new QSGFlatColorMaterial;
-    backgroundMaterial->setColor(QColor("#ffffff"));
-    background->setMaterial(backgroundMaterial);
-    background->setFlag(QSGNode::OwnsMaterial);
-    root->appendChildNode(background);
+    root->background->markDirty(QSGNode::DirtyGeometry);
 
     if (!m_controller || width() <= 0 || height() <= 0) {
+        root->heatmap->geometry()->setVertexCount(0);
+        root->heatmap->markDirty(QSGNode::DirtyGeometry);
         return root;
     }
 
@@ -96,6 +119,8 @@ QSGNode* HicHeatmapItem::updatePaintNode(QSGNode* oldNode, UpdatePaintNodeData*)
     const QString matrixType = m_controller->matrixType();
     const bool isVsMode = (matrixType == QStringLiteral("vs") || matrixType.endsWith(QStringLiteral("vs"))) && !controlRecords.empty();
     if (records.empty() && controlRecords.empty()) {
+        root->heatmap->geometry()->setVertexCount(0);
+        root->heatmap->markDirty(QSGNode::DirtyGeometry);
         return root;
     }
 
@@ -112,9 +137,14 @@ QSGNode* HicHeatmapItem::updatePaintNode(QSGNode* oldNode, UpdatePaintNodeData*)
 
     const int renderedRecords = static_cast<int>(records.size() + controlRecords.size());
     const int verticesPerRecord = mirrorIntra ? 12 : 6;
-    auto* node = new QSGGeometryNode;
-    auto* geometry = new QSGGeometry(QSGGeometry::defaultAttributes_ColoredPoint2D(), renderedRecords * verticesPerRecord);
-    geometry->setDrawingMode(QSGGeometry::DrawTriangles);
+    const int requiredVertices = renderedRecords * verticesPerRecord;
+    auto* geometry = root->heatmap->geometry();
+    if (requiredVertices > root->vertexCapacity || requiredVertices < root->vertexCapacity / 3) {
+        geometry->allocate(requiredVertices);
+        root->vertexCapacity = requiredVertices;
+    } else {
+        geometry->setVertexCount(requiredVertices);
+    }
     auto* vertices = geometry->vertexDataAsColoredPoint2D();
 
     int vi = 0;
@@ -168,13 +198,7 @@ QSGNode* HicHeatmapItem::updatePaintNode(QSGNode* oldNode, UpdatePaintNodeData*)
         }
     }
     geometry->setVertexCount(vi);
-
-    node->setGeometry(geometry);
-    node->setFlag(QSGNode::OwnsGeometry);
-    auto* material = new QSGVertexColorMaterial;
-    node->setMaterial(material);
-    node->setFlag(QSGNode::OwnsMaterial);
-    root->appendChildNode(node);
+    root->heatmap->markDirty(QSGNode::DirtyGeometry);
 
     return root;
 }
@@ -211,8 +235,9 @@ QColor HicHeatmapItem::colorForValue(float value) const {
     const double minValue = m_controller ? m_controller->colorMin() : 0.0;
     const QString matrixType = m_controller ? m_controller->matrixType() : QStringLiteral("observed");
     if (!std::isfinite(value)) {
-        return QColor("#808080");
+        return m_controller ? m_controller->missingValueColor() : QColor("#4b5563");
     }
+    if (value == 0.0f && m_controller && m_controller->zeroTransparent()) return QColor(0, 0, 0, 0);
 
     const bool pearson = matrixType.contains(QStringLiteral("pearson"));
     const bool logRatio = matrixType == QStringLiteral("logratio") || matrixType == QStringLiteral("diff") ||
@@ -223,7 +248,7 @@ QColor HicHeatmapItem::colorForValue(float value) const {
                            matrixType == QStringLiteral("ratio1");
     if (pearson || logRatio || ratioLike) {
         if (!pearson && !logRatio && value <= 0.0f) {
-            return QColor("#808080");
+            return m_controller ? m_controller->missingValueColor() : QColor("#4b5563");
         }
         double scaled = 0.0;
         double low = minValue;

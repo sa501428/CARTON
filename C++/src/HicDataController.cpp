@@ -1,5 +1,6 @@
 #include "HicDataController.h"
 #include "GenomicTrackReader.h"
+#include "WorkspaceListModel.h"
 
 #include <QtConcurrent>
 #include <QClipboard>
@@ -8,6 +9,7 @@
 #include <QFile>
 #include <QFileInfo>
 #include <QGuiApplication>
+#include <QImage>
 #include <QJsonArray>
 #include <QJsonDocument>
 #include <QJsonObject>
@@ -51,10 +53,26 @@ quint64 recordKey(qint64 x, qint64 y) {
 HicDataController::HicDataController(QObject* parent)
     : QObject(parent),
       m_cache(std::make_unique<HicTileCache>()) {
+    m_datasetsModel = new WorkspaceListModel(this);
+    m_bookmarksModel = new WorkspaceListModel(this);
+    m_tracksModel = new WorkspaceListModel(this);
+    m_annotationsModel = new WorkspaceListModel(this);
+    m_searchResultsModel = new WorkspaceListModel(this);
+    QSettings settings;
+    m_cacheLimitMB = std::clamp(settings.value(settingsKey() + QStringLiteral("/cacheLimitMB"), 128).toInt(), 16, 4096);
+    const std::size_t maxRecords = static_cast<std::size_t>(m_cacheLimitMB) * 1024ULL * 1024ULL / sizeof(contactRecord);
+    m_cache->setLimits(maxRecords, std::max<std::size_t>(24, static_cast<std::size_t>(m_cacheLimitMB / 4)));
     AnnotationLayer baseLayer;
     baseLayer.name = QStringLiteral("Selection");
     baseLayer.color = QColor("#111111");
     m_annotationLayers.push_back(baseLayer);
+    connect(this, &HicDataController::tracksChanged, this, &HicDataController::refreshTracksModel);
+    connect(this, &HicDataController::annotationsChanged, this, &HicDataController::refreshAnnotationsModel);
+    connect(this, &HicDataController::viewHistoryChanged, this, &HicDataController::refreshBookmarksModel);
+    refreshDatasetsModel();
+    refreshBookmarksModel();
+    refreshTracksModel();
+    refreshAnnotationsModel();
 
     connect(&m_metadataWatcher, &QFutureWatcher<HicFileMetadata>::finished, this, [this]() {
         setBusy(false);
@@ -69,6 +87,12 @@ HicDataController::HicDataController(QObject* parent)
     connect(&m_tileWatcher, &QFutureWatcher<TileResult>::finished, this, [this]() {
         TileResult result = m_tileWatcher.result();
         if (result.requestId != m_requestSerial) {
+            if (m_reloadPending) {
+                m_reloadPending = false;
+                scheduleRequest();
+            } else {
+                setBusy(false);
+            }
             return;
         }
         setBusy(false);
@@ -106,12 +130,14 @@ HicDataController::HicDataController(QObject* parent)
             QMutexLocker locker(&m_mutex);
             m_records = std::move(displayRecords);
             m_controlRecords = std::move(displayControlRecords);
+            rebuildHoverLookupLocked();
             m_loadedKey = result.tile.key;
             m_hasLoadedKey = true;
         }
         updateAutoColorScale(m_records, m_controlRecords);
         if (!result.fromCache) {
             m_cache->put(std::move(result.tile));
+            emit cacheStatsChanged();
         }
 
         setStatus(QStringLiteral("%1 records in view%2.")
@@ -160,9 +186,12 @@ int HicDataController::annotationCount() const {
     }
     return count;
 }
+int HicDataController::cytobandCount() const { return m_cytobands.size(); }
 bool HicDataController::canUndoView() const { return !m_undoStack.isEmpty(); }
 bool HicDataController::canRedoView() const { return !m_redoStack.isEmpty(); }
 bool HicDataController::resolutionLocked() const { return m_resolutionLocked; }
+bool HicDataController::xLocusLocked() const { return m_xLocusLocked; }
+bool HicDataController::yLocusLocked() const { return m_yLocusLocked; }
 bool HicDataController::wholeGenomeView() const { return isAllChromosome(m_chrX) || isAllChromosome(m_chrY); }
 bool HicDataController::axisEndpointsOnly() const { return m_axisEndpointsOnly; }
 bool HicDataController::showGridlines() const { return m_showGridlines; }
@@ -171,6 +200,37 @@ bool HicDataController::darkMode() const { return m_darkMode; }
 bool HicDataController::showTilesDebug() const { return m_showTilesDebug; }
 int HicDataController::sparseFeatureLimit() const { return m_sparseFeatureLimit; }
 QString HicDataController::selectedAnnotationId() const { return m_selectedAnnotationId; }
+int HicDataController::cacheLimitMB() const { return m_cacheLimitMB; }
+int HicDataController::cacheRecordCount() const { return static_cast<int>(m_cache->recordCount()); }
+int HicDataController::cacheTileCount() const { return static_cast<int>(m_cache->tileCount()); }
+double HicDataController::cacheMemoryMB() const {
+    return static_cast<double>(m_cache->recordCount() * sizeof(contactRecord)) / (1024.0 * 1024.0);
+}
+QString HicDataController::renderingBackend() const {
+#ifdef Q_OS_MACOS
+    return QStringLiteral("Metal · Qt Scene Graph");
+#elif defined(Q_OS_WIN)
+    return QStringLiteral("Direct3D · Qt Scene Graph");
+#else
+    return QStringLiteral("Vulkan/OpenGL · Qt Scene Graph");
+#endif
+}
+QString HicDataController::matrixDimensions() const {
+    if (m_resolution <= 0) return QStringLiteral("—");
+    const qint64 columns = std::max<qint64>(1, (m_x1 - m_x0 + m_resolution - 1) / m_resolution);
+    const qint64 rows = std::max<qint64>(1, (m_y1 - m_y0 + m_resolution - 1) / m_resolution);
+    return QStringLiteral("%1 × %2 bins").arg(columns).arg(rows);
+}
+bool HicDataController::symmetricColorScale() const { return m_symmetricColorScale; }
+double HicDataController::colorPercentile() const { return m_colorPercentile; }
+QColor HicDataController::missingValueColor() const { return m_missingValueColor; }
+bool HicDataController::zeroTransparent() const { return m_zeroTransparent; }
+QAbstractItemModel* HicDataController::datasetsModel() const { return m_datasetsModel; }
+QAbstractItemModel* HicDataController::bookmarksModel() const { return m_bookmarksModel; }
+QAbstractItemModel* HicDataController::tracksModel() const { return m_tracksModel; }
+QAbstractItemModel* HicDataController::annotationsModel() const { return m_annotationsModel; }
+QAbstractItemModel* HicDataController::searchResultsModel() const { return m_searchResultsModel; }
+QString HicDataController::workspaceSearch() const { return m_workspaceSearch; }
 
 int HicDataController::recordCount() const {
     QMutexLocker locker(&m_mutex);
@@ -190,11 +250,14 @@ void HicDataController::openFile(const QUrl& url) {
 
     m_filePath = path;
     m_cache->clear();
+    emit cacheStatsChanged();
     clearLoadedRegion();
     {
         QMutexLocker locker(&m_mutex);
         m_records.clear();
         m_controlRecords.clear();
+        m_recordHoverLookup.clear();
+        m_controlHoverLookup.clear();
         m_records.shrink_to_fit();
         m_controlRecords.shrink_to_fit();
     }
@@ -219,6 +282,7 @@ void HicDataController::openControlFile(const QUrl& url) {
     {
         QMutexLocker locker(&m_mutex);
         m_controlRecords.clear();
+        m_controlHoverLookup.clear();
         m_controlRecords.shrink_to_fit();
     }
     emit controlFilePathChanged();
@@ -227,6 +291,7 @@ void HicDataController::openControlFile(const QUrl& url) {
     setStatus(QStringLiteral("Loaded control map %1.").arg(path));
     if (matrixNeedsControl(m_matrixType)) {
         m_cache->clear();
+        emit cacheStatsChanged();
         scheduleRequest();
     }
 }
@@ -343,6 +408,71 @@ void HicDataController::loadAnnotationsFromPath(const QString& path) {
     emit annotationsChanged();
 }
 
+void HicDataController::loadCytobands(const QUrl& url) {
+    const QString path = localPathFromUrl(url);
+    const QString text = readTextResource(path);
+    if (text.isEmpty()) {
+        setStatus(QStringLiteral("Could not open cytobands: %1").arg(path));
+        return;
+    }
+
+    QVector<Cytoband> parsed;
+    QTextStream in(const_cast<QString*>(&text), QIODevice::ReadOnly);
+    while (!in.atEnd()) {
+        const QString line = in.readLine().trimmed();
+        if (line.isEmpty() || line.startsWith('#') || line.startsWith(QStringLiteral("track"))) continue;
+        const QStringList parts = line.split(QRegularExpression("\\s+"), Qt::SkipEmptyParts);
+        if (parts.size() < 3) continue;
+        Cytoband band;
+        band.chr = parts[0];
+        band.start = parts[1].toLongLong();
+        band.end = parts[2].toLongLong();
+        band.name = parts.size() > 3 ? parts[3] : QString();
+        band.stain = parts.size() > 4 ? parts[4].toLower() : QStringLiteral("gneg");
+        if (band.stain == QStringLiteral("acen")) band.color = QColor("#dc5a67");
+        else if (band.stain == QStringLiteral("stalk")) band.color = QColor("#6baed6");
+        else if (band.stain == QStringLiteral("gvar")) band.color = QColor("#94a3b8");
+        else if (band.stain.startsWith(QStringLiteral("gpos"))) {
+            bool ok = false;
+            const int darkness = band.stain.mid(4).toInt(&ok);
+            const int shade = ok ? std::clamp(238 - darkness * 2, 38, 220) : 105;
+            band.color = QColor(shade, shade, shade);
+        } else band.color = QColor("#e5e7eb");
+        if (band.end > band.start) parsed.push_back(band);
+    }
+    if (parsed.isEmpty()) {
+        setStatus(QStringLiteral("No valid cytobands found in %1.").arg(path));
+        return;
+    }
+    m_cytobands = std::move(parsed);
+    setStatus(QStringLiteral("Loaded %1 cytobands.").arg(m_cytobands.size()));
+    emit cytobandsChanged();
+}
+
+void HicDataController::clearCytobands() {
+    if (m_cytobands.isEmpty()) return;
+    m_cytobands.clear();
+    emit cytobandsChanged();
+}
+
+QVariantList HicDataController::visibleCytobands(bool xAxis) const {
+    QVariantList values;
+    const QString chr = xAxis ? m_chrX : m_chrY;
+    const qint64 start = xAxis ? m_x0 : m_y0;
+    const qint64 end = xAxis ? m_x1 : m_y1;
+    for (const Cytoband& band : m_cytobands) {
+        if (band.chr != chr || band.end <= start || band.start >= end) continue;
+        QVariantMap item;
+        item["start"] = std::max(start, band.start);
+        item["end"] = std::min(end, band.end);
+        item["name"] = band.name;
+        item["stain"] = band.stain;
+        item["color"] = band.color;
+        values.push_back(item);
+    }
+    return values;
+}
+
 void HicDataController::clearTracks() {
     m_tracks.clear();
     emit tracksChanged();
@@ -453,6 +583,10 @@ QVariantList HicDataController::trackSummaries() const {
         item["coverage"] = track.coverage;
         item["eigenvector"] = track.eigenvector;
         item["featureCount"] = track.features.size();
+        item["visible"] = track.visible;
+        item["collapsed"] = track.collapsed;
+        item["autoscale"] = track.autoscale;
+        item["height"] = track.height;
         values.push_back(item);
     }
     return values;
@@ -485,11 +619,28 @@ QVariantList HicDataController::visibleTrackSegments(bool xAxis) const {
     const qint64 end = xAxis ? m_x1 : m_y1;
     for (int trackIndex = 0; trackIndex < static_cast<int>(m_tracks.size()); ++trackIndex) {
         const TrackLayer& track = m_tracks[static_cast<std::size_t>(trackIndex)];
+        if (!track.visible || track.collapsed) continue;
         const auto signedLog = [](double value) { return std::copysign(std::log1p(std::abs(value)), value); };
-        const double displayMin = track.logScale ? signedLog(track.minValue) : track.minValue;
-        const double displayMax = track.logScale ? signedLog(track.maxValue) : track.maxValue;
+        QVector<const TrackFeature*> visible;
         for (const TrackFeature& segment : track.features) {
-            if (segment.chr != chr || segment.end <= start || segment.start >= end) continue;
+            if (segment.chr == chr && segment.end > start && segment.start < end)
+                visible.push_back(&segment);
+        }
+        double rangeMin = track.minValue;
+        double rangeMax = track.maxValue;
+        if (track.autoscale && !visible.isEmpty()) {
+            rangeMin = 0.0;
+            rangeMax = 0.0;
+            for (const TrackFeature* segment : visible) {
+                rangeMin = std::min(rangeMin, segment->value);
+                rangeMax = std::max(rangeMax, segment->value);
+            }
+            if (rangeMax <= rangeMin) rangeMax = rangeMin + 1.0;
+        }
+        const double displayMin = track.logScale ? signedLog(rangeMin) : rangeMin;
+        const double displayMax = track.logScale ? signedLog(rangeMax) : rangeMax;
+        for (const TrackFeature* segmentPointer : visible) {
+            const TrackFeature& segment = *segmentPointer;
             QVariantMap item;
             item["trackIndex"] = trackIndex;
             item["trackName"] = track.name;
@@ -566,21 +717,18 @@ QString HicDataController::positionText(double xFraction, double yFraction) cons
     bool hasControlCount = false;
     float primaryCount = 0.0f;
     float controlCount = 0.0f;
-    auto findCount = [&](const std::vector<contactRecord>& records, float& value) {
-        for (const contactRecord& record : records) {
-            const bool direct = record.binX == binX && record.binY == binY;
-            const bool mirrored = m_chrX == m_chrY && record.binX == binY && record.binY == binX;
-            if (direct || mirrored) {
-                value = record.counts;
-                return true;
-            }
-        }
-        return false;
-    };
     {
         QMutexLocker locker(&m_mutex);
-        hasPrimaryCount = findCount(m_records, primaryCount);
-        hasControlCount = findCount(m_controlRecords, controlCount);
+        auto findCount = [&](const QHash<quint64, float>& lookup, float& value) {
+            auto it = lookup.constFind(recordLookupKey(static_cast<int32_t>(binX), static_cast<int32_t>(binY)));
+            if (it == lookup.cend() && m_chrX == m_chrY)
+                it = lookup.constFind(recordLookupKey(static_cast<int32_t>(binY), static_cast<int32_t>(binX)));
+            if (it == lookup.cend()) return false;
+            value = it.value();
+            return true;
+        };
+        hasPrimaryCount = findCount(m_recordHoverLookup, primaryCount);
+        hasControlCount = findCount(m_controlHoverLookup, controlCount);
     }
 
     QString text = QStringLiteral("%1:%2 | %3:%4 | bin %5 bp")
@@ -595,6 +743,7 @@ QString HicDataController::positionText(double xFraction, double yFraction) cons
     }
     QStringList trackHits;
     for (const TrackLayer& track : m_tracks) {
+        if (!track.visible || track.collapsed) continue;
         QStringList values;
         for (const TrackFeature& feature : track.features) {
             if ((feature.chr == m_chrX && x >= feature.start && x < feature.end) ||
@@ -766,17 +915,15 @@ void HicDataController::goTo(const QString& xLocation, const QString& yLocation)
     }
 
     pushViewHistory();
-    m_chrX = nextChrX;
-    m_chrY = nextChrY;
+    if (!m_xLocusLocked) m_chrX = nextChrX;
+    if (!m_yLocusLocked) m_chrY = nextChrY;
     if (requestedResolution > 0 && !m_resolutionLocked) {
         m_resolution = requestedResolution;
     } else if (!m_resolutionLocked && m_resolution <= 0) {
         m_resolution = std::max<qint64>(1, std::max(nextX1 - nextX0, nextY1 - nextY0) / 1000);
     }
-    m_x0 = nextX0;
-    m_x1 = nextX1;
-    m_y0 = nextY0;
-    m_y1 = nextY1;
+    if (!m_xLocusLocked) { m_x0 = nextX0; m_x1 = nextX1; }
+    if (!m_yLocusLocked) { m_y0 = nextY0; m_y1 = nextY1; }
     clampRegion();
     emit viewChanged();
     scheduleRequest();
@@ -902,6 +1049,140 @@ void HicDataController::exportFigurePdf(const QUrl& url, int width, int height) 
     painter.end();
 }
 
+bool HicDataController::exportFigurePng(const QUrl& url, int width, int height) const {
+    width = std::clamp(width, 300, 12000);
+    height = std::clamp(height, 300, 12000);
+    QImage image(width, height, QImage::Format_ARGB32_Premultiplied);
+    image.fill(QColor("#0b0f14"));
+    QPainter painter(&image);
+    painter.setRenderHint(QPainter::Antialiasing, false);
+    painter.setPen(QColor("#e6edf3"));
+    QFont titleFont = painter.font();
+    titleFont.setBold(true);
+    titleFont.setPointSize(13);
+    painter.setFont(titleFont);
+    painter.drawText(28, 30, QStringLiteral("CARTON · %1").arg(m_matrixType.toUpper()));
+    QFont detailFont = painter.font();
+    detailFont.setBold(false);
+    detailFont.setPointSize(9);
+    painter.setFont(detailFont);
+    painter.setPen(QColor("#9aa7b5"));
+    painter.drawText(28, 50, QStringLiteral("%1:%2–%3  ×  %4:%5–%6  ·  %7 bp  ·  %8")
+                         .arg(m_chrX).arg(m_x0).arg(m_x1).arg(m_chrY).arg(m_y0).arg(m_y1)
+                         .arg(m_resolution).arg(m_norm));
+
+    const int legendHeight = 34;
+    const QRect plot(64, 72, std::max(1, width - 96), std::max(1, height - 112 - legendHeight));
+    painter.fillRect(plot, QColor("#ffffff"));
+    const double spanX = std::max<qint64>(1, m_x1 - m_x0);
+    const double spanY = std::max<qint64>(1, m_y1 - m_y0);
+    const bool divergent = matrixIsDivergent(m_matrixType);
+    auto valueColor = [&](double value) {
+        if (!std::isfinite(value)) return m_missingValueColor;
+        if (value == 0.0 && m_zeroTransparent) return QColor(255, 255, 255, 0);
+        if (divergent || m_symmetricColorScale) {
+            const double range = std::max(0.000001, std::max(std::abs(m_colorMin), std::abs(m_colorMax)));
+            const double t = std::clamp(value / range, -1.0, 1.0);
+            return t < 0.0
+                ? QColor::fromRgbF(1.0 + t, 1.0 + t, 1.0)
+                : QColor::fromRgbF(1.0, 1.0 - t, 1.0 - t);
+        }
+        const double t = std::clamp((value - m_colorMin) / std::max(0.000001, m_colorMax - m_colorMin), 0.0, 1.0);
+        if (m_colorMap == QStringLiteral("Grayscale")) return QColor::fromRgbF(1.0 - t * 0.93, 1.0 - t * 0.93, 1.0 - t * 0.93);
+        return QColor::fromRgbF(1.0, 1.0 - t * 0.91, 1.0 - t * 0.89);
+    };
+    const std::vector<contactRecord> snapshot = recordsSnapshot();
+    const std::vector<contactRecord> controlSnapshot = controlRecordsSnapshot();
+    const bool splitVs = m_chrX == m_chrY && !controlSnapshot.empty() &&
+                         (m_matrixType == QStringLiteral("vs") || m_matrixType.endsWith(QStringLiteral("vs")));
+    const int stride = std::max(1, static_cast<int>((snapshot.size() + controlSnapshot.size()) / 400000));
+    const int cellW = std::max(1, static_cast<int>(std::ceil(m_resolution / spanX * plot.width())));
+    const int cellH = std::max(1, static_cast<int>(std::ceil(m_resolution / spanY * plot.height())));
+    const bool mirror = m_chrX == m_chrY && !splitVs;
+    painter.setPen(Qt::NoPen);
+    auto drawRecords = [&](const std::vector<contactRecord>& records, bool control) {
+      for (std::size_t i = 0; i < records.size(); i += static_cast<std::size_t>(stride)) {
+        const contactRecord& rec = records[i];
+        if (rec.binX < m_x0 || rec.binX >= m_x1 || rec.binY < m_y0 || rec.binY >= m_y1) continue;
+        painter.setBrush(valueColor(rec.counts));
+        const int drawBinX = splitVs ? (control ? std::min(rec.binX, rec.binY) : std::max(rec.binX, rec.binY)) : rec.binX;
+        const int drawBinY = splitVs ? (control ? std::max(rec.binX, rec.binY) : std::min(rec.binX, rec.binY)) : rec.binY;
+        const int x = plot.left() + static_cast<int>((drawBinX - m_x0) / spanX * plot.width());
+        const int y = plot.top() + static_cast<int>((drawBinY - m_y0) / spanY * plot.height());
+        painter.drawRect(x, y, cellW, cellH);
+        if (mirror && rec.binX != rec.binY) {
+            const int mx = plot.left() + static_cast<int>((rec.binY - m_x0) / spanX * plot.width());
+            const int my = plot.top() + static_cast<int>((rec.binX - m_y0) / spanY * plot.height());
+            painter.drawRect(mx, my, cellW, cellH);
+        }
+      }
+    };
+    drawRecords(snapshot, false);
+    drawRecords(controlSnapshot, true);
+    painter.setBrush(Qt::NoBrush);
+    painter.setPen(QColor("#52606d"));
+    painter.drawRect(plot.adjusted(0, 0, -1, -1));
+    const QRect legend(plot.left(), plot.bottom() + 18, std::min(280, plot.width()), 10);
+    for (int x = 0; x < legend.width(); ++x) {
+        const double t = x / static_cast<double>(std::max(1, legend.width() - 1));
+        const double value = m_colorMin + t * (m_colorMax - m_colorMin);
+        painter.setPen(valueColor(value));
+        painter.drawLine(legend.left() + x, legend.top(), legend.left() + x, legend.bottom());
+    }
+    painter.setPen(QColor("#c5d0dc"));
+    painter.drawText(legend.left(), legend.bottom() + 14, QString::number(m_colorMin, 'g', 4));
+    painter.drawText(legend.right() - 48, legend.bottom() + 14, QString::number(m_colorMax, 'g', 4));
+    painter.end();
+    return image.save(localPathFromUrl(url), "PNG");
+}
+
+bool HicDataController::exportVisibleMatrix(const QUrl& url) const {
+    QSaveFile file(localPathFromUrl(url));
+    if (!file.open(QIODevice::WriteOnly | QIODevice::Text)) return false;
+    QTextStream out(&file);
+    out << "chrX\tstartX\tendX\tchrY\tstartY\tendY\tvalue\tmatrixType\tnormalization\tresolution\n";
+    const std::vector<contactRecord> snapshot = recordsSnapshot();
+    for (const contactRecord& rec : snapshot) {
+        if (rec.binX < m_x0 || rec.binX >= m_x1 || rec.binY < m_y0 || rec.binY >= m_y1) continue;
+        out << m_chrX << '\t' << rec.binX << '\t' << rec.binX + m_resolution << '\t'
+            << m_chrY << '\t' << rec.binY << '\t' << rec.binY + m_resolution << '\t'
+            << QString::number(rec.counts, 'g', 9) << '\t' << m_matrixType << '\t' << m_norm << '\t' << m_resolution << '\n';
+    }
+    return file.commit();
+}
+
+QVariantList HicDataController::colorHistogram(int bins) const {
+    bins = std::clamp(bins, 8, 128);
+    QVector<quint64> counts(bins, 0);
+    const double low = m_colorMin;
+    const double span = std::max(0.000001, m_colorMax - m_colorMin);
+    quint64 maximum = 1;
+    const std::vector<contactRecord> snapshot = recordsSnapshot();
+    for (const contactRecord& rec : snapshot) {
+        if (!std::isfinite(rec.counts) || rec.binX < m_x0 || rec.binX >= m_x1 || rec.binY < m_y0 || rec.binY >= m_y1) continue;
+        const int index = std::clamp(static_cast<int>((rec.counts - low) / span * bins), 0, bins - 1);
+        maximum = std::max(maximum, ++counts[index]);
+    }
+    QVariantList result;
+    for (int i = 0; i < bins; ++i) {
+        QVariantMap item;
+        item["value"] = low + (i + 0.5) / bins * span;
+        item["count"] = static_cast<qulonglong>(counts[i]);
+        item["fraction"] = counts[i] / static_cast<double>(maximum);
+        result.push_back(item);
+    }
+    return result;
+}
+
+void HicDataController::removeSavedLocation(int index) {
+    QVariantList locations = savedLocations();
+    if (index < 0 || index >= locations.size()) return;
+    locations.removeAt(index);
+    QSettings settings;
+    settings.setValue(settingsKey() + QStringLiteral("/savedLocations"), locations);
+    emit viewHistoryChanged();
+}
+
 void HicDataController::renameGenome(const QString& genomeId) {
     if (genomeId.trimmed().isEmpty()) {
         return;
@@ -979,10 +1260,8 @@ void HicDataController::zoomToFractions(double xStartFraction, double yStartFrac
     const qint64 nextX1 = m_x0 + static_cast<qint64>(width * xb);
     const qint64 nextY0 = m_y0 + static_cast<qint64>(height * ya);
     const qint64 nextY1 = m_y0 + static_cast<qint64>(height * yb);
-    m_x0 = nextX0;
-    m_x1 = nextX1;
-    m_y0 = nextY0;
-    m_y1 = nextY1;
+    if (!m_xLocusLocked) { m_x0 = nextX0; m_x1 = nextX1; }
+    if (!m_yLocusLocked) { m_y0 = nextY0; m_y1 = nextY1; }
     clampRegion();
     emit viewChanged();
     scheduleRequest();
@@ -1009,10 +1288,8 @@ void HicDataController::zoom(double factor, double centerX, double centerY) {
     const qint64 centerGenomeX = m_x0 + static_cast<qint64>(width * centerX);
     const qint64 centerGenomeY = m_y0 + static_cast<qint64>(height * centerY);
 
-    m_x0 = centerGenomeX - nextWidth / 2;
-    m_x1 = m_x0 + nextWidth;
-    m_y0 = centerGenomeY - nextHeight / 2;
-    m_y1 = m_y0 + nextHeight;
+    if (!m_xLocusLocked) { m_x0 = centerGenomeX - nextWidth / 2; m_x1 = m_x0 + nextWidth; }
+    if (!m_yLocusLocked) { m_y0 = centerGenomeY - nextHeight / 2; m_y1 = m_y0 + nextHeight; }
     adaptResolutionToSpan(std::max(nextWidth, nextHeight));
     clampRegion();
     emit viewChanged();
@@ -1027,10 +1304,8 @@ void HicDataController::pan(double dxFraction, double dyFraction) {
     const qint64 height = m_y1 - m_y0;
     const qint64 dx = static_cast<qint64>(width * dxFraction);
     const qint64 dy = static_cast<qint64>(height * dyFraction);
-    m_x0 += dx;
-    m_x1 += dx;
-    m_y0 += dy;
-    m_y1 += dy;
+    if (!m_xLocusLocked) { m_x0 += dx; m_x1 += dx; }
+    if (!m_yLocusLocked) { m_y0 += dy; m_y1 += dy; }
     clampRegion();
     emit viewChanged();
     scheduleRequest();
@@ -1046,6 +1321,36 @@ void HicDataController::resetView() {
     m_x1 = chromosomeLength(m_chrX);
     m_y1 = chromosomeLength(m_chrY);
     adaptResolutionToSpan(std::max(m_x1 - m_x0, m_y1 - m_y0));
+    clampRegion();
+    emit viewChanged();
+    scheduleRequest();
+}
+
+void HicDataController::syncViewFrom(HicDataController* other, bool includeColor) {
+    if (!other || other == this) return;
+    const bool sameView = m_chrX == other->m_chrX && m_chrY == other->m_chrY &&
+                          m_x0 == other->m_x0 && m_x1 == other->m_x1 &&
+                          m_y0 == other->m_y0 && m_y1 == other->m_y1 &&
+                          m_resolution == other->m_resolution;
+    const bool sameColor = !includeColor || (m_colorMin == other->m_colorMin && m_colorMax == other->m_colorMax &&
+                                             m_colorMap == other->m_colorMap);
+    if (sameView && sameColor) return;
+    m_chrX = other->m_chrX;
+    m_chrY = other->m_chrY;
+    m_x0 = other->m_x0;
+    m_x1 = other->m_x1;
+    m_y0 = other->m_y0;
+    m_y1 = other->m_y1;
+    if (!m_resolutionLocked) m_resolution = other->m_resolution;
+    if (includeColor) {
+        m_colorMin = other->m_colorMin;
+        m_colorMax = other->m_colorMax;
+        m_colorMap = other->m_colorMap;
+        m_colorMaxAuto = other->m_colorMaxAuto;
+        emit colorMaxChanged();
+        emit colorMapChanged();
+    }
+    clearLoadedRegion();
     clampRegion();
     emit viewChanged();
     scheduleRequest();
@@ -1170,6 +1475,18 @@ void HicDataController::setResolutionLocked(bool value) {
     emit viewChanged();
 }
 
+void HicDataController::setXLocusLocked(bool value) {
+    if (m_xLocusLocked == value) return;
+    m_xLocusLocked = value;
+    emit viewChanged();
+}
+
+void HicDataController::setYLocusLocked(bool value) {
+    if (m_yLocusLocked == value) return;
+    m_yLocusLocked = value;
+    emit viewChanged();
+}
+
 void HicDataController::setAxisEndpointsOnly(bool value) {
     if (m_axisEndpointsOnly == value) return;
     m_axisEndpointsOnly = value;
@@ -1207,6 +1524,56 @@ void HicDataController::setSparseFeatureLimit(int value) {
     emit annotationsChanged();
 }
 
+void HicDataController::setCacheLimitMB(int value) {
+    value = std::clamp(value, 16, 4096);
+    if (m_cacheLimitMB == value) return;
+    m_cacheLimitMB = value;
+    const std::size_t maxRecords = static_cast<std::size_t>(value) * 1024ULL * 1024ULL / sizeof(contactRecord);
+    m_cache->setLimits(maxRecords, std::max<std::size_t>(24, static_cast<std::size_t>(value / 4)));
+    QSettings settings;
+    settings.setValue(settingsKey() + QStringLiteral("/cacheLimitMB"), value);
+    emit cacheStatsChanged();
+}
+
+void HicDataController::setSymmetricColorScale(bool value) {
+    if (m_symmetricColorScale == value) return;
+    m_symmetricColorScale = value;
+    if (value) {
+        const double extent = std::max(std::abs(m_colorMin), std::abs(m_colorMax));
+        m_colorMin = -extent;
+        m_colorMax = extent;
+        m_colorMaxAuto = false;
+    }
+    emit colorMaxChanged();
+}
+
+void HicDataController::setColorPercentile(double value) {
+    value = std::clamp(value, 50.0, 100.0);
+    if (qFuzzyCompare(m_colorPercentile, value)) return;
+    m_colorPercentile = value;
+    m_colorMaxAuto = true;
+    updateAutoColorScale(recordsSnapshot(), controlRecordsSnapshot());
+}
+
+void HicDataController::setMissingValueColor(const QColor& value) {
+    if (!value.isValid() || value == m_missingValueColor) return;
+    m_missingValueColor = value;
+    emit colorMapChanged();
+}
+
+void HicDataController::setZeroTransparent(bool value) {
+    if (m_zeroTransparent == value) return;
+    m_zeroTransparent = value;
+    emit colorMapChanged();
+}
+
+void HicDataController::setWorkspaceSearch(const QString& value) {
+    if (m_workspaceSearch == value) return;
+    m_workspaceSearch = value;
+    refreshSearchResultsModel();
+    emit workspaceSearchChanged();
+}
+
 void HicDataController::setTrackName(int index, const QString& name) {
     if (index < 0 || index >= static_cast<int>(m_tracks.size())) return;
     m_tracks[static_cast<std::size_t>(index)].name = name;
@@ -1236,6 +1603,41 @@ void HicDataController::setTrackRange(int index, double minValue, double maxValu
 void HicDataController::setTrackReduction(int index, const QString& reduction) {
     if (index < 0 || index >= static_cast<int>(m_tracks.size())) return;
     m_tracks[static_cast<std::size_t>(index)].reduction = reduction == QStringLiteral("max") ? QStringLiteral("max") : QStringLiteral("mean");
+    emit tracksChanged();
+}
+
+void HicDataController::setTrackVisible(int index, bool visible) {
+    if (index < 0 || index >= static_cast<int>(m_tracks.size())) return;
+    m_tracks[static_cast<std::size_t>(index)].visible = visible;
+    emit tracksChanged();
+}
+
+void HicDataController::setTrackCollapsed(int index, bool collapsed) {
+    if (index < 0 || index >= static_cast<int>(m_tracks.size())) return;
+    m_tracks[static_cast<std::size_t>(index)].collapsed = collapsed;
+    emit tracksChanged();
+}
+
+void HicDataController::setTrackHeight(int index, int height) {
+    if (index < 0 || index >= static_cast<int>(m_tracks.size())) return;
+    m_tracks[static_cast<std::size_t>(index)].height = std::clamp(height, 20, 240);
+    emit tracksChanged();
+}
+
+void HicDataController::setTrackAutoscale(int index, bool autoscale) {
+    if (index < 0 || index >= static_cast<int>(m_tracks.size())) return;
+    TrackLayer& track = m_tracks[static_cast<std::size_t>(index)];
+    track.autoscale = autoscale;
+    if (autoscale && !track.features.isEmpty()) {
+        double low = 0.0;
+        double high = 0.0;
+        for (const TrackFeature& feature : track.features) {
+            low = std::min(low, feature.value);
+            high = std::max(high, feature.value);
+        }
+        track.minValue = low;
+        track.maxValue = high > low ? high : low + 1.0;
+    }
     emit tracksChanged();
 }
 
@@ -1833,6 +2235,75 @@ void HicDataController::addRecent(const QString& group, const QString& path) {
     values.push_front(path);
     while (values.size() > kRecentLimit) values.removeLast();
     settings.setValue(settingsKey() + "/" + group, values);
+    if (group == QStringLiteral("recentMaps")) refreshDatasetsModel();
+}
+
+void HicDataController::refreshDatasetsModel() {
+    QVariantList entries;
+    for (const QVariant& value : recentMaps()) {
+        const QString path = value.toString();
+        QVariantMap entry;
+        entry["path"] = path;
+        entry["name"] = QFileInfo(path).fileName();
+        entries.push_back(entry);
+    }
+    m_datasetsModel->setEntries(std::move(entries));
+    refreshSearchResultsModel();
+}
+
+void HicDataController::refreshBookmarksModel() {
+    m_bookmarksModel->setEntries(savedLocations());
+    refreshSearchResultsModel();
+}
+
+void HicDataController::refreshTracksModel() {
+    m_tracksModel->setEntries(trackSummaries());
+    refreshSearchResultsModel();
+}
+
+void HicDataController::refreshAnnotationsModel() {
+    m_annotationsModel->setEntries(annotationLayerSummaries());
+    refreshSearchResultsModel();
+}
+
+void HicDataController::refreshSearchResultsModel() {
+    QVariantList results;
+    const QString needle = m_workspaceSearch.trimmed().toLower();
+    if (needle.isEmpty()) {
+        m_searchResultsModel->setEntries({});
+        return;
+    }
+    auto addMatch = [&](const QString& kind, const QString& label, const QString& detail, int index, const QString& path = QString()) {
+        if (!label.toLower().contains(needle) && !detail.toLower().contains(needle)) return;
+        QVariantMap result;
+        result["kind"] = kind;
+        result["label"] = label;
+        result["detail"] = detail;
+        result["index"] = index;
+        result["path"] = path;
+        results.push_back(result);
+    };
+    int index = 0;
+    for (const QVariant& value : recentMaps()) {
+        const QString path = value.toString();
+        addMatch(QStringLiteral("dataset"), QFileInfo(path).fileName(), path, index++, path);
+    }
+    index = 0;
+    for (const QVariant& value : savedLocations()) {
+        const QVariantMap bookmark = value.toMap();
+        addMatch(QStringLiteral("bookmark"), bookmark.value("name").toString(),
+                 bookmark.value("chrX").toString(), index++);
+    }
+    for (const QVariant& value : trackSummaries()) {
+        const QVariantMap track = value.toMap();
+        addMatch(QStringLiteral("track"), track.value("name").toString(), track.value("source").toString(), track.value("index").toInt());
+    }
+    for (const QVariant& value : annotationLayerSummaries()) {
+        const QVariantMap layer = value.toMap();
+        addMatch(QStringLiteral("annotation"), layer.value("name").toString(),
+                 QStringLiteral("%1 features").arg(layer.value("count").toInt()), layer.value("index").toInt());
+    }
+    m_searchResultsModel->setEntries(std::move(results));
 }
 
 QVariantList HicDataController::recentList(const QString& group) const {
@@ -1930,12 +2401,18 @@ void HicDataController::updateAutoColorScale(const std::vector<contactRecord>& r
         sampleRecords(records);
         sampleRecords(controlRecords);
         if (!sampled.empty()) {
-            const std::size_t index = static_cast<std::size_t>(std::floor(0.95 * (sampled.size() - 1)));
+            const double quantile = std::clamp(m_colorPercentile / 100.0, 0.5, 1.0);
+            const std::size_t index = static_cast<std::size_t>(std::floor(quantile * (sampled.size() - 1)));
             std::nth_element(sampled.begin(), sampled.begin() + index, sampled.end());
             m_colorMax = std::max(1.0, sampled[index]);
         } else {
             m_colorMax = 1.0;
         }
+    }
+    if (m_symmetricColorScale) {
+        const double extent = std::max(0.000001, std::max(std::abs(m_colorMin), std::abs(m_colorMax)));
+        m_colorMin = -extent;
+        m_colorMax = extent;
     }
     emit colorMaxChanged();
 }
@@ -2042,6 +2519,10 @@ void HicDataController::scheduleRequest() {
         return;
     }
     if (m_tileWatcher.isRunning()) {
+        // Invalidate the active result immediately. The underlying straw call is not
+        // forcibly terminated (it is not cooperatively cancellable), but it will no
+        // longer replace the visible viewport and only the newest pending view runs.
+        ++m_requestSerial;
         m_reloadPending = true;
         return;
     }
@@ -2061,17 +2542,35 @@ void HicDataController::scheduleRequest() {
                 QMutexLocker locker(&m_mutex);
                 m_records = std::move(displayRecords);
                 m_controlRecords.clear();
+                rebuildHoverLookupLocked();
                 m_loadedKey = cached->key;
                 m_hasLoadedKey = true;
             }
             updateAutoColorScale(m_records);
             setStatus(QStringLiteral("%1 records in view (cached).").arg(recordCount()));
+            emit cacheStatsChanged();
             emit recordsChanged();
             return;
         }
     }
 
     startTileLoad(key, requestId);
+}
+
+quint64 HicDataController::recordLookupKey(int32_t binX, int32_t binY) {
+    return (static_cast<quint64>(static_cast<quint32>(binX)) << 32U) |
+           static_cast<quint32>(binY);
+}
+
+void HicDataController::rebuildHoverLookupLocked() {
+    m_recordHoverLookup.clear();
+    m_controlHoverLookup.clear();
+    m_recordHoverLookup.reserve(static_cast<qsizetype>(m_records.size()));
+    m_controlHoverLookup.reserve(static_cast<qsizetype>(m_controlRecords.size()));
+    for (const contactRecord& record : m_records)
+        m_recordHoverLookup.insert(recordLookupKey(record.binX, record.binY), record.counts);
+    for (const contactRecord& record : m_controlRecords)
+        m_controlHoverLookup.insert(recordLookupKey(record.binX, record.binY), record.counts);
 }
 
 void HicDataController::startTileLoad(const HicTileKey& key, quint64 requestId) {

@@ -1,6 +1,7 @@
 #ifndef CARTON_HIC_TILE_CACHE_H
 #define CARTON_HIC_TILE_CACHE_H
 
+#include <algorithm>
 #include <cstdint>
 #include <list>
 #include <unordered_map>
@@ -105,6 +106,16 @@ public:
 
     std::size_t recordCount() const {
         return m_recordCount;
+    }
+
+    std::size_t tileCount() const { return m_lru.size(); }
+    std::size_t maxRecords() const { return m_maxRecords; }
+    std::size_t maxTiles() const { return m_maxTiles; }
+
+    void setLimits(std::size_t maxRecords, std::size_t maxTiles) {
+        m_maxRecords = std::max<std::size_t>(1, maxRecords);
+        m_maxTiles = std::max<std::size_t>(1, maxTiles);
+        trim();
     }
 
 private:

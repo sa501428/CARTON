@@ -5,7 +5,7 @@ import Carton
 TextField {
     id: control
 
-    implicitHeight: 32
+    implicitHeight: Theme.controlHeight
     leftPadding: 12
     rightPadding: 12
     selectByMouse: true
@@ -21,6 +21,6 @@ TextField {
         color: !control.enabled ? Theme.surfaceDisabled : Theme.surface
         border.width: control.activeFocus ? 2 : 1
         border.color: control.activeFocus ? Theme.accent : Theme.border
-        Behavior on border.color { ColorAnimation { duration: 90 } }
+        Behavior on border.color { ColorAnimation { duration: Theme.reducedMotion ? 0 : Theme.animationFast } }
     }
 }

@@ -20,7 +20,7 @@ CheckBox {
         color: control.checked ? Theme.accent : (control.enabled ? Theme.surface : Theme.surfaceDisabled)
         border.width: control.checked ? 0 : 1
         border.color: control.hovered ? Theme.borderStrong : Theme.border
-        Behavior on color { ColorAnimation { duration: 90 } }
+        Behavior on color { ColorAnimation { duration: Theme.reducedMotion ? 0 : Theme.animationFast } }
 
         Text {
             anchors.centerIn: parent
