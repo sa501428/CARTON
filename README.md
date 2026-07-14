@@ -4,8 +4,8 @@ The desktop application lives in `C++/` and builds as a Qt 6 app:
 
 ```sh
 cmake -S C++ -B C++/build-carton
-cmake --build C++/build-carton --target carton straw -j4
+cmake --build C++/build-carton --target carton -j4
 open C++/build-carton/carton.app
 ```
 
-`carton` is the main desktop viewer. `straw` remains a debug utility for validating `.hic` reader output.
+The Straw `.hic` reader is compiled directly into the CARTON desktop application through the `carton_hic` library.

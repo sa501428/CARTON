@@ -5,14 +5,14 @@ This directory contains the CARTON desktop application and the reusable C++ `.hi
 ## Description:
 `carton` is a Qt 6 / Qt Quick desktop viewer for Hi-C contact matrices. The app keeps the UI shell in QML and renders the matrix through a custom C++ scene-graph item, so large heatmap content is batched into GPU geometry instead of being represented as QML objects.
 
-The `carton_hic` library provides local/HTTP `.hic` metadata inspection, sparse range reads, normalization support, and block decompression. `straw` is still built as a small debug executable for validating reader behavior from the terminal.
+The `carton_hic` library provides local/HTTP `.hic` metadata inspection, sparse range reads, normalization support, and block decompression. It is linked directly into the CARTON application.
 
 ## Installation:
 1. Requires CMake 3.13 or higher
 2. Requires Qt 6, libcurl, zlib, and zstd development libraries
 3. Clone the repository
 4. Configure: `cmake -S . -B build-carton`
-5. Build: `cmake --build build-carton --target carton straw -j4`
+5. Build: `cmake --build build-carton --target carton -j4`
 6. Run the desktop app: `open build-carton/carton.app`
 
 ## Usage:
@@ -32,18 +32,6 @@ The desktop app supports:
 13. 2D BEDPE-like annotation overlays with intrachromosomal reflection
 14. Direct interaction layer for wheel zoom, drag pan, double-click zoom, and Shift-drag region zoom
 15. Coordinate lookup/jump fields and desktop menus for file, navigation, display, and layer actions
-
-The debug executable `straw` supports two modes:
-1. Standard mode:
-`straw [observed/oe/expected] <NONE/VC/VC_SQRT/KR> <hicFile> <chr1>[:x1:x2] <chr2>[:y1:y2] <BP/FRAG/MATRIX> <binsize>`
-2. Dump mode (creates slice file):
-`straw dump <observed/oe/expected> <NONE/VC/VC_SQRT/KR> <hicFile> <BP/FRAG> <binsize> <outputFile>`
-
-## Examples:
-1. Extract specific region:
-`straw observed NONE input.hic chr1:0:1000000 chr2:0:1000000 BP 10000`
-2. Create slice file at 10kb resolution:
-`straw dump observed NONE input.hic BP 10000 output.slc`
 
 ## Slice Format:
 The slice format (.slc) is a binary format that contains:

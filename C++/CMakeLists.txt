@@ -35,9 +35,6 @@ target_link_libraries(carton_hic
         ${ZSTD_LIBRARY}
 )
 
-add_executable(straw main.cpp)
-target_link_libraries(straw PRIVATE carton_hic)
-
 set(APP_ICON "${CMAKE_CURRENT_SOURCE_DIR}/carton.icns")
 set_source_files_properties("${APP_ICON}" PROPERTIES MACOSX_PACKAGE_LOCATION Resources)
 
@@ -127,8 +124,6 @@ install(TARGETS carton
     BUNDLE  DESTINATION .
     RUNTIME DESTINATION bin
 )
-install(TARGETS straw RUNTIME DESTINATION bin)
-
 # ── macOS Qt deployment (runs during `cmake --install`) ──────────────────────
 if(APPLE)
     set(DEPLOY_SCRIPT "${CMAKE_CURRENT_BINARY_DIR}/deploy_macos.cmake")

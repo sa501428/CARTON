@@ -77,7 +77,7 @@ echo "  ✓ Configured (details: ${CONFIGURE_LOG})"
 # not build outputs. Remove it so repeated packaging cannot recursively deploy
 # stale Qt components or retain files no longer required by CARTON.
 rm -rf "${BUILD_DIR}/carton.app"
-cmake --build "${BUILD_DIR}" --target carton straw --parallel "${JOBS}"
+cmake --build "${BUILD_DIR}" --target carton --parallel "${JOBS}"
 
 # ── 3. Deploy linked Qt runtime dependencies ──────────────────────────────────
 echo "→ Deploying Qt runtime…"
