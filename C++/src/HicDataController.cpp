@@ -1351,6 +1351,56 @@ void HicDataController::pan(double dxFraction, double dyFraction) {
     scheduleRequest();
 }
 
+void HicDataController::fitViewToAspectRatio(double aspectRatio) {
+    if (!std::isfinite(aspectRatio) || aspectRatio <= 0.0 || m_chrX.isEmpty() || m_chrY.isEmpty()) {
+        return;
+    }
+    aspectRatio = std::clamp(aspectRatio, 0.2, 5.0);
+    const qint64 maxX = std::max<qint64>(m_resolution, chromosomeLength(m_chrX));
+    const qint64 maxY = std::max<qint64>(m_resolution, chromosomeLength(m_chrY));
+    const qint64 currentXSpan = std::max<qint64>(m_resolution, m_x1 - m_x0);
+    const qint64 currentYSpan = std::max<qint64>(m_resolution, m_y1 - m_y0);
+    qint64 targetXSpan = currentXSpan;
+    qint64 targetYSpan = currentYSpan;
+
+    if (!m_xLocusLocked) {
+        targetXSpan = std::max<qint64>(m_resolution, qRound64(currentYSpan * aspectRatio));
+        if (targetXSpan > maxX) {
+            targetXSpan = maxX;
+            if (!m_yLocusLocked) {
+                targetYSpan = std::max<qint64>(m_resolution, qRound64(targetXSpan / aspectRatio));
+            }
+        }
+    } else if (!m_yLocusLocked) {
+        targetYSpan = std::max<qint64>(m_resolution, qRound64(currentXSpan / aspectRatio));
+    }
+    if (targetYSpan > maxY) {
+        targetYSpan = maxY;
+        if (!m_xLocusLocked) {
+            targetXSpan = std::max<qint64>(m_resolution, qRound64(targetYSpan * aspectRatio));
+        }
+    }
+
+    targetXSpan = std::min(targetXSpan, maxX);
+    targetYSpan = std::min(targetYSpan, maxY);
+    if (targetXSpan == currentXSpan && targetYSpan == currentYSpan) return;
+
+    const qint64 centerX = m_x0 + currentXSpan / 2;
+    const qint64 centerY = m_y0 + currentYSpan / 2;
+    if (!m_xLocusLocked) {
+        m_x0 = centerX - targetXSpan / 2;
+        m_x1 = m_x0 + targetXSpan;
+    }
+    if (!m_yLocusLocked) {
+        m_y0 = centerY - targetYSpan / 2;
+        m_y1 = m_y0 + targetYSpan;
+    }
+    adaptResolutionToSpan(std::max(targetXSpan, targetYSpan));
+    clampRegion();
+    emit viewChanged();
+    scheduleRequest();
+}
+
 void HicDataController::resetView() {
     if (m_chrX.isEmpty() || m_chrY.isEmpty()) {
         return;

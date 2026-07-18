@@ -52,6 +52,7 @@ ApplicationWindow {
     property bool navigationOpen: false
     property bool inspectorOpen: false
     property bool trackPanelsOpen: false
+    property bool landscapeMode: false
     property bool comparisonOpen: false
     property bool linkNavigation: true
     property bool linkCrosshair: true
@@ -120,8 +121,10 @@ ApplicationWindow {
     function createController() {
         var controller = Qt.createQmlObject("import Carton; HicDataController {}", window)
         controller.metadataChanged.connect(function() {
-            if (controller === activeController)
+            if (controller === activeController) {
                 syncControlModels()
+                Qt.callLater(plotFrame.fitControllerToCanvas)
+            }
         })
         controller.filePathChanged.connect(function() {
             var index = controllers.indexOf(controller)
@@ -162,6 +165,7 @@ ApplicationWindow {
         if (comparisonOpen && comparisonController === activeController)
             comparisonController = controllers.length > 1 ? controllers[(index + 1) % controllers.length] : null
         syncControlModels()
+        Qt.callLater(plotFrame.fitControllerToCanvas)
     }
 
     function ensureComparisonController() {
@@ -430,6 +434,77 @@ ApplicationWindow {
         title: "Missing Value Color"
         selectedColor: activeController ? activeController.missingValueColor : Theme.missingData
         onAccepted: if (activeController) activeController.missingValueColor = selectedColor
+    }
+
+    Dialog {
+        id: colorScaleDialog
+        title: "Heatmap Colors"
+        modal: true
+        width: 340
+        height: 300
+        standardButtons: Dialog.Close
+        background: DialogFrame {}
+        onOpened: {
+            if (!activeController) return
+            quickColorMap.currentIndex = Math.max(0, quickColorMap.find(activeController.colorMap))
+            quickColorMin.text = activeController.colorMin.toString()
+            quickColorMax.text = activeController.colorMax.toString()
+        }
+
+        ColumnLayout {
+            anchors.fill: parent
+            spacing: 12
+
+            Label { text: "Color map"; color: Theme.textSecondary; font.pixelSize: Theme.textSm }
+            AppComboBox {
+                id: quickColorMap
+                Layout.fillWidth: true
+                model: ["White-Red", "Viridis", "Blue-White-Red", "Grayscale", "Custom"]
+                onActivated: if (activeController) activeController.colorMap = currentText
+            }
+
+            GridLayout {
+                Layout.fillWidth: true
+                columns: 2
+                columnSpacing: 10
+                rowSpacing: 6
+                Label { text: "Minimum"; color: Theme.textSecondary; font.pixelSize: Theme.textSm }
+                Label { text: "Maximum"; color: Theme.textSecondary; font.pixelSize: Theme.textSm }
+                AppTextField {
+                    id: quickColorMin
+                    Layout.fillWidth: true
+                    inputMethodHints: Qt.ImhFormattedNumbersOnly
+                    onEditingFinished: {
+                        var value = Number(text)
+                        if (activeController && isFinite(value)) activeController.colorMin = value
+                    }
+                }
+                AppTextField {
+                    id: quickColorMax
+                    Layout.fillWidth: true
+                    inputMethodHints: Qt.ImhFormattedNumbersOnly
+                    onEditingFinished: {
+                        var value = Number(text)
+                        if (activeController && isFinite(value)) activeController.colorMax = value
+                    }
+                }
+            }
+
+            RowLayout {
+                Layout.fillWidth: true
+                Item { Layout.fillWidth: true }
+                AppButton {
+                    text: "Reset automatic range"
+                    tonal: true
+                    onClicked: {
+                        if (!activeController) return
+                        activeController.resetColorScale()
+                        quickColorMin.text = activeController.colorMin.toString()
+                        quickColorMax.text = activeController.colorMax.toString()
+                    }
+                }
+            }
+        }
     }
 
     menuBar: MenuBar {
@@ -722,26 +797,6 @@ ApplicationWindow {
             }
 
             AppToolButton {
-                text: "−"
-                Layout.preferredWidth: 32
-                enabled: activeController && activeController.filePath.length > 0
-                Accessible.name: "Zoom out"
-                ToolTip.visible: hovered
-                ToolTip.text: Accessible.name
-                onClicked: activeController.zoom(0.5, 0.5, 0.5)
-            }
-
-            AppToolButton {
-                text: "+"
-                Layout.preferredWidth: 32
-                enabled: activeController && activeController.filePath.length > 0
-                Accessible.name: "Zoom in"
-                ToolTip.visible: hovered
-                ToolTip.text: Accessible.name
-                onClicked: activeController.zoom(2.0, 0.5, 0.5)
-            }
-
-            AppToolButton {
                 text: "All"
                 enabled: activeController && activeController.filePath.length > 0
                 onClicked: activeController.setWholeGenomeView()
@@ -884,6 +939,7 @@ ApplicationWindow {
                 }
 
                 Rectangle {
+                    id: viewportArea
                     Layout.fillWidth: true
                     Layout.fillHeight: true
                     color: Theme.appBg
@@ -982,6 +1038,7 @@ ApplicationWindow {
                         MenuItem {
                             text: "Enable diagonal edge"
                             checkable: true
+                            enabled: activeController && activeController.chrX === activeController.chrY
                             checked: diagonalEdgeEnabled
                             onTriggered: {
                                 diagonalEdgeEnabled = checked
@@ -1025,9 +1082,22 @@ ApplicationWindow {
                         anchors.centerIn: parent
                         anchors.horizontalCenterOffset: comparisonOpen ? -parent.width * 0.25 : 0
                         anchors.verticalCenterOffset: -16
-                        width: Math.max(240, Math.min((comparisonOpen ? parent.width * 0.5 : parent.width) - 12,
-                                                     parent.height - 40))
-                        height: width
+                        property real availableWidth: (comparisonOpen ? parent.width * 0.5 : parent.width) - 12
+                        property real availableHeight: parent.height - 40
+                        width: Math.max(240, landscapeMode ? availableWidth : Math.min(availableWidth, availableHeight))
+                        height: Math.max(240, landscapeMode ? availableHeight : width)
+                        onWidthChanged: aspectRefitTimer.restart()
+                        onHeightChanged: aspectRefitTimer.restart()
+                        function fitControllerToCanvas() {
+                            if (activeController && heatmapHost.width > 0 && heatmapHost.height > 0)
+                                activeController.fitViewToAspectRatio(heatmapHost.width / heatmapHost.height)
+                        }
+                        Timer {
+                            id: aspectRefitTimer
+                            interval: 80
+                            repeat: false
+                            onTriggered: plotFrame.fitControllerToCanvas()
+                        }
                         property int axisSize: {
                             if (!activeController || !trackPanelsOpen) return 46
                             var tracks = activeController.trackSummaries()
@@ -1267,21 +1337,18 @@ ApplicationWindow {
                                     var spanY = Math.max(1, activeController.y1 - activeController.y0)
                                     var scaleX = width / spanX
                                     var scaleY = height / spanY
-                                    var ox = 0
-                                    var oy = 0
-                                    var side = Math.min(width, height)
                                     if (activeController.showGridlines) {
                                         ctx.strokeStyle = Theme.gridline
                                         ctx.lineWidth = 1
                                         var gridSteps = 10
                                         for (var g = 1; g < gridSteps; g++) {
-                                            var gx = ox + side * g / gridSteps
-                                            var gy = oy + side * g / gridSteps
+                                            var gx = width * g / gridSteps
+                                            var gy = height * g / gridSteps
                                             ctx.beginPath()
-                                            ctx.moveTo(gx, oy)
-                                            ctx.lineTo(gx, oy + side)
-                                            ctx.moveTo(ox, gy)
-                                            ctx.lineTo(ox + side, gy)
+                                            ctx.moveTo(gx, 0)
+                                            ctx.lineTo(gx, height)
+                                            ctx.moveTo(0, gy)
+                                            ctx.lineTo(width, gy)
                                             ctx.stroke()
                                         }
                                     }
@@ -1293,10 +1360,10 @@ ApplicationWindow {
                                             var bx = (boundaries[b].end - activeController.x0) * scaleX
                                             var by = (boundaries[b].end - activeController.y0) * scaleY
                                             ctx.beginPath()
-                                            ctx.moveTo(bx, oy)
-                                            ctx.lineTo(bx, oy + side)
-                                            ctx.moveTo(ox, by)
-                                            ctx.lineTo(ox + side, by)
+                                            ctx.moveTo(bx, 0)
+                                            ctx.lineTo(bx, height)
+                                            ctx.moveTo(0, by)
+                                            ctx.lineTo(width, by)
                                             ctx.stroke()
                                         }
                                     }
@@ -1305,13 +1372,13 @@ ApplicationWindow {
                                         ctx.lineWidth = 1
                                         var tileCount = 8
                                         for (var tt = 0; tt <= tileCount; tt++) {
-                                            var tx = ox + side * tt / tileCount
-                                            var ty = oy + side * tt / tileCount
+                                            var tx = width * tt / tileCount
+                                            var ty = height * tt / tileCount
                                             ctx.beginPath()
-                                            ctx.moveTo(tx, oy)
-                                            ctx.lineTo(tx, oy + side)
-                                            ctx.moveTo(ox, ty)
-                                            ctx.lineTo(ox + side, ty)
+                                            ctx.moveTo(tx, 0)
+                                            ctx.lineTo(tx, height)
+                                            ctx.moveTo(0, ty)
+                                            ctx.lineTo(width, ty)
                                             ctx.stroke()
                                         }
                                     }
@@ -1340,8 +1407,8 @@ ApplicationWindow {
                                     var ctx = getContext("2d")
                                     ctx.reset()
                                     if (!hoverActive) return
-                                    ctx.strokeStyle = Theme.guideLine
-                                    ctx.lineWidth = 1
+                                    ctx.strokeStyle = "#000000"
+                                    ctx.lineWidth = 1.25
                                     ctx.setLineDash([5, 4])
                                     if (straightEdgeEnabled) {
                                         ctx.beginPath()
@@ -1351,26 +1418,32 @@ ApplicationWindow {
                                         ctx.lineTo(width, hoverPlotY)
                                         ctx.stroke()
                                     }
-                                    if (diagonalEdgeEnabled) {
+                                    if (diagonalEdgeEnabled && activeController && activeController.chrX === activeController.chrY) {
+                                        var spanX = Math.max(1, activeController.x1 - activeController.x0)
+                                        var spanY = Math.max(1, activeController.y1 - activeController.y0)
+                                        var genomeX = activeController.x0 + hoverPlotX / Math.max(1, width) * spanX
+                                        var genomeY = activeController.y0 + hoverPlotY / Math.max(1, height) * spanY
+                                        var scaleY = height / spanY
+                                        var delta = genomeY - genomeX
+                                        var reflectedDelta = -delta
+                                        var sum = genomeX + genomeY
                                         ctx.beginPath()
-                                        var d = hoverPlotY - hoverPlotX
-                                        // Parallel diagonal through the cursor and its reflection
-                                        // across the matrix diagonal.
-                                        ctx.moveTo(-height, -height + d)
-                                        ctx.lineTo(width + height, width + height + d)
-                                        ctx.moveTo(-height, -height - d)
-                                        ctx.lineTo(width + height, width + height - d)
-                                        // Perpendicular diagonal through the cursor (the reflected
-                                        // cursor lies on this same line because x + y is invariant).
-                                        var sum = hoverPlotX + hoverPlotY
-                                        ctx.moveTo(-height, sum + height)
-                                        ctx.lineTo(width + height, sum - width - height)
+                                        // y = x + delta, then its true reflection y = x - delta
+                                        // across the genomic Hi-C diagonal y = x.
+                                        ctx.moveTo(0, (activeController.x0 + delta - activeController.y0) * scaleY)
+                                        ctx.lineTo(width, (activeController.x1 + delta - activeController.y0) * scaleY)
+                                        ctx.moveTo(0, (activeController.x0 + reflectedDelta - activeController.y0) * scaleY)
+                                        ctx.lineTo(width, (activeController.x1 + reflectedDelta - activeController.y0) * scaleY)
+                                        // The perpendicular through the cursor and reflected cursor.
+                                        ctx.moveTo(0, (sum - activeController.x0 - activeController.y0) * scaleY)
+                                        ctx.lineTo(width, (sum - activeController.x1 - activeController.y0) * scaleY)
                                         ctx.stroke()
                                     }
                                 }
                             }
 
                             Rectangle {
+                                id: colorLegend
                                 z: 15
                                 anchors.top: parent.top
                                 anchors.right: parent.right
@@ -1405,6 +1478,20 @@ ApplicationWindow {
                                     text: activeController ? Number(activeController.colorMin).toPrecision(3) : ""
                                     color: "white"; font.pixelSize: Theme.textXs
                                 }
+                                MouseArea {
+                                    id: legendMouseArea
+                                    anchors.fill: parent
+                                    acceptedButtons: Qt.LeftButton
+                                    hoverEnabled: true
+                                    cursorShape: Qt.PointingHandCursor
+                                    Accessible.name: "Open heatmap color settings"
+                                    onClicked: function(mouse) {
+                                        colorScaleDialog.open()
+                                        mouse.accepted = true
+                                    }
+                                }
+                                ToolTip.visible: legendMouseArea.containsMouse
+                                ToolTip.text: "Change color range and map"
                             }
 
                             Rectangle {
@@ -1467,15 +1554,11 @@ ApplicationWindow {
                                 }
 
                                 function fractionX(px) {
-                                    var side = Math.min(width, height)
-                                    var ox = (width - side) * 0.5
-                                    return clamp01((px - ox) / Math.max(1, side))
+                                    return clamp01(px / Math.max(1, width))
                                 }
 
                                 function fractionY(py) {
-                                    var side = Math.min(width, height)
-                                    var oy = (height - side) * 0.5
-                                    return clamp01((py - oy) / Math.max(1, side))
+                                    return clamp01(py / Math.max(1, height))
                                 }
 
                                 function updateHover(mouse) {
@@ -1618,6 +1701,60 @@ ApplicationWindow {
                                     color: "#ffffff"
                                     font.pixelSize: 12
                                     wrapMode: Text.Wrap
+                                }
+                            }
+                        }
+                    }
+
+                    Rectangle {
+                        z: 50
+                        anchors.left: parent.left
+                        anchors.bottom: parent.bottom
+                        anchors.leftMargin: 12
+                        anchors.bottomMargin: 44
+                        width: viewportControls.implicitWidth + 12
+                        height: 38
+                        radius: Theme.radiusSm
+                        color: Theme.surfaceAlt
+                        border.color: Theme.borderStrong
+
+                        RowLayout {
+                            id: viewportControls
+                            anchors.centerIn: parent
+                            spacing: 2
+                            AppToolButton {
+                                text: "−"
+                                onLightSurface: true
+                                Layout.preferredWidth: 34
+                                enabled: activeController && activeController.filePath.length > 0
+                                Accessible.name: "Zoom out"
+                                ToolTip.visible: hovered
+                                ToolTip.text: Accessible.name
+                                onClicked: activeController.zoom(0.5, 0.5, 0.5)
+                            }
+                            AppToolButton {
+                                text: "+"
+                                onLightSurface: true
+                                Layout.preferredWidth: 34
+                                enabled: activeController && activeController.filePath.length > 0
+                                Accessible.name: "Zoom in"
+                                ToolTip.visible: hovered
+                                ToolTip.text: Accessible.name
+                                onClicked: activeController.zoom(2.0, 0.5, 0.5)
+                            }
+                            Rectangle { Layout.preferredWidth: 1; Layout.preferredHeight: 20; color: Theme.border }
+                            AppToolButton {
+                                text: landscapeMode ? "Square" : "Landscape"
+                                onLightSurface: true
+                                enabled: !!activeController
+                                Accessible.name: landscapeMode ? "Use square heatmap layout" : "Use landscape heatmap layout"
+                                ToolTip.visible: hovered
+                                ToolTip.text: landscapeMode
+                                              ? "Return to the square viewport"
+                                              : "Use the full width and show additional loci"
+                                onClicked: {
+                                    landscapeMode = !landscapeMode
+                                    Qt.callLater(plotFrame.fitControllerToCanvas)
                                 }
                             }
                         }

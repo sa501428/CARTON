@@ -193,6 +193,7 @@ public:
     Q_INVOKABLE void requestVisibleRegion();
     Q_INVOKABLE void zoom(double factor, double centerX, double centerY);
     Q_INVOKABLE void pan(double dxFraction, double dyFraction);
+    Q_INVOKABLE void fitViewToAspectRatio(double aspectRatio);
     Q_INVOKABLE void resetView();
     Q_INVOKABLE void syncViewFrom(HicDataController* other, bool includeColor = true);
     Q_INVOKABLE void setTrackName(int index, const QString& name);
