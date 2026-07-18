@@ -614,9 +614,12 @@ ApplicationWindow {
             }
 
             AppButton {
-                text: "Control"
+                text: activeController && activeController.controlReady ? "Control ✓" : "Control"
                 tonal: true
                 enabled: !!activeController
+                Accessible.name: activeController && activeController.controlReady
+                                 ? "Control map loaded; choose another control map"
+                                 : "Load control map"
                 onClicked: controlDialog.open()
             }
 
@@ -625,7 +628,7 @@ ApplicationWindow {
             AppComboBox {
                 id: chromosomeX
                 Accessible.name: "Horizontal chromosome"
-                Layout.preferredWidth: 118
+                Layout.preferredWidth: 100
                 model: []
                 enabled: activeController && model.length > 0
                 onActivated: if (activeController) activeController.chrX = currentText
@@ -636,25 +639,43 @@ ApplicationWindow {
             AppComboBox {
                 id: chromosomeY
                 Accessible.name: "Vertical chromosome"
-                Layout.preferredWidth: 118
+                Layout.preferredWidth: 100
                 model: []
                 enabled: activeController && model.length > 0
                 onActivated: if (activeController) activeController.chrY = currentText
             }
 
+            Label {
+                text: "Bin"
+                color: Theme.chromeTextMuted
+                font.pixelSize: Theme.textXs
+            }
+
             AppComboBox {
                 id: resolutionBox
-                Accessible.name: "Matrix resolution"
-                Layout.preferredWidth: 118
+                Accessible.name: "Hi-C bin size in base pairs"
+                Layout.preferredWidth: 100
                 model: []
-                enabled: activeController && model.length > 0
+                enabled: activeController && model.length > 0 && !activeController.resolutionLocked
                 onActivated: if (activeController) activeController.resolution = Number(currentText)
+            }
+
+            AppToolButton {
+                text: activeController && activeController.resolutionLocked ? "Locked" : "Lock"
+                enabled: activeController && activeController.resolution > 0
+                idleColor: activeController && activeController.resolutionLocked
+                           ? Qt.rgba(1, 1, 1, 0.1) : "transparent"
+                Accessible.name: activeController && activeController.resolutionLocked
+                                 ? "Unlock Hi-C bin size" : "Lock Hi-C bin size"
+                ToolTip.visible: hovered
+                ToolTip.text: Accessible.name
+                onClicked: activeController.resolutionLocked = !activeController.resolutionLocked
             }
 
             AppComboBox {
                 id: matrixBox
                 Accessible.name: "Matrix display mode"
-                Layout.preferredWidth: 136
+                Layout.preferredWidth: 115
                 model: activeController ? activeController.matrixTypes() : ["observed", "log", "oe", "expected", "vs"]
                 onActivated: if (activeController) activeController.matrixType = currentText
             }
@@ -662,7 +683,7 @@ ApplicationWindow {
             AppComboBox {
                 id: normBox
                 Accessible.name: "Matrix normalization"
-                Layout.preferredWidth: 110
+                Layout.preferredWidth: 90
                 model: ["NONE"]
                 onActivated: if (activeController) activeController.norm = currentText
             }
@@ -672,7 +693,7 @@ ApplicationWindow {
             AppTextField {
                 id: topLocationField
                 Accessible.name: "Horizontal genomic locus"
-                Layout.preferredWidth: 180
+                Layout.preferredWidth: 140
                 placeholderText: "chr:start-end"
                 enabled: activeController && activeController.filePath.length > 0
                 onAccepted: if (activeController) activeController.goTo(text, leftLocationField.text.length > 0 ? leftLocationField.text : text)
@@ -681,7 +702,7 @@ ApplicationWindow {
             AppTextField {
                 id: leftLocationField
                 Accessible.name: "Vertical genomic locus"
-                Layout.preferredWidth: 180
+                Layout.preferredWidth: 140
                 placeholderText: "left / optional"
                 enabled: activeController && activeController.filePath.length > 0
                 onAccepted: if (activeController) activeController.goTo(topLocationField.text, text.length > 0 ? text : topLocationField.text)
@@ -698,6 +719,26 @@ ApplicationWindow {
                 text: "Reset"
                 enabled: activeController && activeController.filePath.length > 0
                 onClicked: activeController.resetView()
+            }
+
+            AppToolButton {
+                text: "−"
+                Layout.preferredWidth: 32
+                enabled: activeController && activeController.filePath.length > 0
+                Accessible.name: "Zoom out"
+                ToolTip.visible: hovered
+                ToolTip.text: Accessible.name
+                onClicked: activeController.zoom(0.5, 0.5, 0.5)
+            }
+
+            AppToolButton {
+                text: "+"
+                Layout.preferredWidth: 32
+                enabled: activeController && activeController.filePath.length > 0
+                Accessible.name: "Zoom in"
+                ToolTip.visible: hovered
+                ToolTip.text: Accessible.name
+                onClicked: activeController.zoom(2.0, 0.5, 0.5)
             }
 
             AppToolButton {

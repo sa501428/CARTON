@@ -25,6 +25,7 @@ class HicDataController : public QObject {
     Q_OBJECT
     Q_PROPERTY(QString filePath READ filePath NOTIFY filePathChanged)
     Q_PROPERTY(QString controlFilePath READ controlFilePath NOTIFY controlFilePathChanged)
+    Q_PROPERTY(bool controlReady READ controlReady NOTIFY controlReadyChanged)
     Q_PROPERTY(QString genomeId READ genomeId NOTIFY metadataChanged)
     Q_PROPERTY(QString status READ status NOTIFY statusChanged)
     Q_PROPERTY(bool busy READ busy NOTIFY busyChanged)
@@ -83,6 +84,7 @@ public:
 
     QString filePath() const;
     QString controlFilePath() const;
+    bool controlReady() const;
     QString genomeId() const;
     QString status() const;
     bool busy() const;
@@ -264,6 +266,7 @@ public:
 signals:
     void filePathChanged();
     void controlFilePathChanged();
+    void controlReadyChanged();
     void metadataChanged();
     void statusChanged();
     void busyChanged();
@@ -311,6 +314,7 @@ private:
     bool isAllChromosome(const QString& name) const;
     bool matrixNeedsControl(const QString& matrixType) const;
     bool matrixNeedsPrimary(const QString& matrixType) const;
+    bool controlSupportsCurrentView(QString* reason = nullptr) const;
     bool matrixIsVs(const QString& matrixType) const;
     bool matrixIsPearson(const QString& matrixType) const;
     bool matrixIsDivergent(const QString& matrixType) const;
@@ -415,6 +419,7 @@ private:
     mutable QMutex m_mutex;
     QString m_filePath;
     QString m_controlFilePath;
+    bool m_controlReady = false;
     QString m_genomeId;
     QString m_status = "Open a .hic file to begin.";
     bool m_busy = false;
@@ -435,6 +440,7 @@ private:
     QColor m_customLowColor = QColor("#ffffff");
     QColor m_customHighColor = QColor("#d7191c");
     HicFileMetadata m_metadata;
+    HicFileMetadata m_controlMetadata;
     std::vector<contactRecord> m_records;
     std::vector<contactRecord> m_controlRecords;
     QHash<quint64, float> m_recordHoverLookup;
@@ -468,6 +474,7 @@ private:
     HicTileKey m_loadedKey;
     bool m_hasLoadedKey = false;
     QFutureWatcher<HicFileMetadata> m_metadataWatcher;
+    QFutureWatcher<HicFileMetadata> m_controlMetadataWatcher;
     QFutureWatcher<TileResult> m_tileWatcher;
     quint64 m_requestSerial = 0;
     bool m_reloadPending = false;

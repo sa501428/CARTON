@@ -10,7 +10,7 @@
 #include <vector>
 
 namespace {
-constexpr int kMaxRenderedRecords = 220000;
+constexpr int kMaxRenderedRecords = 500000;
 
 class HeatmapRootNode final : public QSGNode {
 public:
@@ -20,7 +20,7 @@ public:
         backgroundGeometry->setDrawingMode(QSGGeometry::DrawTriangleStrip);
         background->setGeometry(backgroundGeometry);
         background->setFlag(QSGNode::OwnsGeometry);
-        auto* backgroundMaterial = new QSGFlatColorMaterial;
+        backgroundMaterial = new QSGFlatColorMaterial;
         backgroundMaterial->setColor(QColor("#ffffff"));
         background->setMaterial(backgroundMaterial);
         background->setFlag(QSGNode::OwnsMaterial);
@@ -37,6 +37,7 @@ public:
     }
 
     QSGGeometryNode* background = nullptr;
+    QSGFlatColorMaterial* backgroundMaterial = nullptr;
     QSGGeometryNode* heatmap = nullptr;
     int vertexCapacity = 0;
 };
@@ -111,6 +112,12 @@ QSGNode* HicHeatmapItem::updatePaintNode(QSGNode* oldNode, UpdatePaintNodeData*)
         root->heatmap->geometry()->setVertexCount(0);
         root->heatmap->markDirty(QSGNode::DirtyGeometry);
         return root;
+    }
+
+    const QColor zeroColor = colorForValue(0.0f);
+    if (root->backgroundMaterial->color() != zeroColor) {
+        root->backgroundMaterial->setColor(zeroColor);
+        root->background->markDirty(QSGNode::DirtyMaterial);
     }
 
     std::vector<contactRecord> records;

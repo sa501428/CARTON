@@ -84,6 +84,30 @@ HicDataController::HicDataController(QObject* parent)
         }
     });
 
+    connect(&m_controlMetadataWatcher, &QFutureWatcher<HicFileMetadata>::finished, this, [this]() {
+        setBusy(false);
+        try {
+            m_controlMetadata = m_controlMetadataWatcher.result();
+            m_controlReady = true;
+            if (!m_genomeId.isEmpty() && !m_controlMetadata.genomeID.empty() &&
+                m_genomeId != QString::fromStdString(m_controlMetadata.genomeID)) {
+                m_controlReady = false;
+                setStatus(QStringLiteral("Control map genome %1 does not match %2.")
+                              .arg(QString::fromStdString(m_controlMetadata.genomeID), m_genomeId));
+            } else {
+                setStatus(QStringLiteral("Control map ready: %1").arg(m_controlFilePath));
+            }
+        } catch (const std::exception& e) {
+            m_controlReady = false;
+            setStatus(QStringLiteral("Failed to open control map: %1").arg(e.what()));
+        }
+        emit controlReadyChanged();
+        if (m_controlReady && matrixNeedsControl(m_matrixType)) {
+            clearLoadedRegion();
+            scheduleRequest();
+        }
+    });
+
     connect(&m_tileWatcher, &QFutureWatcher<TileResult>::finished, this, [this]() {
         TileResult result = m_tileWatcher.result();
         if (result.requestId != m_requestSerial) {
@@ -154,12 +178,15 @@ HicDataController::HicDataController(QObject* parent)
 HicDataController::~HicDataController() {
     m_metadataWatcher.cancel();
     m_metadataWatcher.waitForFinished();
+    m_controlMetadataWatcher.cancel();
+    m_controlMetadataWatcher.waitForFinished();
     m_tileWatcher.cancel();
     m_tileWatcher.waitForFinished();
 }
 
 QString HicDataController::filePath() const { return m_filePath; }
 QString HicDataController::controlFilePath() const { return m_controlFilePath; }
+bool HicDataController::controlReady() const { return m_controlReady; }
 QString HicDataController::genomeId() const { return m_genomeId; }
 QString HicDataController::status() const { return m_status; }
 bool HicDataController::busy() const { return m_busy; }
@@ -243,7 +270,7 @@ void HicDataController::openFile(const QUrl& url) {
         setStatus(QStringLiteral("Choose a local or remote .hic file."));
         return;
     }
-    if (m_metadataWatcher.isRunning() || m_tileWatcher.isRunning()) {
+    if (m_metadataWatcher.isRunning() || m_controlMetadataWatcher.isRunning() || m_tileWatcher.isRunning()) {
         setStatus(QStringLiteral("Please wait for the current load to finish."));
         return;
     }
@@ -277,7 +304,14 @@ void HicDataController::openControlFile(const QUrl& url) {
         setStatus(QStringLiteral("Choose a control .hic file."));
         return;
     }
+    if (m_metadataWatcher.isRunning() || m_controlMetadataWatcher.isRunning() || m_tileWatcher.isRunning()) {
+        setStatus(QStringLiteral("Please wait for the current map load to finish."));
+        return;
+    }
+
     m_controlFilePath = path;
+    m_controlReady = false;
+    m_controlMetadata = HicFileMetadata{};
     clearLoadedRegion();
     {
         QMutexLocker locker(&m_mutex);
@@ -286,14 +320,16 @@ void HicDataController::openControlFile(const QUrl& url) {
         m_controlRecords.shrink_to_fit();
     }
     emit controlFilePathChanged();
+    emit controlReadyChanged();
     emit recordsChanged();
     addRecent(QStringLiteral("recentControlMaps"), path);
-    setStatus(QStringLiteral("Loaded control map %1.").arg(path));
-    if (matrixNeedsControl(m_matrixType)) {
-        m_cache->clear();
-        emit cacheStatsChanged();
-        scheduleRequest();
-    }
+    m_cache->clear();
+    emit cacheStatsChanged();
+    setBusy(true);
+    setStatus(QStringLiteral("Reading control .hic header..."));
+    m_controlMetadataWatcher.setFuture(QtConcurrent::run([path]() {
+        return inspectHicFile(path.toStdString());
+    }));
 }
 
 void HicDataController::openRecentMap(const QString& path) {
@@ -1877,23 +1913,78 @@ void HicDataController::renderRecordsSnapshot(std::vector<contactRecord>& record
                                               int& dataResolution,
                                               int maxRecordsPerLayer) const {
     QMutexLocker locker(&m_mutex);
-    dataResolution = (!m_records.empty() || !m_controlRecords.empty()) && m_loadedKey.resolution > 0
+    const int sourceResolution = (!m_records.empty() || !m_controlRecords.empty()) && m_loadedKey.resolution > 0
         ? m_loadedKey.resolution
         : std::max(1, m_resolution);
-    auto sampleInto = [maxRecordsPerLayer](const std::vector<contactRecord>& source,
-                                           std::vector<contactRecord>& target) {
-        target.clear();
-        if (source.empty()) {
-            return;
-        }
-        const int stride = std::max(1, static_cast<int>(std::ceil(source.size() / static_cast<double>(std::max(1, maxRecordsPerLayer)))));
-        target.reserve((source.size() + static_cast<std::size_t>(stride) - 1) / static_cast<std::size_t>(stride));
-        for (std::size_t i = 0; i < source.size(); i += static_cast<std::size_t>(stride)) {
-            target.push_back(source[i]);
-        }
+    dataResolution = sourceResolution;
+    const bool reflectIntra = m_chrX == m_chrY;
+    const auto recordIsVisible = [this, sourceResolution, reflectIntra](const contactRecord& record) {
+        const auto overlaps = [sourceResolution](qint64 bin, qint64 start, qint64 end) {
+            return bin < end && bin + sourceResolution > start;
+        };
+        const bool direct = overlaps(record.binX, m_x0, m_x1) && overlaps(record.binY, m_y0, m_y1);
+        const bool reflected = reflectIntra && overlaps(record.binY, m_x0, m_x1) && overlaps(record.binX, m_y0, m_y1);
+        return direct || reflected;
     };
-    sampleInto(m_records, records);
-    sampleInto(m_controlRecords, controlRecords);
+
+    auto filterVisible = [&recordIsVisible](const std::vector<contactRecord>& source) {
+        std::vector<contactRecord> visible;
+        visible.reserve(source.size());
+        for (const contactRecord& record : source) {
+            if (recordIsVisible(record)) visible.push_back(record);
+        }
+        return visible;
+    };
+
+    std::vector<contactRecord> visibleRecords = filterVisible(m_records);
+    std::vector<contactRecord> visibleControlRecords = filterVisible(m_controlRecords);
+    const std::size_t limit = static_cast<std::size_t>(std::max(1, maxRecordsPerLayer));
+    const std::size_t largestLayer = std::max(visibleRecords.size(), visibleControlRecords.size());
+    int aggregationFactor = largestLayer > limit
+        ? std::max(2, static_cast<int>(std::ceil(std::sqrt(largestLayer / static_cast<double>(limit)))))
+        : 1;
+
+    auto aggregate = [sourceResolution](const std::vector<contactRecord>& source, int factor) {
+        if (factor <= 1) return source;
+        const qint64 bucketSize = static_cast<qint64>(sourceResolution) * factor;
+        std::unordered_map<quint64, contactRecord> buckets;
+        buckets.reserve(source.size() / static_cast<std::size_t>(factor) + 1);
+        for (const contactRecord& record : source) {
+            const qint64 bucketX = (static_cast<qint64>(record.binX) / bucketSize) * bucketSize;
+            const qint64 bucketY = (static_cast<qint64>(record.binY) / bucketSize) * bucketSize;
+            const quint64 key = (static_cast<quint64>(static_cast<quint32>(bucketX)) << 32U) |
+                                static_cast<quint32>(bucketY);
+            const auto found = buckets.find(key);
+            if (found == buckets.end()) {
+                contactRecord aggregated = record;
+                aggregated.binX = static_cast<int32_t>(bucketX);
+                aggregated.binY = static_cast<int32_t>(bucketY);
+                buckets.emplace(key, aggregated);
+            } else if (std::abs(record.counts) > std::abs(found->second.counts)) {
+                found->second.counts = record.counts;
+            }
+        }
+        std::vector<contactRecord> result;
+        result.reserve(buckets.size());
+        for (const auto& entry : buckets) result.push_back(entry.second);
+        return result;
+    };
+
+    if (aggregationFactor == 1) {
+        records = std::move(visibleRecords);
+        controlRecords = std::move(visibleControlRecords);
+        return;
+    }
+
+    while (true) {
+        records = aggregate(visibleRecords, aggregationFactor);
+        controlRecords = aggregate(visibleControlRecords, aggregationFactor);
+        if ((records.size() <= limit && controlRecords.size() <= limit) || aggregationFactor >= 1024) break;
+        aggregationFactor *= 2;
+    }
+
+    const qint64 aggregatedResolution = static_cast<qint64>(sourceResolution) * aggregationFactor;
+    dataResolution = static_cast<int>(std::min<qint64>(aggregatedResolution, std::numeric_limits<int>::max()));
 }
 
 QString HicDataController::localPathFromUrl(const QUrl& url) {
@@ -1944,6 +2035,12 @@ void HicDataController::applyMetadata(const HicFileMetadata& metadata) {
     m_metadata = metadata;
     clearLoadedRegion();
     m_genomeId = QString::fromStdString(metadata.genomeID);
+    if (!m_controlMetadata.chromosomes.empty()) {
+        const bool wasReady = m_controlReady;
+        m_controlReady = m_genomeId.isEmpty() || m_controlMetadata.genomeID.empty() ||
+                         m_genomeId == QString::fromStdString(m_controlMetadata.genomeID);
+        if (m_controlReady != wasReady) emit controlReadyChanged();
+    }
     if (!metadata.bpResolutions.empty()) {
         m_resolution = metadata.bpResolutions.front();
     }
@@ -2000,6 +2097,43 @@ bool HicDataController::matrixNeedsControl(const QString& matrixType) const {
 bool HicDataController::matrixNeedsPrimary(const QString& matrixType) const {
     return !(matrixType == QStringLiteral("control") || matrixType == QStringLiteral("logcontrol") ||
              matrixType == QStringLiteral("controloe") || matrixType == QStringLiteral("controlpearson"));
+}
+
+bool HicDataController::controlSupportsCurrentView(QString* reason) const {
+    auto fail = [reason](const QString& message) {
+        if (reason) *reason = message;
+        return false;
+    };
+    if (!m_controlReady) {
+        return fail(QStringLiteral("the control header has not finished loading"));
+    }
+    if (!m_genomeId.isEmpty() && !m_controlMetadata.genomeID.empty() &&
+        m_genomeId != QString::fromStdString(m_controlMetadata.genomeID)) {
+        return fail(QStringLiteral("genome %1 does not match %2")
+                        .arg(QString::fromStdString(m_controlMetadata.genomeID), m_genomeId));
+    }
+    const auto hasChromosome = [this](const QString& name) {
+        if (isAllChromosome(name)) return true;
+        return std::any_of(m_controlMetadata.chromosomes.cbegin(), m_controlMetadata.chromosomes.cend(),
+                           [&name](const chromosome& chr) { return QString::fromStdString(chr.name) == name; });
+    };
+    if (!m_chrX.isEmpty() && !hasChromosome(m_chrX)) {
+        return fail(QStringLiteral("chromosome %1 is missing").arg(m_chrX));
+    }
+    if (!m_chrY.isEmpty() && !hasChromosome(m_chrY)) {
+        return fail(QStringLiteral("chromosome %1 is missing").arg(m_chrY));
+    }
+    if (m_resolution > 0 &&
+        std::find(m_controlMetadata.bpResolutions.cbegin(), m_controlMetadata.bpResolutions.cend(), m_resolution) ==
+            m_controlMetadata.bpResolutions.cend()) {
+        return fail(QStringLiteral("%1 bp bins are unavailable").arg(m_resolution));
+    }
+    if (m_norm != QStringLiteral("NONE") &&
+        std::find(m_controlMetadata.normalizations.cbegin(), m_controlMetadata.normalizations.cend(), m_norm.toStdString()) ==
+            m_controlMetadata.normalizations.cend()) {
+        return fail(QStringLiteral("normalization %1 is unavailable").arg(m_norm));
+    }
+    return true;
 }
 
 bool HicDataController::matrixIsVs(const QString& matrixType) const {
@@ -2064,9 +2198,12 @@ bool HicDataController::validateMatrixMode(const QString& matrixType) {
             return false;
         }
     }
-    if (matrixNeedsControl(matrixType) && m_controlFilePath.isEmpty()) {
-        setStatus(QStringLiteral("Load a control .hic file before using %1 mode.").arg(matrixType));
-        return false;
+    if (matrixNeedsControl(matrixType)) {
+        QString reason;
+        if (!controlSupportsCurrentView(&reason)) {
+            setStatus(QStringLiteral("Cannot use %1: %2.").arg(matrixType, reason));
+            return false;
+        }
     }
     return true;
 }
