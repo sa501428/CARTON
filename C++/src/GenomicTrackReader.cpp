@@ -160,6 +160,8 @@ struct BigHeader {
 };
 
 struct LeafChunk {
+    quint32 startChromIx = 0;
+    quint32 startBase = 0;
     quint64 offset = 0;
     quint64 size = 0;
 };
@@ -380,14 +382,14 @@ void walkRTree(BinaryReader& reader, qint64 offset, QVector<LeafChunk>& chunks) 
     reader.u8();
     const int count = reader.u16();
     for (int i = 0; i < count; ++i) {
-        reader.u32();
-        reader.u32();
+        const quint32 startChromIx = reader.u32();
+        const quint32 startBase = reader.u32();
         reader.u32();
         reader.u32();
         const quint64 dataOffset = reader.u64();
         if (type == 1) {
             const quint64 dataSize = reader.u64();
-            chunks.push_back({dataOffset, dataSize});
+            chunks.push_back({startChromIx, startBase, dataOffset, dataSize});
         } else {
             walkRTree(reader, static_cast<qint64>(dataOffset), chunks);
         }
@@ -415,12 +417,34 @@ GenomicTrackReadResult parseBigBinary(const QString& path, const QByteArray& byt
     result.format = header.bigWig ? QStringLiteral("bigWig") : QStringLiteral("bigBed");
     const QString defaultName = QFileInfo(path).baseName();
     const std::map<int, QString> idToName = readChromTree(reader, header.chromTreeOffset);
-    const QVector<LeafChunk> chunks = readRTreeLeaves(reader, header.fullIndexOffset);
+    QVector<LeafChunk> chunks = readRTreeLeaves(reader, header.fullIndexOffset);
     if (idToName.empty() || chunks.empty()) {
         result.warning = QStringLiteral("Could not read bigWig/bigBed chromosome or data index.");
         return result;
     }
-    for (const LeafChunk& chunk : chunks) {
+    // R-tree leaves are not necessarily visited in genome order, so without this
+    // sort a capped file (see below) would only ever show data for whichever
+    // chromosome happened to come first in the index rather than the whole genome.
+    std::sort(chunks.begin(), chunks.end(), [](const LeafChunk& a, const LeafChunk& b) {
+        if (a.startChromIx != b.startChromIx) return a.startChromIx < b.startChromIx;
+        return a.startBase < b.startBase;
+    });
+    // We don't know the item density up front, so use total compressed bytes as a
+    // rough proxy for total feature count and, if that exceeds what we can hold,
+    // sample chunks evenly across the whole (now genome-ordered) file instead of
+    // reading a prefix. That way a capped load still covers every chromosome,
+    // just more thinly, rather than the first one encountered and nothing else.
+    quint64 totalBytes = 0;
+    for (const LeafChunk& chunk : chunks) totalBytes += chunk.size;
+    constexpr quint64 kAssumedBytesPerFeature = 24;
+    const quint64 affordableBytes = static_cast<quint64>(kMaxResidentTrackFeatures) * kAssumedBytesPerFeature;
+    qsizetype chunkStride = 1;
+    if (totalBytes > affordableBytes) {
+        chunkStride = static_cast<qsizetype>(std::max<quint64>(1, (totalBytes + affordableBytes - 1) / affordableBytes));
+    }
+    bool sampled = chunkStride > 1;
+    for (qsizetype chunkIndex = 0; chunkIndex < chunks.size(); chunkIndex += chunkStride) {
+        const LeafChunk& chunk = chunks[chunkIndex];
         QByteArray block = reader.slice(static_cast<qint64>(chunk.offset), static_cast<qint64>(chunk.size));
         if (header.uncompressBufSize > 0) {
             block = inflateChunk(block, static_cast<int>(header.uncompressBufSize));
@@ -459,7 +483,7 @@ GenomicTrackReadResult parseBigBinary(const QString& path, const QByteArray& byt
                     break;
                 }
                 if (!f.chr.isEmpty() && f.end > f.start && !appendTrackFeature(result.features, f)) {
-                    result.warning = QStringLiteral("Track was capped at %1 intervals to keep memory bounded.").arg(kMaxResidentTrackFeatures);
+                    result.warning = QStringLiteral("Track was capped at %1 intervals (sampled across the genome) to keep memory bounded.").arg(kMaxResidentTrackFeatures);
                     return result;
                 }
             }
@@ -478,11 +502,14 @@ GenomicTrackReadResult parseBigBinary(const QString& path, const QByteArray& byt
                 f.value = scoreOk ? score : 1.0;
                 if (fields.size() > 5) f.color = parseColor(fields[5], f.color);
                 if (!f.chr.isEmpty() && f.end > f.start && !appendTrackFeature(result.features, f)) {
-                    result.warning = QStringLiteral("Track was capped at %1 intervals to keep memory bounded.").arg(kMaxResidentTrackFeatures);
+                    result.warning = QStringLiteral("Track was capped at %1 intervals (sampled across the genome) to keep memory bounded.").arg(kMaxResidentTrackFeatures);
                     return result;
                 }
             }
         }
+    }
+    if (sampled && result.warning.isEmpty()) {
+        result.warning = QStringLiteral("Track was sampled across the genome (1 of every %1 index blocks) to keep memory bounded.").arg(chunkStride);
     }
     return result;
 }

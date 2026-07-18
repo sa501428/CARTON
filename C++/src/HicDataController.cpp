@@ -48,6 +48,19 @@ quint64 recordKey(qint64 x, qint64 y) {
     const quint64 hy = static_cast<quint64>(std::hash<qint64>{}(y));
     return hx ^ (hy + 0x9e3779b97f4a7c15ULL + (hx << 6U) + (hx >> 2U));
 }
+
+// Track/annotation/cytoband files almost always use UCSC-style "chr1" names,
+// while .hic files (especially those produced by older Juicer pipelines) often
+// store bare names like "1". Without this, every 1D overlay silently renders
+// zero features whenever the two files disagree on the prefix.
+QString stripChrPrefix(const QString& name) {
+    return name.startsWith(QStringLiteral("chr"), Qt::CaseInsensitive) ? name.mid(3) : name;
+}
+
+bool chrNamesEqual(const QString& a, const QString& b) {
+    if (a.compare(b, Qt::CaseInsensitive) == 0) return true;
+    return stripChrPrefix(a).compare(stripChrPrefix(b), Qt::CaseInsensitive) == 0;
+}
 }
 
 HicDataController::HicDataController(QObject* parent)
@@ -497,7 +510,7 @@ QVariantList HicDataController::visibleCytobands(bool xAxis) const {
     const qint64 start = xAxis ? m_x0 : m_y0;
     const qint64 end = xAxis ? m_x1 : m_y1;
     for (const Cytoband& band : m_cytobands) {
-        if (band.chr != chr || band.end <= start || band.start >= end) continue;
+        if (!chrNamesEqual(band.chr, chr) || band.end <= start || band.start >= end) continue;
         QVariantMap item;
         item["start"] = std::max(start, band.start);
         item["end"] = std::min(end, band.end);
@@ -659,7 +672,7 @@ QVariantList HicDataController::visibleTrackSegments(bool xAxis) const {
         const auto signedLog = [](double value) { return std::copysign(std::log1p(std::abs(value)), value); };
         QVector<const TrackFeature*> visible;
         for (const TrackFeature& segment : track.features) {
-            if (segment.chr == chr && segment.end > start && segment.start < end)
+            if (chrNamesEqual(segment.chr, chr) && segment.end > start && segment.start < end)
                 visible.push_back(&segment);
         }
         double rangeMin = track.minValue;
@@ -706,10 +719,10 @@ QVariantList HicDataController::visibleAnnotations() const {
         if (layer.sparse && emitted >= m_sparseFeatureLimit) {
             break;
         }
-        const bool direct = annotation.chr1 == m_chrX && annotation.chr2 == m_chrY &&
+        const bool direct = chrNamesEqual(annotation.chr1, m_chrX) && chrNamesEqual(annotation.chr2, m_chrY) &&
                             annotation.end1 >= m_x0 && annotation.start1 <= m_x1 &&
                             annotation.end2 >= m_y0 && annotation.start2 <= m_y1;
-        const bool reflected = annotation.chr1 == m_chrY && annotation.chr2 == m_chrX &&
+        const bool reflected = chrNamesEqual(annotation.chr1, m_chrY) && chrNamesEqual(annotation.chr2, m_chrX) &&
                                annotation.end1 >= m_y0 && annotation.start1 <= m_y1 &&
                                annotation.end2 >= m_x0 && annotation.start2 <= m_x1;
         if (!direct && !reflected) {
@@ -729,7 +742,7 @@ QVariantList HicDataController::visibleAnnotations() const {
         values.push_back(item);
         ++emitted;
 
-        if (m_chrX == m_chrY && annotation.chr1 == annotation.chr2 &&
+        if (m_chrX == m_chrY && chrNamesEqual(annotation.chr1, annotation.chr2) &&
             (annotation.start1 != annotation.start2 || annotation.end1 != annotation.end2)) {
             QVariantMap mirror = item;
             mirror["x0"] = item["y0"];
@@ -782,8 +795,8 @@ QString HicDataController::positionText(double xFraction, double yFraction) cons
         if (!track.visible || track.collapsed) continue;
         QStringList values;
         for (const TrackFeature& feature : track.features) {
-            if ((feature.chr == m_chrX && x >= feature.start && x < feature.end) ||
-                (feature.chr == m_chrY && y >= feature.start && y < feature.end)) {
+            if ((chrNamesEqual(feature.chr, m_chrX) && x >= feature.start && x < feature.end) ||
+                (chrNamesEqual(feature.chr, m_chrY) && y >= feature.start && y < feature.end)) {
                 const QString label = feature.label.isEmpty() ? QString() : feature.label + QStringLiteral("=");
                 values.push_back(label + QString::number(feature.value, 'g', 5));
                 if (values.size() >= 3) break;
@@ -797,10 +810,10 @@ QString HicDataController::positionText(double xFraction, double yFraction) cons
     for (const AnnotationLayer& layer : m_annotationLayers) {
         if (!layer.visible) continue;
         for (const Annotation2D& annotation : layer.annotations) {
-            const bool direct = annotation.chr1 == m_chrX && annotation.chr2 == m_chrY &&
+            const bool direct = chrNamesEqual(annotation.chr1, m_chrX) && chrNamesEqual(annotation.chr2, m_chrY) &&
                                 x >= annotation.start1 && x < annotation.end1 &&
                                 y >= annotation.start2 && y < annotation.end2;
-            const bool mirrored = m_chrX == m_chrY && annotation.chr1 == annotation.chr2 &&
+            const bool mirrored = m_chrX == m_chrY && chrNamesEqual(annotation.chr1, annotation.chr2) &&
                                   x >= annotation.start2 && x < annotation.end2 &&
                                   y >= annotation.start1 && y < annotation.end1;
             if (direct || mirrored) {
@@ -882,6 +895,8 @@ void HicDataController::goTo(const QString& xLocation, const QString& yLocation)
                 if (track.name.compare(gene, Qt::CaseInsensitive) == 0 ||
                     segment.label.compare(gene, Qt::CaseInsensitive) == 0) {
                     chr = segment.chr;
+                    const chromosome resolved = chromosomeByName(chr);
+                    if (!resolved.name.empty()) chr = QString::fromStdString(resolved.name);
                     const qint64 span = std::max<qint64>(m_resolution * 100LL, segment.end - segment.start);
                     const qint64 mid = (segment.start + segment.end) / 2;
                     start = std::max<qint64>(0, mid - span / 2);
@@ -1931,7 +1946,7 @@ void HicDataController::selectAnnotationAt(double xFraction, double yFraction) {
     for (const AnnotationLayer& layer : m_annotationLayers) {
         if (!layer.visible) continue;
         for (const Annotation2D& annotation : layer.annotations) {
-            if (annotation.chr1 == m_chrX && annotation.chr2 == m_chrY &&
+            if (chrNamesEqual(annotation.chr1, m_chrX) && chrNamesEqual(annotation.chr2, m_chrY) &&
                 x >= annotation.start1 && x <= annotation.end1 && y >= annotation.start2 && y <= annotation.end2) {
                 m_selectedAnnotationId = annotation.id;
                 emit annotationsChanged();
@@ -2162,6 +2177,14 @@ chromosome HicDataController::chromosomeByName(const QString& name) const {
             return chr;
         }
     }
+    // Fall back to a chr-prefix-insensitive match so a chromosome typed or
+    // looked up in a different naming convention than the .hic file's own
+    // (e.g. "chr1" vs "1") still resolves.
+    for (const chromosome& chr : m_metadata.chromosomes) {
+        if (chrNamesEqual(QString::fromStdString(chr.name), name)) {
+            return chr;
+        }
+    }
     return chromosome{};
 }
 
@@ -2213,7 +2236,7 @@ bool HicDataController::controlSupportsCurrentView(QString* reason) const {
     const auto hasChromosome = [this](const QString& name) {
         if (isAllChromosome(name)) return true;
         return std::any_of(m_controlMetadata.chromosomes.cbegin(), m_controlMetadata.chromosomes.cend(),
-                           [&name](const chromosome& chr) { return QString::fromStdString(chr.name) == name; });
+                           [&name](const chromosome& chr) { return chrNamesEqual(QString::fromStdString(chr.name), name); });
     };
     if (!m_chrX.isEmpty() && !hasChromosome(m_chrX)) {
         return fail(QStringLiteral("chromosome %1 is missing").arg(m_chrX));

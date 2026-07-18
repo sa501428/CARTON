@@ -82,5 +82,25 @@ int main(int argc, char** argv) {
     const QString png = temporary.filePath(QStringLiteral("figure.png"));
     if (!require(controller.exportFigurePng(QUrl::fromLocalFile(png), 640, 480), "PNG export")) return 1;
     if (!require(!QImage(png).isNull(), "PNG is readable")) return 1;
+
+    // Regression test: many .hic files (e.g. classic Juicer output) name
+    // chromosomes without a "chr" prefix ("1") while bedGraph/BED/wig/bigWig
+    // tracks almost always use UCSC-style names ("chr1"). Track features must
+    // still be considered visible in that case instead of silently matching
+    // nothing.
+    HicDataController prefixController;
+    prefixController.setChrX(QStringLiteral("1"));
+    prefixController.setChrY(QStringLiteral("1"));
+    prefixController.setX0(0);
+    prefixController.setX1(1000);
+    prefixController.setY0(0);
+    prefixController.setY1(1000);
+    const QString prefixTrack = temporary.filePath(QStringLiteral("signal2.bedgraph"));
+    if (!require(writeFile(prefixTrack, "chr1\t0\t100\t2.5\nchr1\t100\t200\t-1.5\n"), "write chr-prefixed track"))
+        return 1;
+    prefixController.loadTrackFromPath(prefixTrack);
+    if (!require(prefixController.trackCount() == 1, "chr-prefixed track parsing")) return 1;
+    const QVariantList prefixSegments = prefixController.visibleTrackSegments(true);
+    if (!require(prefixSegments.size() == 2, "chr-prefix-insensitive track visibility")) return 1;
     return 0;
 }
