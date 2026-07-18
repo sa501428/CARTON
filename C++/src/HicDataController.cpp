@@ -962,6 +962,7 @@ void HicDataController::goTo(const QString& xLocation, const QString& yLocation)
         adaptResolutionToSpan(std::max(m_x1 - m_x0, m_y1 - m_y0));
     }
     clampRegion();
+    applyViewportAspectRatio();
     emit viewChanged();
     scheduleRequest();
 }
@@ -1242,6 +1243,7 @@ void HicDataController::setWholeGenomeView() {
     m_y1 = length;
     adaptResolutionToSpan(length);
     clampRegion();
+    applyViewportAspectRatio();
     emit viewChanged();
     scheduleRequest();
 }
@@ -1302,6 +1304,7 @@ void HicDataController::zoomToFractions(double xStartFraction, double yStartFrac
     if (!m_yLocusLocked) { m_y0 = nextY0; m_y1 = nextY1; }
     adaptResolutionToSpan(std::max(m_x1 - m_x0, m_y1 - m_y0));
     clampRegion();
+    applyViewportAspectRatio();
     emit viewChanged();
     scheduleRequest();
 }
@@ -1382,10 +1385,25 @@ void HicDataController::pan(double dxFraction, double dyFraction) {
 }
 
 void HicDataController::fitViewToAspectRatio(double aspectRatio) {
-    if (!std::isfinite(aspectRatio) || aspectRatio <= 0.0 || m_chrX.isEmpty() || m_chrY.isEmpty()) {
+    if (!std::isfinite(aspectRatio) || aspectRatio <= 0.0) {
         return;
     }
-    aspectRatio = std::clamp(aspectRatio, 0.2, 5.0);
+    m_viewportAspectRatio = std::clamp(aspectRatio, 0.2, 5.0);
+    if (m_chrX.isEmpty() || m_chrY.isEmpty() || !applyViewportAspectRatio()) {
+        return;
+    }
+    adaptResolutionToSpan(std::max(m_x1 - m_x0, m_y1 - m_y0));
+    clampRegion();
+    applyViewportAspectRatio();
+    emit viewChanged();
+    scheduleRequest();
+}
+
+bool HicDataController::applyViewportAspectRatio() {
+    const double aspectRatio = m_viewportAspectRatio;
+    if (!std::isfinite(aspectRatio) || aspectRatio <= 0.0 || m_chrX.isEmpty() || m_chrY.isEmpty()) {
+        return false;
+    }
     const qint64 maxX = std::max<qint64>(m_resolution, chromosomeLength(m_chrX));
     const qint64 maxY = std::max<qint64>(m_resolution, chromosomeLength(m_chrY));
     const qint64 currentXSpan = std::max<qint64>(m_resolution, m_x1 - m_x0);
@@ -1413,7 +1431,7 @@ void HicDataController::fitViewToAspectRatio(double aspectRatio) {
 
     targetXSpan = std::min(targetXSpan, maxX);
     targetYSpan = std::min(targetYSpan, maxY);
-    if (targetXSpan == currentXSpan && targetYSpan == currentYSpan) return;
+    if (targetXSpan == currentXSpan && targetYSpan == currentYSpan) return false;
 
     const qint64 centerX = m_x0 + currentXSpan / 2;
     const qint64 centerY = m_y0 + currentYSpan / 2;
@@ -1425,10 +1443,8 @@ void HicDataController::fitViewToAspectRatio(double aspectRatio) {
         m_y0 = centerY - targetYSpan / 2;
         m_y1 = m_y0 + targetYSpan;
     }
-    adaptResolutionToSpan(std::max(targetXSpan, targetYSpan));
     clampRegion();
-    emit viewChanged();
-    scheduleRequest();
+    return true;
 }
 
 void HicDataController::resetView() {
@@ -1442,6 +1458,7 @@ void HicDataController::resetView() {
     m_y1 = chromosomeLength(m_chrY);
     adaptResolutionToSpan(std::max(m_x1 - m_x0, m_y1 - m_y0));
     clampRegion();
+    applyViewportAspectRatio();
     emit viewChanged();
     scheduleRequest();
 }
@@ -1529,6 +1546,7 @@ void HicDataController::setResolution(int value) {
     m_resolution = value;
     clearLoadedRegion();
     clampRegion();
+    applyViewportAspectRatio();
     emit viewChanged();
     scheduleRequest();
 }
@@ -2587,6 +2605,7 @@ bool HicDataController::applyViewState(const QVariantMap& state) {
         m_resolution = state.value("resolution").toInt();
     }
     clampRegion();
+    applyViewportAspectRatio();
     emit viewChanged();
     return true;
 }
@@ -2691,6 +2710,7 @@ void HicDataController::restoreView(const QVariantMap& view) {
     m_y0 = view.value("y0").toLongLong();
     m_y1 = view.value("y1").toLongLong();
     clampRegion();
+    applyViewportAspectRatio();
     m_restoringView = false;
     emit viewHistoryChanged();
     emit viewChanged();

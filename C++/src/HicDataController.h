@@ -330,6 +330,7 @@ private:
                               const std::vector<contactRecord>& controlRecords);
     void pushViewHistory();
     void restoreView(const QVariantMap& view);
+    bool applyViewportAspectRatio();
     void orientTileForRequestedAxes(HicTile& tile) const;
     HicTileKey paddedRequestKey(const HicTileKey& visibleKey) const;
     bool loadedKeyCoversCurrentView(const HicTileKey& visibleKey) const;
@@ -483,6 +484,7 @@ private:
     QVector<QVariantMap> m_redoStack;
     bool m_restoringView = false;
     bool m_interactionActive = false;
+    double m_viewportAspectRatio = 1.0;
 };
 
 #endif
