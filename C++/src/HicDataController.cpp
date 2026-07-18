@@ -1315,16 +1315,46 @@ void HicDataController::requestVisibleRegion() {
 }
 
 void HicDataController::zoom(double factor, double centerX, double centerY) {
-    if (factor <= 0.0 || m_chrX.isEmpty() || m_chrY.isEmpty()) {
+    if (!std::isfinite(factor) || factor <= 0.0 || m_chrX.isEmpty() || m_chrY.isEmpty()) {
         return;
     }
 
+    centerX = std::clamp(centerX, 0.0, 1.0);
+    centerY = std::clamp(centerY, 0.0, 1.0);
     pushViewHistory();
     const qint64 width = std::max<qint64>(m_resolution, m_x1 - m_x0);
     const qint64 height = std::max<qint64>(m_resolution, m_y1 - m_y0);
     const qint64 minSpan = minimumZoomSpan();
-    const qint64 nextWidth = std::max<qint64>(minSpan, static_cast<qint64>(width / factor));
-    const qint64 nextHeight = std::max<qint64>(minSpan, static_cast<qint64>(height / factor));
+    const qint64 maxWidth = std::max<qint64>(m_resolution, chromosomeLength(m_chrX));
+    const qint64 maxHeight = std::max<qint64>(m_resolution, chromosomeLength(m_chrY));
+    qint64 nextWidth = width;
+    qint64 nextHeight = height;
+
+    if (!m_xLocusLocked && !m_yLocusLocked) {
+        // Apply one scale to both genomic spans. Clamping each axis separately
+        // makes rectangular viewports lose their aspect ratio as soon as the
+        // shorter axis reaches its minimum span or a chromosome boundary.
+        const double minScaleX = static_cast<double>(std::min(minSpan, maxWidth)) / width;
+        const double minScaleY = static_cast<double>(std::min(minSpan, maxHeight)) / height;
+        const double maxScaleX = static_cast<double>(maxWidth) / width;
+        const double maxScaleY = static_cast<double>(maxHeight) / height;
+        const double lowerScale = std::max(minScaleX, minScaleY);
+        const double upperScale = std::min(maxScaleX, maxScaleY);
+        const double scale = std::clamp(1.0 / factor, lowerScale, upperScale);
+        nextWidth = std::clamp<qint64>(qRound64(width * scale),
+                                       std::min(minSpan, maxWidth), maxWidth);
+        nextHeight = std::clamp<qint64>(qRound64(height * scale),
+                                        std::min(minSpan, maxHeight), maxHeight);
+    } else {
+        if (!m_xLocusLocked) {
+            nextWidth = std::clamp<qint64>(qRound64(width / factor),
+                                           std::min(minSpan, maxWidth), maxWidth);
+        }
+        if (!m_yLocusLocked) {
+            nextHeight = std::clamp<qint64>(qRound64(height / factor),
+                                            std::min(minSpan, maxHeight), maxHeight);
+        }
+    }
     const qint64 centerGenomeX = m_x0 + static_cast<qint64>(width * centerX);
     const qint64 centerGenomeY = m_y0 + static_cast<qint64>(height * centerY);
 
