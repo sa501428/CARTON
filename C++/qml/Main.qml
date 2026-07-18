@@ -49,8 +49,9 @@ ApplicationWindow {
     property bool straightEdgeEnabled: false
     property bool diagonalEdgeEnabled: false
     property int pendingAnnotationLayerExport: -1
-    property bool navigationOpen: true
-    property bool inspectorOpen: true
+    property bool navigationOpen: false
+    property bool inspectorOpen: false
+    property bool trackPanelsOpen: false
     property bool comparisonOpen: false
     property bool linkNavigation: true
     property bool linkCrosshair: true
@@ -714,6 +715,16 @@ ApplicationWindow {
             }
 
             AppToolButton {
+                text: "Tracks"
+                enabled: !!activeController
+                idleColor: trackPanelsOpen ? Qt.rgba(1, 1, 1, 0.1) : "transparent"
+                Accessible.name: trackPanelsOpen ? "Collapse genomic track panels" : "Expand genomic track panels"
+                ToolTip.visible: hovered
+                ToolTip.text: Accessible.name
+                onClicked: trackPanelsOpen = !trackPanelsOpen
+            }
+
+            AppToolButton {
                 text: "2D"
                 enabled: !!activeController
                 onClicked: annotationDialog.open()
@@ -766,9 +777,9 @@ ApplicationWindow {
         NavigationPanel {
             id: navigationPanel
             visible: navigationOpen
-            SplitView.preferredWidth: Theme.sidebarWidth
-            SplitView.minimumWidth: 220
-            SplitView.maximumWidth: 420
+            SplitView.preferredWidth: 240
+            SplitView.minimumWidth: 180
+            SplitView.maximumWidth: 340
             controller: activeController
             onToggleRequested: navigationOpen = false
             onOpenDatasetRequested: openDialog.open()
@@ -972,17 +983,19 @@ ApplicationWindow {
                         id: plotFrame
                         anchors.centerIn: parent
                         anchors.horizontalCenterOffset: comparisonOpen ? -parent.width * 0.25 : 0
-                        width: Math.max(240, Math.min((comparisonOpen ? parent.width * 0.5 : parent.width) - 58, parent.height - 90))
+                        anchors.verticalCenterOffset: -16
+                        width: Math.max(240, Math.min((comparisonOpen ? parent.width * 0.5 : parent.width) - 12,
+                                                     parent.height - 40))
                         height: width
                         property int axisSize: {
-                            if (!activeController) return 72
+                            if (!activeController || !trackPanelsOpen) return 46
                             var tracks = activeController.trackSummaries()
-                            var extent = 54
+                            var extent = 38
                             for (var i = 0; i < tracks.length; ++i) {
                                 if (tracks[i].visible && !tracks[i].collapsed)
                                     extent += Math.max(20, Math.min(80, tracks[i].height))
                             }
-                            return Math.max(72, Math.min(280, extent))
+                            return Math.max(46, Math.min(220, extent))
                         }
 
                         Rectangle {
@@ -1024,7 +1037,7 @@ ApplicationWindow {
                                 ctx.fillStyle = Theme.surfaceSunken
                                 ctx.fillRect(0, 0, width, height)
                                 if (!activeController) return
-                                var segments = activeController.visibleTrackSegments(true)
+                                var segments = trackPanelsOpen ? activeController.visibleTrackSegments(true) : []
                                 var span = Math.max(1, activeController.x1 - activeController.x0)
                                 var axisLabelHeight = 18
                                 var axisY = height - axisLabelHeight - 0.5
@@ -1065,7 +1078,7 @@ ApplicationWindow {
                                 }
                                 var trackTop = activeController.showChromosomeContext ? 10 : 2
                                 var trackBottom = axisY - 3
-                                var summaries = activeController.trackSummaries()
+                                var summaries = trackPanelsOpen ? activeController.trackSummaries() : []
                                 var totalHeight = 0
                                 var laneStart = []
                                 var laneSize = []
@@ -1112,7 +1125,7 @@ ApplicationWindow {
                                 ctx.fillStyle = Theme.surfaceSunken
                                 ctx.fillRect(0, 0, width, height)
                                 if (!activeController) return
-                                var segments = activeController.visibleTrackSegments(false)
+                                var segments = trackPanelsOpen ? activeController.visibleTrackSegments(false) : []
                                 var span = Math.max(1, activeController.y1 - activeController.y0)
                                 var labelWidth = 42
                                 var axisX = width - 0.5
@@ -1153,7 +1166,7 @@ ApplicationWindow {
                                 }
                                 var trackLeft = activeController.showChromosomeContext ? 10 : 2
                                 var trackRight = axisX - labelWidth - 2
-                                var summaries = activeController.trackSummaries()
+                                var summaries = trackPanelsOpen ? activeController.trackSummaries() : []
                                 var totalHeight = 0
                                 var laneStart = []
                                 var laneSize = []
@@ -1681,8 +1694,9 @@ ApplicationWindow {
 
         Rectangle {
             visible: inspectorOpen
-            SplitView.preferredWidth: 360
-            SplitView.minimumWidth: 300
+            SplitView.preferredWidth: 300
+            SplitView.minimumWidth: 260
+            SplitView.maximumWidth: 420
             color: Theme.surfaceAlt
             border.color: Theme.border
 

@@ -258,6 +258,7 @@ public:
     std::vector<contactRecord> controlRecordsSnapshot() const;
     void renderRecordsSnapshot(std::vector<contactRecord>& records,
                                std::vector<contactRecord>& controlRecords,
+                               int& dataResolution,
                                int maxRecordsPerLayer) const;
 
 signals:
@@ -318,6 +319,7 @@ private:
     bool validateMatrixMode(const QString& matrixType);
     void clampRegion();
     void adaptResolutionToSpan(qint64 span);
+    qint64 minimumZoomSpan() const;
     void updateAutoColorScale(const std::vector<contactRecord>& records);
     void updateAutoColorScale(const std::vector<contactRecord>& records,
                               const std::vector<contactRecord>& controlRecords);

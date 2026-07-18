@@ -119,6 +119,25 @@ set_target_properties(carton PROPERTIES
     MACOSX_BUNDLE_COPYRIGHT "Copyright © 2024 CARTON"
 )
 
+# macdeployqt copies frameworks, plugins, QML modules, and a bundle signature
+# into carton.app. Those files are not CMake outputs, so a later incremental
+# build can otherwise relink only the executable and leave a mixed bundle: the
+# executable loads Homebrew Qt while the stale platform plugin loads the copied
+# Qt runtime. Qt detects the duplicate runtime and aborts before main starts.
+# Keep the build-tree app development-only; packaging deploys a separate copy.
+if(APPLE)
+    add_custom_target(carton_clean_stale_deployment
+        COMMAND "${CMAKE_COMMAND}" -E rm -rf
+            "$<TARGET_BUNDLE_DIR:carton>/Contents/Frameworks"
+            "$<TARGET_BUNDLE_DIR:carton>/Contents/PlugIns"
+            "$<TARGET_BUNDLE_DIR:carton>/Contents/Resources/qml"
+            "$<TARGET_BUNDLE_DIR:carton>/Contents/_CodeSignature"
+        COMMENT "Removing stale deployed Qt runtime from development bundle"
+        VERBATIM
+    )
+    add_dependencies(carton carton_clean_stale_deployment)
+endif()
+
 # ── Install ────────────────────────────────────────────────────────────────────
 install(TARGETS carton
     BUNDLE  DESTINATION .

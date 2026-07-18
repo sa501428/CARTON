@@ -919,11 +919,12 @@ void HicDataController::goTo(const QString& xLocation, const QString& yLocation)
     if (!m_yLocusLocked) m_chrY = nextChrY;
     if (requestedResolution > 0 && !m_resolutionLocked) {
         m_resolution = requestedResolution;
-    } else if (!m_resolutionLocked && m_resolution <= 0) {
-        m_resolution = std::max<qint64>(1, std::max(nextX1 - nextX0, nextY1 - nextY0) / 1000);
     }
     if (!m_xLocusLocked) { m_x0 = nextX0; m_x1 = nextX1; }
     if (!m_yLocusLocked) { m_y0 = nextY0; m_y1 = nextY1; }
+    if (requestedResolution <= 0 && !m_resolutionLocked) {
+        adaptResolutionToSpan(std::max(m_x1 - m_x0, m_y1 - m_y0));
+    }
     clampRegion();
     emit viewChanged();
     scheduleRequest();
@@ -1203,6 +1204,7 @@ void HicDataController::setWholeGenomeView() {
     const qint64 length = genomeLength();
     m_x1 = length;
     m_y1 = length;
+    adaptResolutionToSpan(length);
     clampRegion();
     emit viewChanged();
     scheduleRequest();
@@ -1262,6 +1264,7 @@ void HicDataController::zoomToFractions(double xStartFraction, double yStartFrac
     const qint64 nextY1 = m_y0 + static_cast<qint64>(height * yb);
     if (!m_xLocusLocked) { m_x0 = nextX0; m_x1 = nextX1; }
     if (!m_yLocusLocked) { m_y0 = nextY0; m_y1 = nextY1; }
+    adaptResolutionToSpan(std::max(m_x1 - m_x0, m_y1 - m_y0));
     clampRegion();
     emit viewChanged();
     scheduleRequest();
@@ -1283,8 +1286,9 @@ void HicDataController::zoom(double factor, double centerX, double centerY) {
     pushViewHistory();
     const qint64 width = std::max<qint64>(m_resolution, m_x1 - m_x0);
     const qint64 height = std::max<qint64>(m_resolution, m_y1 - m_y0);
-    const qint64 nextWidth = std::max<qint64>(m_resolution * 20LL, static_cast<qint64>(width / factor));
-    const qint64 nextHeight = std::max<qint64>(m_resolution * 20LL, static_cast<qint64>(height / factor));
+    const qint64 minSpan = minimumZoomSpan();
+    const qint64 nextWidth = std::max<qint64>(minSpan, static_cast<qint64>(width / factor));
+    const qint64 nextHeight = std::max<qint64>(minSpan, static_cast<qint64>(height / factor));
     const qint64 centerGenomeX = m_x0 + static_cast<qint64>(width * centerX);
     const qint64 centerGenomeY = m_y0 + static_cast<qint64>(height * centerY);
 
@@ -1870,8 +1874,12 @@ std::vector<contactRecord> HicDataController::controlRecordsSnapshot() const {
 
 void HicDataController::renderRecordsSnapshot(std::vector<contactRecord>& records,
                                               std::vector<contactRecord>& controlRecords,
+                                              int& dataResolution,
                                               int maxRecordsPerLayer) const {
     QMutexLocker locker(&m_mutex);
+    dataResolution = (!m_records.empty() || !m_controlRecords.empty()) && m_loadedKey.resolution > 0
+        ? m_loadedKey.resolution
+        : std::max(1, m_resolution);
     auto sampleInto = [maxRecordsPerLayer](const std::vector<contactRecord>& source,
                                            std::vector<contactRecord>& target) {
         target.clear();
@@ -2090,6 +2098,22 @@ void HicDataController::adaptResolutionToSpan(qint64 span) {
         }
     }
     m_resolution = best;
+}
+
+qint64 HicDataController::minimumZoomSpan() const {
+    int finestResolution = std::max(1, m_resolution);
+    if (!m_resolutionLocked && !m_metadata.bpResolutions.empty()) {
+        finestResolution = std::numeric_limits<int>::max();
+        for (const int candidate : m_metadata.bpResolutions) {
+            if (candidate > 0) {
+                finestResolution = std::min(finestResolution, candidate);
+            }
+        }
+        if (finestResolution == std::numeric_limits<int>::max()) {
+            finestResolution = std::max(1, m_resolution);
+        }
+    }
+    return static_cast<qint64>(finestResolution) * 20LL;
 }
 
 std::vector<contactRecord> HicDataController::transformRecordsForDisplay(const QString& matrixType,

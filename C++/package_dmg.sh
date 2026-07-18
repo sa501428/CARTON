@@ -11,7 +11,9 @@ DMG_OUTPUT="${BUILD_DIR}/CARTON-${VERSION}-macOS.dmg"
 CONFIGURE_LOG="${BUILD_DIR}/configure.log"
 DEPLOY_LOG="${BUILD_DIR}/macdeployqt.log"
 SMOKE_LOG="${BUILD_DIR}/package-smoke.log"
-APP_BUNDLE="${BUILD_DIR}/carton.app"
+BUILD_APP_BUNDLE="${BUILD_DIR}/carton.app"
+PACKAGE_DIR="${BUILD_DIR}/package"
+APP_BUNDLE="${PACKAGE_DIR}/CARTON.app"
 
 require_tool() {
     if ! command -v "$1" >/dev/null 2>&1; then
@@ -40,29 +42,33 @@ if [[ ! ${JOBS} =~ ^[1-9][0-9]*$ ]]; then
 fi
 
 # ── 1. Generate carton.icns from logo.png ─────────────────────────────────────
-echo "→ Generating app icon from logo.png…"
-ICONSET="${BUILD_DIR}/carton.iconset"
-rm -rf "${ICONSET}"
-mkdir -p "${ICONSET}"
+if [[ -f ${ICNS_DST} && ${ICNS_DST} -nt ${LOGO} && ${CARTON_REGENERATE_ICON:-0} != 1 ]]; then
+    echo "→ Reusing current app icon (${ICNS_DST})"
+else
+    echo "→ Generating app icon from logo.png…"
+    ICONSET="${BUILD_DIR}/carton.iconset"
+    rm -rf "${ICONSET}"
+    mkdir -p "${ICONSET}"
 
-make_icon() {
-    local pts=$1 scale=${2:-1}
-    local px=$(( pts * scale ))
-    local suffix; [[ $scale -eq 2 ]] && suffix="@2x" || suffix=""
-    local name="icon_${pts}x${pts}${suffix}.png"
-    # Resize longest side to px (preserves aspect ratio), then pad to square
-    sips -Z "${px}" "${LOGO}"              --out "${ICONSET}/${name}" >/dev/null
-    sips -p "${px}" "${px}" "${ICONSET}/${name}" --out "${ICONSET}/${name}" >/dev/null
-}
+    make_icon() {
+        local pts=$1 scale=${2:-1}
+        local px=$(( pts * scale ))
+        local suffix; [[ $scale -eq 2 ]] && suffix="@2x" || suffix=""
+        local name="icon_${pts}x${pts}${suffix}.png"
+        # Resize longest side to px (preserves aspect ratio), then pad to square
+        sips -Z "${px}" "${LOGO}" --out "${ICONSET}/${name}" >/dev/null
+        sips -p "${px}" "${px}" "${ICONSET}/${name}" --out "${ICONSET}/${name}" >/dev/null
+    }
 
-make_icon 16;  make_icon 16  2
-make_icon 32;  make_icon 32  2
-make_icon 128; make_icon 128 2
-make_icon 256; make_icon 256 2
-make_icon 512; make_icon 512 2
+    make_icon 16;  make_icon 16  2
+    make_icon 32;  make_icon 32  2
+    make_icon 128; make_icon 128 2
+    make_icon 256; make_icon 256 2
+    make_icon 512; make_icon 512 2
 
-iconutil -c icns "${ICONSET}" -o "${ICNS_DST}"
-echo "  ✓ ${ICNS_DST}"
+    iconutil -c icns "${ICONSET}" -o "${ICNS_DST}"
+    echo "  ✓ ${ICNS_DST}"
+fi
 
 # ── 2. Build ───────────────────────────────────────────────────────────────────
 echo "→ Building…"
@@ -73,11 +79,14 @@ if ! cmake -S "${SCRIPT_DIR}" -B "${BUILD_DIR}" \
     exit 1
 fi
 echo "  ✓ Configured (details: ${CONFIGURE_LOG})"
-# A previously deployed bundle contains copied frameworks and plugins that are
-# not build outputs. Remove it so repeated packaging cannot recursively deploy
-# stale Qt components or retain files no longer required by CARTON.
-rm -rf "${BUILD_DIR}/carton.app"
 cmake --build "${BUILD_DIR}" --target carton --parallel "${JOBS}"
+
+# Deploy a staging copy. Never let macdeployqt mutate the development bundle:
+# a later incremental link would replace only its executable, producing a mixed
+# Homebrew/bundled Qt process that aborts while loading the platform plugin.
+rm -rf "${PACKAGE_DIR}"
+mkdir -p "${PACKAGE_DIR}"
+cp -R "${BUILD_APP_BUNDLE}" "${APP_BUNDLE}"
 
 # ── 3. Deploy linked Qt runtime dependencies ──────────────────────────────────
 echo "→ Deploying Qt runtime…"

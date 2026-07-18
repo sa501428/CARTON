@@ -115,7 +115,8 @@ QSGNode* HicHeatmapItem::updatePaintNode(QSGNode* oldNode, UpdatePaintNodeData*)
 
     std::vector<contactRecord> records;
     std::vector<contactRecord> controlRecords;
-    m_controller->renderRecordsSnapshot(records, controlRecords, kMaxRenderedRecords);
+    int dataResolution = m_controller->resolution();
+    m_controller->renderRecordsSnapshot(records, controlRecords, dataResolution, kMaxRenderedRecords);
     const QString matrixType = m_controller->matrixType();
     const bool isVsMode = (matrixType == QStringLiteral("vs") || matrixType.endsWith(QStringLiteral("vs"))) && !controlRecords.empty();
     if (records.empty() && controlRecords.empty()) {
@@ -151,12 +152,12 @@ QSGNode* HicHeatmapItem::updatePaintNode(QSGNode* oldNode, UpdatePaintNodeData*)
     auto appendQuad = [&](qint64 genomeX, qint64 genomeY, const QColor& color) {
         const double px0 = (genomeX - x0) * scaleX;
         const double py0 = (genomeY - y0) * scaleY;
-        const double px1 = (genomeX + m_controller->resolution() - x0) * scaleX;
-        const double py1 = (genomeY + m_controller->resolution() - y0) * scaleY;
-        const double leftD = std::floor(std::max(0.0, std::min(px0, px1)));
-        const double topD = std::floor(std::max(0.0, std::min(py0, py1)));
-        const double rightD = std::ceil(std::min(static_cast<double>(width()), std::max(px0, px1)));
-        const double bottomD = std::ceil(std::min(static_cast<double>(height()), std::max(py0, py1)));
+        const double px1 = (genomeX + dataResolution - x0) * scaleX;
+        const double py1 = (genomeY + dataResolution - y0) * scaleY;
+        const double leftD = std::max(0.0, std::min(px0, px1));
+        const double topD = std::max(0.0, std::min(py0, py1));
+        const double rightD = std::min(static_cast<double>(width()), std::max(px0, px1));
+        const double bottomD = std::min(static_cast<double>(height()), std::max(py0, py1));
         if (rightD <= 0.0 || bottomD <= 0.0 || leftD >= width() || topD >= height()) {
             return;
         }
@@ -166,8 +167,8 @@ QSGNode* HicHeatmapItem::updatePaintNode(QSGNode* oldNode, UpdatePaintNodeData*)
         const uchar a = static_cast<uchar>(color.alpha());
         const float left = static_cast<float>(leftD);
         const float top = static_cast<float>(topD);
-        const float right = static_cast<float>(std::min(static_cast<double>(width()), std::max(leftD + 1.0, rightD)));
-        const float bottom = static_cast<float>(std::min(static_cast<double>(height()), std::max(topD + 1.0, bottomD)));
+        const float right = static_cast<float>(rightD);
+        const float bottom = static_cast<float>(bottomD);
         vertices[vi++].set(left, top, r, g, b, a);
         vertices[vi++].set(right, top, r, g, b, a);
         vertices[vi++].set(left, bottom, r, g, b, a);
