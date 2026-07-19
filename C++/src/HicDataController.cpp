@@ -369,6 +369,12 @@ void HicDataController::loadTrackFromPath(const QString& path) {
     TrackLayer track;
     track.name = QFileInfo(path).baseName();
     track.source = path;
+    track.format = parsed.format;
+    const QString normalizedFormat = parsed.format.toLower();
+    track.renderMode = (normalizedFormat == QStringLiteral("bed") ||
+                        normalizedFormat == QStringLiteral("bigbed"))
+                           ? QStringLiteral("feature")
+                           : QStringLiteral("signal");
     double minValue = std::numeric_limits<double>::infinity();
     double maxValue = -std::numeric_limits<double>::infinity();
     for (const GenomicTrackFeature& feature : parsed.features) {
@@ -623,6 +629,8 @@ QVariantList HicDataController::trackSummaries() const {
         item["index"] = i;
         item["name"] = track.name;
         item["source"] = track.source;
+        item["format"] = track.format;
+        item["renderMode"] = track.renderMode;
         item["positiveColor"] = track.color;
         item["negativeColor"] = track.negativeColor;
         item["min"] = track.minValue;
@@ -662,10 +670,26 @@ QVariantList HicDataController::annotationLayerSummaries() const {
 }
 
 QVariantList HicDataController::visibleTrackSegments(bool xAxis) const {
+    return visibleTrackSegmentsForPixels(xAxis, 0);
+}
+
+QVariantList HicDataController::visibleTrackSegmentsForPixels(bool xAxis, int pixelCount) const {
     QVariantList values;
     const QString chr = xAxis ? m_chrX : m_chrY;
     const qint64 start = xAxis ? m_x0 : m_y0;
     const qint64 end = xAxis ? m_x1 : m_y1;
+    const qint64 span = std::max<qint64>(1, end - start);
+    pixelCount = std::clamp(pixelCount, 0, 8192);
+
+    struct RenderedSegment {
+        qint64 start = 0;
+        qint64 end = 0;
+        double value = 0.0;
+        double rawValue = 0.0;
+        QColor color;
+        QString name;
+    };
+
     for (int trackIndex = 0; trackIndex < static_cast<int>(m_tracks.size()); ++trackIndex) {
         const TrackLayer& track = m_tracks[static_cast<std::size_t>(trackIndex)];
         if (!track.visible || track.collapsed) continue;
@@ -675,33 +699,131 @@ QVariantList HicDataController::visibleTrackSegments(bool xAxis) const {
             if (chrNamesEqual(segment.chr, chr) && segment.end > start && segment.start < end)
                 visible.push_back(&segment);
         }
+
+        QVector<RenderedSegment> rendered;
+        if (track.renderMode == QStringLiteral("signal") && pixelCount > 0) {
+            QVector<double> sums(pixelCount, 0.0);
+            QVector<double> weights(pixelCount, 0.0);
+            QVector<double> maxima(pixelCount, -std::numeric_limits<double>::infinity());
+            QVector<double> rawSums(pixelCount, 0.0);
+            QVector<bool> occupied(pixelCount, false);
+            const double basesPerPixel = static_cast<double>(span) / pixelCount;
+
+            for (const TrackFeature* segment : visible) {
+                const double clippedStart = static_cast<double>(std::max(segment->start, start));
+                const double clippedEnd = static_cast<double>(std::min(segment->end, end));
+                if (clippedEnd <= clippedStart) continue;
+                const double displayValue = track.logScale ? signedLog(segment->value) : segment->value;
+                const int firstBin = std::clamp(static_cast<int>(std::floor((clippedStart - start) / basesPerPixel)),
+                                                0, pixelCount - 1);
+                const int lastBin = std::clamp(static_cast<int>(std::ceil((clippedEnd - start) / basesPerPixel)) - 1,
+                                               firstBin, pixelCount - 1);
+                for (int bin = firstBin; bin <= lastBin; ++bin) {
+                    const double binStart = start + bin * basesPerPixel;
+                    const double binEnd = start + (bin + 1) * basesPerPixel;
+                    const double overlap = std::max(0.0, std::min(clippedEnd, binEnd) - std::max(clippedStart, binStart));
+                    if (overlap <= 0.0) continue;
+                    occupied[bin] = true;
+                    sums[bin] += displayValue * overlap;
+                    rawSums[bin] += segment->value * overlap;
+                    weights[bin] += overlap;
+                    maxima[bin] = std::max(maxima[bin], displayValue);
+                }
+            }
+
+            rendered.reserve(pixelCount);
+            for (int bin = 0; bin < pixelCount; ++bin) {
+                if (!occupied[bin] || weights[bin] <= 0.0) continue;
+                RenderedSegment segment;
+                segment.start = start + static_cast<qint64>(std::floor(bin * basesPerPixel));
+                segment.end = start + static_cast<qint64>(std::ceil((bin + 1) * basesPerPixel));
+                segment.end = std::max(segment.start + 1, std::min(segment.end, end));
+                segment.value = track.reduction == QStringLiteral("max") ? maxima[bin] : sums[bin] / weights[bin];
+                segment.rawValue = rawSums[bin] / weights[bin];
+                segment.color = segment.value < 0 ? track.negativeColor : track.color;
+                rendered.push_back(std::move(segment));
+            }
+        } else if (track.renderMode == QStringLiteral("feature") && pixelCount > 0 &&
+                   visible.size() > std::max(200, pixelCount * 4)) {
+            // At broad loci, dense BED/bigBed annotations can contain far more
+            // intervals than there are drawable columns. Merge their pixel
+            // extents instead of flooding the scene graph with redundant boxes.
+            QVector<QPair<int, int>> pixelIntervals;
+            pixelIntervals.reserve(visible.size());
+            for (const TrackFeature* segment : visible) {
+                const int first = std::clamp(static_cast<int>((std::max(segment->start, start) - start) * pixelCount / span),
+                                             0, pixelCount - 1);
+                const int last = std::clamp(static_cast<int>(std::ceil(
+                                                static_cast<double>(std::min(segment->end, end) - start) * pixelCount / span)),
+                                            first + 1, pixelCount);
+                pixelIntervals.push_back(qMakePair(first, last));
+            }
+            std::sort(pixelIntervals.begin(), pixelIntervals.end(), [](const auto& a, const auto& b) {
+                return a.first < b.first || (a.first == b.first && a.second < b.second);
+            });
+            for (const auto& interval : pixelIntervals) {
+                if (!rendered.isEmpty() && interval.first <= rendered.back().end) {
+                    rendered.back().end = std::max<qint64>(rendered.back().end, interval.second);
+                    continue;
+                }
+                RenderedSegment segment;
+                // Temporarily keep pixel coordinates; convert to genomic
+                // coordinates after the merge has bounded the result size.
+                segment.start = interval.first;
+                segment.end = interval.second;
+                segment.value = 1.0;
+                segment.rawValue = 1.0;
+                segment.color = track.color;
+                rendered.push_back(std::move(segment));
+            }
+            for (RenderedSegment& segment : rendered) {
+                segment.start = start + static_cast<qint64>(std::floor(segment.start * static_cast<double>(span) / pixelCount));
+                segment.end = start + static_cast<qint64>(std::ceil(segment.end * static_cast<double>(span) / pixelCount));
+                segment.end = std::max(segment.start + 1, std::min(segment.end, end));
+            }
+        } else {
+            rendered.reserve(visible.size());
+            for (const TrackFeature* source : visible) {
+                RenderedSegment segment;
+                segment.start = source->start;
+                segment.end = source->end;
+                segment.name = source->label;
+                segment.rawValue = source->value;
+                segment.value = track.logScale ? signedLog(source->value) : source->value;
+                segment.color = segment.value < 0
+                                    ? track.negativeColor
+                                    : (source->color.isValid() ? source->color : track.color);
+                rendered.push_back(std::move(segment));
+            }
+        }
+
         double rangeMin = track.minValue;
         double rangeMax = track.maxValue;
-        if (track.autoscale && !visible.isEmpty()) {
+        if (track.autoscale && track.renderMode == QStringLiteral("signal") && !rendered.isEmpty()) {
             rangeMin = 0.0;
             rangeMax = 0.0;
-            for (const TrackFeature* segment : visible) {
-                rangeMin = std::min(rangeMin, segment->value);
-                rangeMax = std::max(rangeMax, segment->value);
+            for (const RenderedSegment& segment : rendered) {
+                rangeMin = std::min(rangeMin, segment.value);
+                rangeMax = std::max(rangeMax, segment.value);
             }
             if (rangeMax <= rangeMin) rangeMax = rangeMin + 1.0;
         }
-        const double displayMin = track.logScale ? signedLog(rangeMin) : rangeMin;
-        const double displayMax = track.logScale ? signedLog(rangeMax) : rangeMax;
-        for (const TrackFeature* segmentPointer : visible) {
-            const TrackFeature& segment = *segmentPointer;
+        const double displayMin = track.autoscale ? rangeMin : (track.logScale ? signedLog(rangeMin) : rangeMin);
+        const double displayMax = track.autoscale ? rangeMax : (track.logScale ? signedLog(rangeMax) : rangeMax);
+        for (const RenderedSegment& segment : rendered) {
             QVariantMap item;
             item["trackIndex"] = trackIndex;
             item["trackName"] = track.name;
-            item["name"] = segment.label;
+            item["kind"] = track.renderMode;
+            item["format"] = track.format;
+            item["name"] = segment.name;
             item["start"] = segment.start;
             item["end"] = segment.end;
-            const double value = track.logScale ? signedLog(segment.value) : segment.value;
-            item["rawValue"] = segment.value;
-            item["value"] = value;
+            item["rawValue"] = segment.rawValue;
+            item["value"] = segment.value;
             item["min"] = displayMin;
             item["max"] = displayMax;
-            item["color"] = value < 0 ? track.negativeColor : (segment.color.isValid() ? segment.color : track.color);
+            item["color"] = segment.color;
             values.push_back(item);
         }
     }

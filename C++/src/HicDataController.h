@@ -162,6 +162,7 @@ public:
     Q_INVOKABLE QVariantList trackSummaries() const;
     Q_INVOKABLE QVariantList annotationLayerSummaries() const;
     Q_INVOKABLE QVariantList visibleTrackSegments(bool xAxis) const;
+    Q_INVOKABLE QVariantList visibleTrackSegmentsForPixels(bool xAxis, int pixelCount) const;
     Q_INVOKABLE QVariantList visibleAnnotations() const;
     Q_INVOKABLE QString positionText(double xFraction, double yFraction) const;
     Q_INVOKABLE void copyPosition(double xFraction, double yFraction) const;
@@ -369,6 +370,8 @@ private:
     struct TrackLayer {
         QString name;
         QVector<TrackFeature> features;
+        QString format;
+        QString renderMode = QStringLiteral("signal");
         QColor color = QColor("#4b7bec");
         QColor negativeColor = QColor("#d1495b");
         double minValue = 0.0;

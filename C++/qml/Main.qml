@@ -233,7 +233,10 @@ ApplicationWindow {
         id: trackDialog
         title: "Load 1D Track"
         nameFilters: ["Genomics tracks (*.bed *.bed.gz *.bedgraph *.bedGraph *.bedgraph.gz *.wig *.wig.gz *.bw *.bigWig *.bigwig *.bb *.bigBed *.bigbed *.txt *.tsv)", "All files (*)"]
-        onAccepted: if (activeController) activeController.loadTrack(selectedFile)
+        onAccepted: if (activeController) {
+            trackPanelsOpen = true
+            activeController.loadTrack(selectedFile)
+        }
     }
 
     FileDialog {
@@ -327,7 +330,10 @@ ApplicationWindow {
                 placeholderText: "https://..."
             }
         }
-        onAccepted: if (activeController) activeController.loadTrackFromPath(urlField.text)
+        onAccepted: if (activeController) {
+            trackPanelsOpen = true
+            activeController.loadTrackFromPath(urlField.text)
+        }
     }
 
     Dialog {
@@ -1148,7 +1154,7 @@ ApplicationWindow {
                                 ctx.fillStyle = Theme.surfaceSunken
                                 ctx.fillRect(0, 0, width, height)
                                 if (!activeController) return
-                                var segments = trackPanelsOpen ? activeController.visibleTrackSegments(true) : []
+                                var segments = trackPanelsOpen ? activeController.visibleTrackSegmentsForPixels(true, Math.max(1, Math.ceil(width))) : []
                                 var span = Math.max(1, activeController.x1 - activeController.x0)
                                 var axisLabelHeight = 18
                                 var axisY = height - axisLabelHeight - 0.5
@@ -1205,17 +1211,33 @@ ApplicationWindow {
                                     laneSize[lj] = sized
                                     laneCursor += sized
                                 }
+                                var baselineDrawn = []
                                 for (var i = 0; i < segments.length; i++) {
                                     var s = segments[i]
                                     var x0 = (s.start - activeController.x0) / span * width
                                     var x1 = (s.end - activeController.x0) / span * width
                                     var laneY = laneStart[s.trackIndex]
                                     var laneHeight = laneSize[s.trackIndex]
+                                    if (s.kind === "feature") {
+                                        var featureHeight = Math.max(3, Math.min(12, laneHeight * 0.55))
+                                        var featureY = laneY + (laneHeight - featureHeight) * 0.5
+                                        ctx.fillStyle = s.color
+                                        ctx.fillRect(Math.max(0, x0), featureY, Math.max(1, Math.min(width, x1) - Math.max(0, x0)), featureHeight)
+                                        continue
+                                    }
                                     var range = Math.max(0.000001, s.max - s.min)
                                     var zero = laneY + laneHeight - (0 - s.min) / range * laneHeight
                                     var valueY = laneY + laneHeight - (s.value - s.min) / range * laneHeight
                                     zero = Math.max(laneY, Math.min(laneY + laneHeight, zero))
                                     valueY = Math.max(laneY, Math.min(laneY + laneHeight, valueY))
+                                    if (!baselineDrawn[s.trackIndex]) {
+                                        ctx.strokeStyle = Theme.borderStrong
+                                        ctx.beginPath()
+                                        ctx.moveTo(0, Math.round(zero) + 0.5)
+                                        ctx.lineTo(width, Math.round(zero) + 0.5)
+                                        ctx.stroke()
+                                        baselineDrawn[s.trackIndex] = true
+                                    }
                                     var barTop = Math.min(zero, valueY)
                                     var h = Math.max(1.5, Math.abs(valueY - zero))
                                     ctx.fillStyle = s.color
@@ -1236,7 +1258,7 @@ ApplicationWindow {
                                 ctx.fillStyle = Theme.surfaceSunken
                                 ctx.fillRect(0, 0, width, height)
                                 if (!activeController) return
-                                var segments = trackPanelsOpen ? activeController.visibleTrackSegments(false) : []
+                                var segments = trackPanelsOpen ? activeController.visibleTrackSegmentsForPixels(false, Math.max(1, Math.ceil(height))) : []
                                 var span = Math.max(1, activeController.y1 - activeController.y0)
                                 var labelWidth = 42
                                 var axisX = width - 0.5
@@ -1293,17 +1315,33 @@ ApplicationWindow {
                                     laneSize[lj] = sized
                                     laneCursor += sized
                                 }
+                                var baselineDrawn = []
                                 for (var i = 0; i < segments.length; i++) {
                                     var s = segments[i]
                                     var y0 = (s.start - activeController.y0) / span * height
                                     var y1 = (s.end - activeController.y0) / span * height
                                     var laneX = laneStart[s.trackIndex]
                                     var laneWidth = laneSize[s.trackIndex]
+                                    if (s.kind === "feature") {
+                                        var featureWidth = Math.max(3, Math.min(12, laneWidth * 0.55))
+                                        var featureX = laneX + (laneWidth - featureWidth) * 0.5
+                                        ctx.fillStyle = s.color
+                                        ctx.fillRect(featureX, Math.max(0, y0), featureWidth, Math.max(1, Math.min(height, y1) - Math.max(0, y0)))
+                                        continue
+                                    }
                                     var range = Math.max(0.000001, s.max - s.min)
                                     var zero = laneX + (0 - s.min) / range * laneWidth
                                     var valueX = laneX + (s.value - s.min) / range * laneWidth
                                     zero = Math.max(laneX, Math.min(laneX + laneWidth, zero))
                                     valueX = Math.max(laneX, Math.min(laneX + laneWidth, valueX))
+                                    if (!baselineDrawn[s.trackIndex]) {
+                                        ctx.strokeStyle = Theme.borderStrong
+                                        ctx.beginPath()
+                                        ctx.moveTo(Math.round(zero) + 0.5, 0)
+                                        ctx.lineTo(Math.round(zero) + 0.5, height)
+                                        ctx.stroke()
+                                        baselineDrawn[s.trackIndex] = true
+                                    }
                                     var barLeft = Math.min(zero, valueX)
                                     var w = Math.max(1.5, Math.abs(valueX - zero))
                                     ctx.fillStyle = s.color
@@ -2543,7 +2581,7 @@ ApplicationWindow {
                                                     }
                                                     Label {
                                                         visible: !modelData.collapsed
-                                                        text: modelData.featureCount + " intervals"
+                                                        text: modelData.featureCount + " intervals · " + modelData.format
                                                         color: Theme.textMuted
                                                         font.pixelSize: Theme.textXs
                                                     }

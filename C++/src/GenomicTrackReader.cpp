@@ -301,6 +301,7 @@ GenomicTrackReadResult parseTextTrack(const QString& path, const QByteArray& byt
                 appendBedLike(parts, result.features, defaultName);
             }
         } else {
+            if (result.format.isEmpty()) result.format = QStringLiteral("bed");
             appendBedLike(parts, result.features, defaultName);
         }
         if (result.features.size() >= kMaxResidentTrackFeatures) {

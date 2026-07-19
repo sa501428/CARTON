@@ -63,7 +63,8 @@ int main(int argc, char** argv) {
     controller.setTrackHeight(0, 96);
     const QVariantMap summary = controller.trackSummaries().front().toMap();
     if (!require(!summary.value("visible").toBool() && summary.value("collapsed").toBool() &&
-                 summary.value("height").toInt() == 96, "track display state")) return 1;
+                 summary.value("height").toInt() == 96 && summary.value("format").toString() == QStringLiteral("bedGraph") &&
+                 summary.value("renderMode").toString() == QStringLiteral("signal"), "track display state")) return 1;
     controller.setWorkspaceSearch(QStringLiteral("signal"));
     if (!require(controller.searchResultsModel()->rowCount() >= 1, "workspace search model")) return 1;
 
@@ -102,5 +103,44 @@ int main(int argc, char** argv) {
     if (!require(prefixController.trackCount() == 1, "chr-prefixed track parsing")) return 1;
     const QVariantList prefixSegments = prefixController.visibleTrackSegments(true);
     if (!require(prefixSegments.size() == 2, "chr-prefix-insensitive track visibility")) return 1;
+    if (!require(prefixSegments.front().toMap().value("kind").toString() == QStringLiteral("signal"),
+                 "bedGraph uses signal rendering")) return 1;
+
+    QByteArray denseContents;
+    for (int i = 0; i < 1000; ++i) {
+        denseContents += QByteArray("chr1\t") + QByteArray::number(i) + '\t' + QByteArray::number(i + 1) + '\t' +
+                         QByteArray::number(i % 10) + '\n';
+    }
+    const QString denseTrack = temporary.filePath(QStringLiteral("dense.bedgraph"));
+    if (!require(writeFile(denseTrack, denseContents), "write dense bedGraph")) return 1;
+    prefixController.loadTrackFromPath(denseTrack);
+    const QVariantList pixelSegments = prefixController.visibleTrackSegmentsForPixels(true, 100);
+    int denseSegmentCount = 0;
+    for (const QVariant& value : pixelSegments) {
+        if (value.toMap().value("trackIndex").toInt() == 1) ++denseSegmentCount;
+    }
+    if (!require(denseSegmentCount > 0 && denseSegmentCount <= 100, "dense signal is bounded by display pixels")) return 1;
+
+    const QString bedTrack = temporary.filePath(QStringLiteral("features.bed"));
+    if (!require(writeFile(bedTrack, "chr1\t10\t30\tfeature-a\t500\n"), "write BED")) return 1;
+    prefixController.loadTrackFromPath(bedTrack);
+    const QVariantList mixedSegments = prefixController.visibleTrackSegmentsForPixels(true, 100);
+    bool foundBedFeature = false;
+    for (const QVariant& value : mixedSegments) {
+        const QVariantMap segment = value.toMap();
+        if (segment.value("trackIndex").toInt() == 2 && segment.value("kind").toString() == QStringLiteral("feature")) {
+            foundBedFeature = true;
+            break;
+        }
+    }
+    if (!require(foundBedFeature, "BED uses interval feature rendering")) return 1;
+
+    const QString inferredBedTrack = temporary.filePath(QStringLiteral("features.tsv"));
+    if (!require(writeFile(inferredBedTrack, "chr1\t40\t60\n"), "write extensionless-style BED")) return 1;
+    prefixController.loadTrackFromPath(inferredBedTrack);
+    const QVariantMap inferredBedSummary = prefixController.trackSummaries().back().toMap();
+    if (!require(inferredBedSummary.value("format").toString() == QStringLiteral("bed") &&
+                 inferredBedSummary.value("renderMode").toString() == QStringLiteral("feature"),
+                 "three-column text tracks infer BED rendering")) return 1;
     return 0;
 }
