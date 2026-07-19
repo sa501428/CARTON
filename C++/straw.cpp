@@ -44,6 +44,8 @@
 #include <condition_variable>
 #include <type_traits>
 #include <memory>
+#include <unordered_map>
+#include <list>
 #include "hic_slice.h"
 
 using namespace std;
@@ -1436,6 +1438,102 @@ private:
     bool stop;
 };
 
+namespace {
+// MatrixZoomData's constructor re-reads the whole footer, the normalization
+// vectors (can be MB-sized for a whole chromosome), and the block index from
+// disk/network every single time it's constructed - i.e. on every tile
+// request that isn't already covered by HicDataController's own tile cache
+// (every pan past the padded region, every zoom-level change, every
+// chromosome switch). None of that data depends on the requested genomic
+// window, only on (file, chromosome pair, matrixType, norm, unit,
+// resolution), so it's safe to cache and reuse across requests.
+struct MzdCacheKey {
+    string fileName;
+    int32_t c1 = 0;
+    int32_t c2 = 0;
+    string matrixType;
+    string norm;
+    string unit;
+    int32_t resolution = 0;
+
+    bool operator==(const MzdCacheKey &other) const {
+        return c1 == other.c1 && c2 == other.c2 && resolution == other.resolution &&
+               fileName == other.fileName && matrixType == other.matrixType &&
+               norm == other.norm && unit == other.unit;
+    }
+};
+
+struct MzdCacheKeyHash {
+    size_t operator()(const MzdCacheKey &k) const {
+        size_t h = std::hash<string>{}(k.fileName);
+        auto mix = [&h](size_t v) { h ^= v + 0x9e3779b9U + (h << 6U) + (h >> 2U); };
+        mix(std::hash<string>{}(k.matrixType));
+        mix(std::hash<string>{}(k.norm));
+        mix(std::hash<string>{}(k.unit));
+        mix(std::hash<int32_t>{}(k.c1));
+        mix(std::hash<int32_t>{}(k.c2));
+        mix(std::hash<int32_t>{}(k.resolution));
+        return h;
+    }
+};
+
+struct MzdCacheValue {
+    bool foundFooter = false;
+    vector<double> expectedValues;
+    vector<double> c1Norm;
+    vector<double> c2Norm;
+    float sumCounts = 0.0f;
+    int32_t blockBinCount = 0;
+    int32_t blockColumnCount = 0;
+    map<int32_t, indexEntry> blockMap;
+};
+
+// Small thread-safe LRU cache. Entries are copied in/out under the lock, so
+// each MatrixZoomData ends up with its own independently-owned vectors/map
+// exactly as before - the cache only avoids repeating the I/O, it never
+// shares mutable state across threads or across MatrixZoomData instances.
+class MzdCache {
+public:
+    bool get(const MzdCacheKey &key, MzdCacheValue &value) {
+        std::lock_guard<std::mutex> lock(mutex_);
+        auto it = index_.find(key);
+        if (it == index_.end()) return false;
+        order_.splice(order_.begin(), order_, it->second);
+        value = order_.front().second;
+        return true;
+    }
+
+    void put(const MzdCacheKey &key, MzdCacheValue value) {
+        std::lock_guard<std::mutex> lock(mutex_);
+        auto it = index_.find(key);
+        if (it != index_.end()) {
+            order_.erase(it->second);
+            index_.erase(it);
+        }
+        order_.emplace_front(key, std::move(value));
+        index_[key] = order_.begin();
+        while (order_.size() > kMaxEntries) {
+            index_.erase(order_.back().first);
+            order_.pop_back();
+        }
+    }
+
+private:
+    // Kept small: each entry can hold MB-sized normalization vectors, and
+    // this cache is an internal implementation detail with no user-facing
+    // memory budget (unlike HicDataController's tile cache).
+    static constexpr size_t kMaxEntries = 16;
+    std::mutex mutex_;
+    std::list<std::pair<MzdCacheKey, MzdCacheValue>> order_;
+    std::unordered_map<MzdCacheKey, std::list<std::pair<MzdCacheKey, MzdCacheValue>>::iterator, MzdCacheKeyHash> index_;
+};
+
+MzdCache &matrixZoomDataCache() {
+    static MzdCache instance;
+    return instance;
+}
+}
+
 class MatrixZoomData {
 public:
     bool isIntra;
@@ -1483,6 +1581,23 @@ public:
         this->norm = norm;
         this->resolution = resolution;
 
+        const MzdCacheKey cacheKey{fileName, c1, c2, matrixType, norm, unit, resolution};
+        MzdCacheValue cached;
+        if (matrixZoomDataCache().get(cacheKey, cached)) {
+            foundFooter = cached.foundFooter;
+            expectedValues = std::move(cached.expectedValues);
+            c1Norm = std::move(cached.c1Norm);
+            c2Norm = std::move(cached.c2Norm);
+            sumCounts = cached.sumCounts;
+            blockBinCount = cached.blockBinCount;
+            blockColumnCount = cached.blockColumnCount;
+            blockMap = std::move(cached.blockMap);
+            if (foundFooter && !isIntra) {
+                avgCount = (sumCounts / numBins1) / numBins2;
+            }
+            return;
+        }
+
         // Stack-allocated (RAII): the previous heap-allocated stream objects
         // were only ever close()'d, never delete'd (leaking one HiCFileStream
         // per MatrixZoomData construction - i.e. per tile request), and the
@@ -1505,6 +1620,7 @@ public:
         }
 
         if (!foundFooter) {
+            matrixZoomDataCache().put(cacheKey, MzdCacheValue{});
             return;
         }
         stream.close();
@@ -1535,6 +1651,17 @@ public:
         if (!isIntra) {
             avgCount = (sumCounts / numBins1) / numBins2;   // <= trying to avoid overflows
         }
+
+        MzdCacheValue toCache;
+        toCache.foundFooter = foundFooter;
+        toCache.expectedValues = expectedValues;
+        toCache.c1Norm = c1Norm;
+        toCache.c2Norm = c2Norm;
+        toCache.sumCounts = sumCounts;
+        toCache.blockBinCount = blockBinCount;
+        toCache.blockColumnCount = blockColumnCount;
+        toCache.blockMap = blockMap;
+        matrixZoomDataCache().put(cacheKey, std::move(toCache));
     }
 
     static vector<double> readNormalizationVectorFromFooter(indexEntry cNormEntry, int32_t &version,
