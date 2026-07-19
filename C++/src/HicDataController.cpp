@@ -57,6 +57,10 @@ QString stripChrPrefix(const QString& name) {
     return name.startsWith(QStringLiteral("chr"), Qt::CaseInsensitive) ? name.mid(3) : name;
 }
 
+QString chromosomeKey(const QString& name) {
+    return stripChrPrefix(name).toCaseFolded();
+}
+
 bool chrNamesEqual(const QString& a, const QString& b) {
     if (a.compare(b, Qt::CaseInsensitive) == 0) return true;
     return stripChrPrefix(a).compare(stripChrPrefix(b), Qt::CaseInsensitive) == 0;
@@ -186,6 +190,23 @@ HicDataController::HicDataController(QObject* parent)
             scheduleRequest();
         }
     });
+
+    connect(this, &HicDataController::viewChanged, this, &HicDataController::requestMinimap);
+    connect(&m_minimapWatcher, &QFutureWatcher<MinimapResult>::finished, this, [this]() {
+        MinimapResult result = m_minimapWatcher.result();
+        if (result.signature == minimapSignature() && result.error.isEmpty()) {
+            QMutexLocker locker(&m_mutex);
+            m_minimapRecords = std::move(result.records);
+            m_minimapResolution = result.resolution;
+            m_minimapLoadedSignature = result.signature;
+            locker.unlock();
+            emit minimapChanged();
+        }
+        if (m_minimapReloadPending || result.signature != minimapSignature()) {
+            m_minimapReloadPending = false;
+            requestMinimap();
+        }
+    });
 }
 
 HicDataController::~HicDataController() {
@@ -195,6 +216,8 @@ HicDataController::~HicDataController() {
     m_controlMetadataWatcher.waitForFinished();
     m_tileWatcher.cancel();
     m_tileWatcher.waitForFinished();
+    m_minimapWatcher.cancel();
+    m_minimapWatcher.waitForFinished();
 }
 
 QString HicDataController::filePath() const { return m_filePath; }
@@ -219,6 +242,14 @@ QString HicDataController::colorMap() const { return m_colorMap; }
 QColor HicDataController::customLowColor() const { return m_customLowColor; }
 QColor HicDataController::customHighColor() const { return m_customHighColor; }
 int HicDataController::trackCount() const { return static_cast<int>(m_tracks.size()); }
+int HicDataController::visibleTrackHeight() const {
+    qint64 total = 0;
+    for (const TrackLayer& track : m_tracks) {
+        if (track.visible && !track.collapsed)
+            total += std::max(20, track.height);
+    }
+    return static_cast<int>(std::min<qint64>(total, std::numeric_limits<int>::max()));
+}
 int HicDataController::annotationCount() const {
     int count = 0;
     for (const AnnotationLayer& layer : m_annotationLayers) {
@@ -261,6 +292,8 @@ QString HicDataController::matrixDimensions() const {
     const qint64 rows = std::max<qint64>(1, (m_y1 - m_y0 + m_resolution - 1) / m_resolution);
     return QStringLiteral("%1 × %2 bins").arg(columns).arg(rows);
 }
+qint64 HicDataController::xChromosomeLength() const { return chromosomeLength(m_chrX); }
+qint64 HicDataController::yChromosomeLength() const { return chromosomeLength(m_chrY); }
 bool HicDataController::symmetricColorScale() const { return m_symmetricColorScale; }
 double HicDataController::colorPercentile() const { return m_colorPercentile; }
 QColor HicDataController::missingValueColor() const { return m_missingValueColor; }
@@ -296,11 +329,16 @@ void HicDataController::openFile(const QUrl& url) {
         QMutexLocker locker(&m_mutex);
         m_records.clear();
         m_controlRecords.clear();
+        m_minimapRecords.clear();
+        m_minimapResolution = 0;
         m_recordHoverLookup.clear();
         m_controlHoverLookup.clear();
         m_records.shrink_to_fit();
         m_controlRecords.shrink_to_fit();
     }
+    m_minimapLoadedSignature.clear();
+    m_minimapRequestSignature.clear();
+    emit minimapChanged();
     emit filePathChanged();
     emit recordsChanged();
     addRecent(QStringLiteral("recentMaps"), path);
@@ -377,9 +415,17 @@ void HicDataController::loadTrackFromPath(const QString& path) {
                            : QStringLiteral("signal");
     double minValue = std::numeric_limits<double>::infinity();
     double maxValue = -std::numeric_limits<double>::infinity();
+    QHash<QString, QString> sharedChromosomeNames;
+    track.features.reserve(parsed.features.size());
     for (const GenomicTrackFeature& feature : parsed.features) {
         TrackFeature segment;
-        segment.chr = feature.chr;
+        const QString key = chromosomeKey(feature.chr);
+        auto sharedName = sharedChromosomeNames.constFind(key);
+        if (sharedName == sharedChromosomeNames.cend()) {
+            sharedChromosomeNames.insert(key, key);
+            sharedName = sharedChromosomeNames.constFind(key);
+        }
+        segment.chr = sharedName.value();
         segment.start = feature.start;
         segment.end = feature.end;
         segment.label = feature.name;
@@ -394,6 +440,25 @@ void HicDataController::loadTrackFromPath(const QString& path) {
     if (track.features.isEmpty()) {
         setStatus(QStringLiteral("No valid intervals found in 1D track: %1").arg(path));
         return;
+    }
+    std::sort(track.features.begin(), track.features.end(), [](const TrackFeature& a, const TrackFeature& b) {
+        if (a.chr != b.chr) return a.chr < b.chr;
+        if (a.start != b.start) return a.start < b.start;
+        return a.end < b.end;
+    });
+    for (qsizetype index = 0; index < track.features.size(); ++index) {
+        const TrackFeature& feature = track.features[index];
+        auto range = track.chromosomeRanges.find(feature.chr);
+        if (range == track.chromosomeRanges.end()) {
+            TrackChromosomeRange value;
+            value.begin = index;
+            value.end = index + 1;
+            value.maximumSpan = feature.end - feature.start;
+            track.chromosomeRanges.insert(feature.chr, value);
+        } else {
+            range->end = index + 1;
+            range->maximumSpan = std::max(range->maximumSpan, feature.end - feature.start);
+        }
     }
     track.minValue = std::min(0.0, minValue);
     track.maxValue = std::max(0.0, maxValue);
@@ -698,9 +763,19 @@ QVariantList HicDataController::visibleTrackSegmentsForPixels(bool xAxis, int pi
         if (!track.visible || track.collapsed) continue;
         const auto signedLog = [](double value) { return std::copysign(std::log1p(std::abs(value)), value); };
         QVector<const TrackFeature*> visible;
-        for (const TrackFeature& segment : track.features) {
-            if (chrNamesEqual(segment.chr, chr) && segment.end > start && segment.start < end)
-                visible.push_back(&segment);
+        const auto chromosomeRange = track.chromosomeRanges.constFind(chromosomeKey(chr));
+        if (chromosomeRange == track.chromosomeRanges.cend()) continue;
+        const auto rangeBegin = track.features.cbegin() + chromosomeRange->begin;
+        const auto rangeEnd = track.features.cbegin() + chromosomeRange->end;
+        const qint64 earliestStart = start - chromosomeRange->maximumSpan;
+        auto candidate = std::lower_bound(rangeBegin, rangeEnd, earliestStart,
+                                          [](const TrackFeature& feature, qint64 position) {
+                                              return feature.start < position;
+                                          });
+        visible.reserve(std::min<qsizetype>(4096, static_cast<qsizetype>(std::distance(candidate, rangeEnd))));
+        for (; candidate != rangeEnd && candidate->start < end; ++candidate) {
+            if (candidate->end > start)
+                visible.push_back(&*candidate);
         }
 
         QVector<RenderedSegment> rendered;
@@ -839,7 +914,7 @@ QVariantList HicDataController::visibleTrackSegmentsForPixels(bool xAxis, int pi
                 segment.value = track.logScale ? signedLog(source->value) : source->value;
                 segment.color = segment.value < 0
                                     ? track.negativeColor
-                                    : (source->color.isValid() ? source->color : track.color);
+                                    : (track.colorOverride || !source->color.isValid() ? track.color : source->color);
                 rendered.push_back(std::move(segment));
             }
         }
@@ -965,14 +1040,24 @@ QString HicDataController::positionText(double xFraction, double yFraction) cons
     for (const TrackLayer& track : m_tracks) {
         if (!track.visible || track.collapsed) continue;
         QStringList values;
-        for (const TrackFeature& feature : track.features) {
-            if ((chrNamesEqual(feature.chr, m_chrX) && x >= feature.start && x < feature.end) ||
-                (chrNamesEqual(feature.chr, m_chrY) && y >= feature.start && y < feature.end)) {
-                const QString label = feature.label.isEmpty() ? QString() : feature.label + QStringLiteral("=");
-                values.push_back(label + QString::number(feature.value, 'g', 5));
-                if (values.size() >= 3) break;
+        auto collectAt = [&](const QString& chromosome, qint64 position) {
+            const auto range = track.chromosomeRanges.constFind(chromosomeKey(chromosome));
+            if (range == track.chromosomeRanges.cend()) return;
+            const auto begin = track.features.cbegin() + range->begin;
+            const auto end = track.features.cbegin() + range->end;
+            auto candidate = std::lower_bound(begin, end, position - range->maximumSpan,
+                                              [](const TrackFeature& feature, qint64 value) {
+                                                  return feature.start < value;
+                                              });
+            for (; candidate != end && candidate->start <= position && values.size() < 3; ++candidate) {
+                if (position < candidate->end) {
+                    const QString label = candidate->label.isEmpty() ? QString() : candidate->label + QStringLiteral("=");
+                    values.push_back(label + QString::number(candidate->value, 'g', 5));
+                }
             }
-        }
+        };
+        collectAt(m_chrX, x);
+        if (values.size() < 3 && (m_chrY != m_chrX || y != x)) collectAt(m_chrY, y);
         if (!values.isEmpty()) trackHits.push_back(track.name + QStringLiteral(": ") + values.join(QStringLiteral(", ")));
     }
     if (!trackHits.isEmpty()) text += QStringLiteral(" | tracks ") + trackHits.join(QStringLiteral("; "));
@@ -1570,6 +1655,28 @@ void HicDataController::pan(double dxFraction, double dyFraction) {
     scheduleRequest();
 }
 
+void HicDataController::centerViewAtFractions(double xFraction, double yFraction) {
+    if (m_chrX.isEmpty() || m_chrY.isEmpty()) return;
+    xFraction = std::clamp(xFraction, 0.0, 1.0);
+    yFraction = std::clamp(yFraction, 0.0, 1.0);
+    if (!m_interactionActive) pushViewHistory();
+    const qint64 width = std::max<qint64>(m_resolution, m_x1 - m_x0);
+    const qint64 height = std::max<qint64>(m_resolution, m_y1 - m_y0);
+    if (!m_xLocusLocked) {
+        const qint64 center = qRound64(xFraction * chromosomeLength(m_chrX));
+        m_x0 = center - width / 2;
+        m_x1 = m_x0 + width;
+    }
+    if (!m_yLocusLocked) {
+        const qint64 center = qRound64(yFraction * chromosomeLength(m_chrY));
+        m_y0 = center - height / 2;
+        m_y1 = m_y0 + height;
+    }
+    clampRegion();
+    emit viewChanged();
+    scheduleRequest();
+}
+
 void HicDataController::fitViewToAspectRatio(double aspectRatio) {
     if (!std::isfinite(aspectRatio) || aspectRatio <= 0.0) {
         return;
@@ -1909,7 +2016,7 @@ void HicDataController::setTrackColor(int index, const QColor& positiveColor, co
     TrackLayer& track = m_tracks[static_cast<std::size_t>(index)];
     if (positiveColor.isValid()) {
         track.color = positiveColor;
-        for (TrackFeature& feature : track.features) feature.color = positiveColor;
+        track.colorOverride = true;
     }
     if (negativeColor.isValid()) track.negativeColor = negativeColor;
     emit tracksChanged();
@@ -1953,7 +2060,10 @@ void HicDataController::setTrackCollapsed(int index, bool collapsed) {
 
 void HicDataController::setTrackHeight(int index, int height) {
     if (index < 0 || index >= static_cast<int>(m_tracks.size())) return;
-    m_tracks[static_cast<std::size_t>(index)].height = std::max(20, height);
+    TrackLayer& track = m_tracks[static_cast<std::size_t>(index)];
+    const int nextHeight = std::max(20, height);
+    if (track.height == nextHeight) return;
+    track.height = nextHeight;
     emit tracksChanged();
 }
 
@@ -1976,9 +2086,9 @@ void HicDataController::setTrackAutoscale(int index, bool autoscale) {
 
 void HicDataController::moveTrack(int from, int to) {
     if (from < 0 || from >= static_cast<int>(m_tracks.size()) || to < 0 || to >= static_cast<int>(m_tracks.size()) || from == to) return;
-    auto item = m_tracks[static_cast<std::size_t>(from)];
+    auto item = std::move(m_tracks[static_cast<std::size_t>(from)]);
     m_tracks.erase(m_tracks.begin() + from);
-    m_tracks.insert(m_tracks.begin() + to, item);
+    m_tracks.insert(m_tracks.begin() + to, std::move(item));
     emit tracksChanged();
 }
 
@@ -2278,6 +2388,23 @@ void HicDataController::renderRecordsSnapshot(std::vector<contactRecord>& record
 
     const qint64 aggregatedResolution = static_cast<qint64>(sourceResolution) * aggregationFactor;
     dataResolution = static_cast<int>(std::min<qint64>(aggregatedResolution, std::numeric_limits<int>::max()));
+}
+
+void HicDataController::renderMinimapRecordsSnapshot(std::vector<contactRecord>& records,
+                                                      int& dataResolution,
+                                                      int maxRecords) const {
+    QMutexLocker locker(&m_mutex);
+    dataResolution = std::max(1, m_minimapResolution);
+    if (m_minimapRecords.empty()) {
+        records.clear();
+        return;
+    }
+    const std::size_t limit = static_cast<std::size_t>(std::max(1, maxRecords));
+    const std::size_t stride = std::max<std::size_t>(1, (m_minimapRecords.size() + limit - 1) / limit);
+    records.clear();
+    records.reserve(std::min(limit, m_minimapRecords.size()));
+    for (std::size_t index = 0; index < m_minimapRecords.size(); index += stride)
+        records.push_back(m_minimapRecords[index]);
 }
 
 QString HicDataController::localPathFromUrl(const QUrl& url) {
@@ -3035,6 +3162,54 @@ void HicDataController::rebuildHoverLookupLocked() {
         m_recordHoverLookup.insert(recordLookupKey(record.binX, record.binY), record.counts);
     for (const contactRecord& record : m_controlRecords)
         m_controlHoverLookup.insert(recordLookupKey(record.binX, record.binY), record.counts);
+}
+
+QString HicDataController::minimapSignature() const {
+    if (m_filePath.isEmpty() || m_chrX.isEmpty() || m_chrY.isEmpty() || m_metadata.bpResolutions.empty())
+        return {};
+    const int resolution = *std::max_element(m_metadata.bpResolutions.cbegin(), m_metadata.bpResolutions.cend());
+    return QStringLiteral("%1\n%2\n%3\n%4").arg(m_filePath, m_chrX, m_chrY).arg(resolution);
+}
+
+void HicDataController::requestMinimap() {
+    const QString signature = minimapSignature();
+    if (signature.isEmpty() || signature == m_minimapLoadedSignature || signature == m_minimapRequestSignature)
+        return;
+    if (m_minimapWatcher.isRunning()) {
+        m_minimapReloadPending = true;
+        return;
+    }
+
+    const QString path = m_filePath;
+    const QString chrX = m_chrX;
+    const QString chrY = m_chrY;
+    const qint64 xLength = chromosomeLength(chrX);
+    const qint64 yLength = chromosomeLength(chrY);
+    const int resolution = *std::max_element(m_metadata.bpResolutions.cbegin(), m_metadata.bpResolutions.cend());
+    if (xLength <= 0 || yLength <= 0 || resolution <= 0) return;
+    m_minimapRequestSignature = signature;
+    m_minimapWatcher.setFuture(QtConcurrent::run([signature, path, chrX, chrY, xLength, yLength, resolution]() {
+        MinimapResult result;
+        result.signature = signature;
+        result.resolution = resolution;
+        try {
+            const std::string xLocation = chrX.toStdString() + ":0:" + std::to_string(xLength);
+            const std::string yLocation = chrY.toStdString() + ":0:" + std::to_string(yLength);
+            result.records = straw("observed", "NONE", path.toStdString(), xLocation, yLocation, "BP", resolution);
+            constexpr std::size_t storageLimit = 100000;
+            if (result.records.size() > storageLimit) {
+                const std::size_t stride = (result.records.size() + storageLimit - 1) / storageLimit;
+                std::vector<contactRecord> sampled;
+                sampled.reserve(storageLimit);
+                for (std::size_t index = 0; index < result.records.size(); index += stride)
+                    sampled.push_back(result.records[index]);
+                result.records = std::move(sampled);
+            }
+        } catch (const std::exception& error) {
+            result.error = QString::fromUtf8(error.what());
+        }
+        return result;
+    }));
 }
 
 void HicDataController::startTileLoad(const HicTileKey& key, quint64 requestId) {

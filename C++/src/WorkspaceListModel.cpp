@@ -17,6 +17,13 @@ QHash<int, QByteArray> WorkspaceListModel::roleNames() const {
 }
 
 void WorkspaceListModel::setEntries(QVariantList entries) {
+    if (m_entries.size() == entries.size()) {
+        if (m_entries == entries) return;
+        m_entries = std::move(entries);
+        if (!m_entries.isEmpty())
+            emit dataChanged(index(0, 0), index(m_entries.size() - 1, 0), {EntryRole});
+        return;
+    }
     beginResetModel();
     m_entries = std::move(entries);
     endResetModel();

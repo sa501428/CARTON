@@ -52,7 +52,7 @@ ApplicationWindow {
     property int pendingAnnotationLayerExport: -1
     property int pendingTrackIndex: -1
     property bool navigationOpen: true
-    property bool inspectorOpen: false
+    property bool minimapVisible: true
     property bool trackPanelsOpen: false
     property bool landscapeMode: false
     property bool comparisonOpen: false
@@ -215,6 +215,7 @@ ApplicationWindow {
     function addTab() {
         var controller = createController()
         controllers.push(controller)
+        controllers = controllers.slice()
         tabSerial += 1
         tabModel.append({ "title": "Map " + tabSerial })
         tabBar.currentIndex = controllers.length - 1
@@ -227,10 +228,17 @@ ApplicationWindow {
         var index = tabBar.currentIndex
         var controller = controllers[index]
         controllers.splice(index, 1)
+        controllers = controllers.slice()
         tabModel.remove(index)
         controller.destroy()
         tabBar.currentIndex = Math.min(index, controllers.length - 1)
         setActiveTab(tabBar.currentIndex)
+        if (controllers.length < 2) {
+            comparisonController = null
+            comparisonOpen = false
+        } else if (comparisonOpen) {
+            ensureComparisonController()
+        }
     }
 
     function setActiveTab(index) {
@@ -252,16 +260,18 @@ ApplicationWindow {
                 return
             }
         }
-        var source = activeController
-        var controller = createController()
-        controllers.push(controller)
-        tabModel.append({ "title": "Comparison" })
-        comparisonController = controller
-        controller.metadataChanged.connect(function() {
-            if (source) controller.syncViewFrom(source, linkColorScale)
-        })
-        if (source && source.filePath.length > 0)
-            controller.openRecentMap(source.filePath)
+        comparisonController = null
+        comparisonOpen = false
+    }
+
+    function setComparisonEnabled(enabled) {
+        if (enabled && controllers.length < 2) {
+            comparisonOpen = false
+            showToast("Open a second Hi-C tab to use comparison", "info")
+            return
+        }
+        comparisonOpen = enabled
+        if (enabled) ensureComparisonController()
     }
 
     onComparisonOpenChanged: if (comparisonOpen) ensureComparisonController()
@@ -270,7 +280,6 @@ ApplicationWindow {
         if (!activeController)
             return
         navigationPanel.syncControllerModels()
-        colorMapBox.currentIndex = Math.max(0, colorMapBox.find(activeController.colorMap))
     }
 
     Component.onCompleted: addTab()
@@ -791,8 +800,7 @@ ApplicationWindow {
             MenuItem { text: "Hover Text"; checkable: true; checked: hoverTextVisible; onTriggered: hoverTextVisible = checked }
             MenuSeparator {}
             MenuItem { text: "Navigation Panel"; checkable: true; checked: navigationOpen; onTriggered: navigationOpen = checked }
-            MenuItem { text: "Inspector"; checkable: true; checked: inspectorOpen; onTriggered: inspectorOpen = checked }
-            MenuItem { text: "Comparison View"; checkable: true; checked: comparisonOpen; onTriggered: comparisonOpen = checked }
+            MenuItem { text: "Comparison View"; checkable: true; checked: comparisonOpen; onTriggered: setComparisonEnabled(checked) }
             MenuItem { text: "Fullscreen Visualization"; onTriggered: window.visibility = window.visibility === Window.FullScreen ? Window.Windowed : Window.FullScreen }
             MenuSeparator {}
             MenuItem { text: "White-Red"; checkable: true; checked: activeController && activeController.colorMap === "White-Red"; onTriggered: if (activeController) activeController.colorMap = "White-Red" }
@@ -817,133 +825,6 @@ ApplicationWindow {
         onActivated: window.visibility = window.visibility === Window.FullScreen ? Window.Windowed : Window.FullScreen
     }
 
-    header: ToolBar {
-        height: 56
-        background: Rectangle {
-            color: Theme.chromeBg
-            Rectangle {
-                anchors.left: parent.left
-                anchors.right: parent.right
-                anchors.bottom: parent.bottom
-                height: 1
-                color: Theme.chromeBorder
-            }
-        }
-        RowLayout {
-            anchors.fill: parent
-            anchors.leftMargin: 16
-            anchors.rightMargin: 16
-            spacing: 10
-
-            RowLayout {
-                spacing: 8
-                Rectangle {
-                    Layout.preferredWidth: 9
-                    Layout.preferredHeight: 9
-                    radius: 3
-                    color: Theme.accent
-                }
-                Label {
-                    text: "CARTON"
-                    color: Theme.chromeText
-                    font.pixelSize: 15
-                    font.weight: Font.Bold
-                    font.letterSpacing: 0.4
-                }
-            }
-
-            Rectangle { Layout.preferredWidth: 1; Layout.preferredHeight: 24; color: Theme.chromeBorder }
-
-            AppToolButton {
-                iconSource: Qt.resolvedUrl("icons/navigation.svg")
-                text: "Nav"
-                idleColor: navigationOpen ? Qt.rgba(1, 1, 1, 0.1) : "transparent"
-                Accessible.name: navigationOpen ? "Hide navigation panel" : "Show navigation panel"
-                ToolTip.visible: hovered
-                ToolTip.text: Accessible.name
-                onClicked: navigationOpen = !navigationOpen
-            }
-
-            AppButton {
-                text: "Open Hi-C"
-                highlighted: true
-                onClicked: openDialog.open()
-            }
-
-            AppButton {
-                text: activeController && activeController.controlReady ? "Control ✓" : "Control"
-                tonal: true
-                enabled: !!activeController
-                Accessible.name: activeController && activeController.controlReady
-                                 ? "Control map loaded; choose another control map"
-                                 : "Load control map"
-                onClicked: controlDialog.open()
-            }
-
-            Rectangle { Layout.preferredWidth: 1; Layout.preferredHeight: 24; color: Theme.chromeBorder }
-
-            AppToolButton {
-                text: "Track"
-                enabled: !!activeController
-                onClicked: trackDialog.open()
-            }
-
-            AppToolButton {
-                text: "Tracks"
-                enabled: !!activeController
-                idleColor: trackPanelsOpen ? Qt.rgba(1, 1, 1, 0.1) : "transparent"
-                Accessible.name: trackPanelsOpen ? "Collapse genomic track panels" : "Expand genomic track panels"
-                ToolTip.visible: hovered
-                ToolTip.text: Accessible.name
-                onClicked: trackPanelsOpen = !trackPanelsOpen
-            }
-
-            AppToolButton {
-                text: "2D"
-                enabled: !!activeController
-                onClicked: annotationDialog.open()
-            }
-
-            Item { Layout.fillWidth: true }
-
-            AppToolButton {
-                iconSource: Qt.resolvedUrl("icons/compare.svg")
-                text: "Compare"
-                idleColor: comparisonOpen ? Qt.rgba(1, 1, 1, 0.1) : "transparent"
-                Accessible.name: "Toggle comparison workspace"
-                ToolTip.visible: hovered
-                ToolTip.text: Accessible.name
-                onClicked: comparisonOpen = !comparisonOpen
-            }
-
-            AppToolButton {
-                iconSource: Qt.resolvedUrl("icons/inspector.svg")
-                text: "Inspect"
-                idleColor: inspectorOpen ? Qt.rgba(1, 1, 1, 0.1) : "transparent"
-                Accessible.name: inspectorOpen ? "Hide inspector" : "Show inspector"
-                ToolTip.visible: hovered
-                ToolTip.text: Accessible.name
-                onClicked: inspectorOpen = !inspectorOpen
-            }
-
-            RowLayout {
-                spacing: 8
-                visible: activeController && activeController.busy
-                BusyIndicator {
-                    running: parent.visible
-                    Layout.preferredWidth: 20
-                    Layout.preferredHeight: 20
-                    palette.dark: Theme.accent
-                }
-                Label {
-                    text: "Loading…"
-                    color: Theme.chromeTextMuted
-                    font.pixelSize: Theme.textSm
-                }
-            }
-        }
-    }
-
     SplitView {
         anchors.fill: parent
         orientation: Qt.Horizontal
@@ -951,30 +832,76 @@ ApplicationWindow {
         NavigationPanel {
             id: navigationPanel
             visible: navigationOpen
-            SplitView.preferredWidth: 320
+            SplitView.preferredWidth: 340
             SplitView.minimumWidth: 260
             SplitView.maximumWidth: 520
             controller: activeController
             landscapeMode: window.landscapeMode
             hoverTextVisible: window.hoverTextVisible
             trackPanelsOpen: window.trackPanelsOpen
+            minimapVisible: window.minimapVisible
             hoverText: window.hoverText
+            interfaceScale: window.interfaceScale
+            applicationFontScale: window.fontScale
+            reducedMotion: window.reducedMotion
+            comparisonOpen: window.comparisonOpen
+            comparisonAvailable: controllers.length > 1
+            comparisonLabel: comparisonController && comparisonController.filePath.length > 0
+                             ? String(comparisonController.filePath).split(/[\\/]/).pop() : ""
+            linkNavigation: window.linkNavigation
+            linkCrosshair: window.linkCrosshair
+            linkColorScale: window.linkColorScale
             onToggleRequested: navigationOpen = false
             onOpenDatasetRequested: openDialog.open()
+            onLoadControlRequested: controlDialog.open()
             onLoadTrackRequested: trackDialog.open()
+            onLoadTrackUrlRequested: urlDialog.open()
             onLoadAnnotationsRequested: annotationDialog.open()
+            onExportAnnotationRequested: function(index) {
+                pendingAnnotationLayerExport = index
+                exportAnnotationDialog.open()
+            }
+            onTrackMenuRequested: function(index) { openPlotTrackMenu(index) }
+            onTrackBinEditorRequested: function(index) { openTrackBinEditor(index) }
             onLandscapeModeToggled: function(enabled) {
                 window.landscapeMode = enabled
                 Qt.callLater(plotFrame.fitControllerToCanvas)
             }
             onHoverTextToggled: function(enabled) { window.hoverTextVisible = enabled }
             onTrackPanelsToggled: function(enabled) { window.trackPanelsOpen = enabled }
+            onMinimapToggled: function(enabled) { window.minimapVisible = enabled }
+            onInterfaceScaleRequested: function(value) { window.interfaceScale = value }
+            onFontScaleRequested: function(value) { window.fontScale = value }
+            onReducedMotionToggled: function(enabled) { window.reducedMotion = enabled }
+            onLowColorRequested: lowColorDialog.open()
+            onHighColorRequested: highColorDialog.open()
+            onMissingColorRequested: missingColorDialog.open()
+            onComparisonToggled: function(enabled) { setComparisonEnabled(enabled) }
+            onLinkNavigationToggled: function(enabled) { window.linkNavigation = enabled }
+            onLinkCrosshairToggled: function(enabled) { window.linkCrosshair = enabled }
+            onLinkColorScaleToggled: function(enabled) { window.linkColorScale = enabled }
         }
 
         Rectangle {
             SplitView.fillWidth: true
             SplitView.fillHeight: true
             color: Theme.appBg
+
+            AppToolButton {
+                z: 200
+                visible: !navigationOpen
+                anchors.left: parent.left
+                anchors.verticalCenter: parent.verticalCenter
+                width: 28
+                height: 48
+                text: "›"
+                onLightSurface: true
+                contentColor: Theme.textSecondary
+                Accessible.name: "Open workspace"
+                ToolTip.visible: hovered
+                ToolTip.text: Accessible.name
+                onClicked: navigationOpen = true
+            }
 
             ColumnLayout {
                 anchors.fill: parent
@@ -1039,7 +966,6 @@ ApplicationWindow {
                             leftTrackCanvas.requestPaint()
                             annotationCanvas.requestPaint()
                             guideCanvas.requestPaint()
-                            miniMapCanvas.requestPaint()
                             if (comparisonOpen && linkNavigation && comparisonController)
                                 comparisonController.syncViewFrom(activeController, linkColorScale)
                         }
@@ -1056,11 +982,8 @@ ApplicationWindow {
                         }
                         function onRecordsChanged() {
                             annotationCanvas.requestPaint()
-                            miniMapCanvas.requestPaint()
-                            histogramCanvas.requestPaint()
                         }
                         function onColorMaxChanged() {
-                            histogramCanvas.requestPaint()
                             if (comparisonOpen && linkColorScale && comparisonController)
                                 comparisonController.syncViewFrom(activeController, true)
                         }
@@ -1069,7 +992,6 @@ ApplicationWindow {
                             leftTrackCanvas.requestPaint()
                             annotationCanvas.requestPaint()
                             guideCanvas.requestPaint()
-                            miniMapCanvas.requestPaint()
                         }
                     }
 
@@ -1296,12 +1218,7 @@ ApplicationWindow {
                         }
                         property int axisSize: {
                             if (!activeController || !trackPanelsOpen) return 46
-                            var tracks = activeController.trackSummaries()
-                            var extent = 38
-                            for (var i = 0; i < tracks.length; ++i) {
-                                if (tracks[i].visible && !tracks[i].collapsed)
-                                    extent += Math.max(20, tracks[i].height)
-                            }
+                            var extent = 38 + activeController.visibleTrackHeight
                             var available = Math.floor(Math.min(plotFrame.width, plotFrame.height) - 80)
                             return Math.max(46, Math.min(available, extent))
                         }
@@ -1965,6 +1882,128 @@ ApplicationWindow {
                         }
                     }
 
+                    Rectangle {
+                        id: minimapFrame
+                        z: 80
+                        visible: minimapVisible && activeController && activeController.filePath.length > 0 &&
+                                 activeController.xChromosomeLength > 0 && activeController.yChromosomeLength > 0
+                        anchors.top: parent.top
+                        anchors.right: parent.right
+                        anchors.topMargin: 12
+                        anchors.rightMargin: comparisonOpen ? parent.width * 0.5 + 20 : 12
+                        width: 196
+                        height: 220
+                        radius: Theme.radiusMd
+                        color: Theme.surfaceAlt
+                        border.color: Theme.borderStrong
+
+                        ColumnLayout {
+                            anchors.fill: parent
+                            anchors.margins: 8
+                            spacing: 5
+                            RowLayout {
+                                Layout.fillWidth: true
+                                Label {
+                                    text: activeController ? activeController.chrX + " × " + activeController.chrY : "Minimap"
+                                    color: Theme.textPrimary
+                                    font.pixelSize: Theme.textXs
+                                    font.weight: Font.DemiBold
+                                    Layout.fillWidth: true
+                                    elide: Text.ElideRight
+                                }
+                                AppToolButton {
+                                    text: "×"
+                                    onLightSurface: true
+                                    Layout.preferredWidth: 24
+                                    Layout.preferredHeight: 24
+                                    Accessible.name: "Hide minimap"
+                                    onClicked: minimapVisible = false
+                                }
+                            }
+                            Rectangle {
+                                id: minimapMap
+                                Layout.fillWidth: true
+                                Layout.fillHeight: true
+                                color: "#ffffff"
+                                border.color: Theme.borderStrong
+                                clip: true
+
+                                HicHeatmapItem {
+                                    anchors.fill: parent
+                                    controller: activeController
+                                    overviewMode: true
+                                }
+
+                                Canvas {
+                                    anchors.fill: parent
+                                    visible: activeController && activeController.chrX === activeController.chrY
+                                    onPaint: {
+                                        var ctx = getContext("2d")
+                                        ctx.reset()
+                                        ctx.strokeStyle = Theme.boundaryLine
+                                        ctx.lineWidth = 1
+                                        ctx.beginPath()
+                                        ctx.moveTo(0, 0)
+                                        ctx.lineTo(width, height)
+                                        ctx.stroke()
+                                    }
+                                }
+
+                                Rectangle {
+                                    id: minimapViewportBox
+                                    visible: !!activeController
+                                    x: activeController ? Math.min(parent.width - width,
+                                           Math.max(0, activeController.x0 / Math.max(1, activeController.xChromosomeLength) * parent.width)) : 0
+                                    y: activeController ? Math.min(parent.height - height,
+                                           Math.max(0, activeController.y0 / Math.max(1, activeController.yChromosomeLength) * parent.height)) : 0
+                                    width: activeController ? Math.max(8, (activeController.x1 - activeController.x0) /
+                                           Math.max(1, activeController.xChromosomeLength) * parent.width) : 8
+                                    height: activeController ? Math.max(8, (activeController.y1 - activeController.y0) /
+                                            Math.max(1, activeController.yChromosomeLength) * parent.height) : 8
+                                    color: Qt.rgba(0.45, 0.52, 1.0, 0.16)
+                                    border.color: Theme.accent
+                                    border.width: 2
+                                }
+
+                                MouseArea {
+                                    anchors.fill: parent
+                                    acceptedButtons: Qt.LeftButton
+                                    cursorShape: pressed ? Qt.ClosedHandCursor : Qt.OpenHandCursor
+                                    property real dragOffsetX: minimapViewportBox.width / 2
+                                    property real dragOffsetY: minimapViewportBox.height / 2
+
+                                    function moveViewport(mouse) {
+                                        if (!activeController) return
+                                        var centerX = (mouse.x - dragOffsetX + minimapViewportBox.width / 2) / Math.max(1, width)
+                                        var centerY = (mouse.y - dragOffsetY + minimapViewportBox.height / 2) / Math.max(1, height)
+                                        activeController.centerViewAtFractions(centerX, centerY)
+                                    }
+
+                                    onPressed: function(mouse) {
+                                        var inside = mouse.x >= minimapViewportBox.x && mouse.x <= minimapViewportBox.x + minimapViewportBox.width &&
+                                                     mouse.y >= minimapViewportBox.y && mouse.y <= minimapViewportBox.y + minimapViewportBox.height
+                                        dragOffsetX = inside ? mouse.x - minimapViewportBox.x : minimapViewportBox.width / 2
+                                        dragOffsetY = inside ? mouse.y - minimapViewportBox.y : minimapViewportBox.height / 2
+                                        if (activeController) activeController.beginInteraction()
+                                        moveViewport(mouse)
+                                    }
+                                    onPositionChanged: function(mouse) {
+                                        if (mouse.buttons & Qt.LeftButton) moveViewport(mouse)
+                                    }
+                                    onReleased: if (activeController) activeController.endInteraction()
+                                    onCanceled: if (activeController) activeController.endInteraction()
+                                }
+                            }
+                            Label {
+                                Layout.fillWidth: true
+                                text: "Drag the outlined viewport to pan"
+                                color: Theme.textMuted
+                                font.pixelSize: Theme.textXs
+                                horizontalAlignment: Text.AlignHCenter
+                            }
+                        }
+                    }
+
                     ComparisonViewport {
                         id: comparisonViewport
                         visible: comparisonOpen
@@ -1995,777 +2034,10 @@ ApplicationWindow {
                             activeController.syncViewFrom(comparisonController, linkColorScale)
                     }
 
-                    Rectangle {
-                        visible: comparisonOpen
-                        z: 40
-                        anchors.top: parent.top
-                        anchors.horizontalCenter: parent.horizontalCenter
-                        anchors.topMargin: 8
-                        width: comparisonLinks.implicitWidth + 16
-                        height: 34
-                        radius: Theme.radiusSm
-                        color: Theme.surfaceAlt
-                        border.color: Theme.borderStrong
-                        RowLayout {
-                            id: comparisonLinks
-                            anchors.centerIn: parent
-                            spacing: 4
-                            AppCheckBox { text: "Loci"; checked: linkNavigation; onToggled: linkNavigation = checked; Accessible.name: "Link comparison navigation" }
-                            AppCheckBox { text: "Cursor"; checked: linkCrosshair; onToggled: linkCrosshair = checked; Accessible.name: "Link comparison crosshair" }
-                            AppCheckBox { text: "Scale"; checked: linkColorScale; onToggled: linkColorScale = checked; Accessible.name: "Link comparison color scale" }
-                        }
-                    }
-
                 }
             }
         }
 
-        Rectangle {
-            visible: inspectorOpen
-            SplitView.preferredWidth: 300
-            SplitView.minimumWidth: 260
-            SplitView.maximumWidth: 420
-            color: Theme.surfaceAlt
-            border.color: Theme.border
-
-            ScrollView {
-                anchors.fill: parent
-                clip: true
-                contentWidth: availableWidth
-
-                ColumnLayout {
-                    width: parent.width
-                    spacing: 16
-
-                    ColumnLayout {
-                        Layout.fillWidth: true
-                        Layout.margins: 16
-                        Layout.topMargin: 16
-                        Layout.bottomMargin: 0
-                        spacing: 2
-                        Label {
-                            text: "Inspector"
-                            color: Theme.textPrimary
-                            font.pixelSize: Theme.textXl
-                            font.weight: Font.Bold
-                        }
-                        Label {
-                            text: activeController && activeController.filePath.length > 0 ? activeController.filePath : "No file loaded"
-                            color: Theme.textMuted
-                            font.pixelSize: Theme.textSm
-                            elide: Text.ElideMiddle
-                            Layout.fillWidth: true
-                        }
-                    }
-
-                    Card {
-                        visible: hoverTextVisible
-                        Layout.fillWidth: true
-                        Layout.leftMargin: 16
-                        Layout.rightMargin: 16
-                        implicitHeight: performanceColumn.implicitHeight + 24
-                        ColumnLayout {
-                            id: performanceColumn
-                            anchors.fill: parent
-                            anchors.margins: 12
-                            spacing: 8
-                            Label { text: "Performance & Interface"; color: Theme.textPrimary; font.pixelSize: Theme.textMd; font.weight: Font.DemiBold }
-                            RowLayout {
-                                Layout.fillWidth: true
-                                Label { text: "Cache"; color: Theme.textSecondary; font.pixelSize: Theme.textSm }
-                                SpinBox {
-                                    from: 16; to: 4096; stepSize: 16; editable: true
-                                    value: activeController ? activeController.cacheLimitMB : 128
-                                    onValueModified: if (activeController) activeController.cacheLimitMB = value
-                                    Accessible.name: "Matrix cache limit in megabytes"
-                                }
-                                Label { text: "MB"; color: Theme.textMuted; font.pixelSize: Theme.textSm }
-                            }
-                            RowLayout {
-                                Layout.fillWidth: true
-                                Label { text: "UI scale"; color: Theme.textSecondary; font.pixelSize: Theme.textSm }
-                                Slider { Layout.fillWidth: true; from: 0.85; to: 1.35; stepSize: 0.05; value: interfaceScale; onMoved: interfaceScale = value; Accessible.name: "Interface scale" }
-                                Label { text: Math.round(interfaceScale * 100) + "%"; color: Theme.textPrimary; font.pixelSize: Theme.textSm }
-                            }
-                            RowLayout {
-                                Layout.fillWidth: true
-                                Label { text: "Font size"; color: Theme.textSecondary; font.pixelSize: Theme.textSm }
-                                Slider { Layout.fillWidth: true; from: 0.85; to: 1.4; stepSize: 0.05; value: fontScale; onMoved: fontScale = value; Accessible.name: "Application font size" }
-                                Label { text: Math.round(fontScale * 100) + "%"; color: Theme.textPrimary; font.pixelSize: Theme.textSm }
-                            }
-                            AppCheckBox { text: "Reduce motion"; checked: reducedMotion; onToggled: reducedMotion = checked; Accessible.name: "Reduce interface motion" }
-                        }
-                    }
-
-                    Card {
-                        Layout.fillWidth: true
-                        Layout.leftMargin: 16
-                        Layout.rightMargin: 16
-                        implicitHeight: overviewGrid.implicitHeight + 24
-
-                        GridLayout {
-                            id: overviewGrid
-                            anchors.fill: parent
-                            anchors.margins: 12
-                            columns: 2
-                            columnSpacing: 12
-                            rowSpacing: 10
-
-                            Label { text: "Genome"; color: Theme.textSecondary; font.pixelSize: Theme.textSm }
-                            Label { text: activeController && activeController.genomeId ? activeController.genomeId : "—"; color: Theme.textPrimary; elide: Text.ElideRight; Layout.fillWidth: true }
-
-                            Label { text: "Resolution"; color: Theme.textSecondary; font.pixelSize: Theme.textSm }
-                            Label { text: activeController && activeController.resolution > 0 ? activeController.resolution + " bp" : "—"; color: Theme.textPrimary }
-
-                            Label { text: "Matrix"; color: Theme.textSecondary; font.pixelSize: Theme.textSm }
-                            Label { text: activeController ? activeController.matrixType : "—"; color: Theme.textPrimary }
-
-                            Label { text: "Norm"; color: Theme.textSecondary; font.pixelSize: Theme.textSm }
-                            Label { text: activeController ? activeController.norm : "—"; color: Theme.textPrimary }
-
-                            Label { text: "Visible matrix"; color: Theme.textSecondary; font.pixelSize: Theme.textSm }
-                            Label { text: activeController ? activeController.matrixDimensions : "—"; color: Theme.textPrimary }
-
-                            Label { text: "Renderer"; color: Theme.textSecondary; font.pixelSize: Theme.textSm }
-                            Label { text: activeController ? activeController.renderingBackend : "—"; color: Theme.textPrimary; elide: Text.ElideRight; Layout.fillWidth: true }
-
-                            Label { text: "Cache"; color: Theme.textSecondary; font.pixelSize: Theme.textSm }
-                            Label { text: activeController ? activeController.cacheTileCount + " regions · " + activeController.cacheMemoryMB.toFixed(1) + " MB" : "—"; color: Theme.textPrimary }
-                        }
-                    }
-
-                    Card {
-                        Layout.fillWidth: true
-                        Layout.leftMargin: 16
-                        Layout.rightMargin: 16
-                        implicitHeight: navigatorColumn.implicitHeight + 24
-
-                        ColumnLayout {
-                            id: navigatorColumn
-                            anchors.fill: parent
-                            anchors.margins: 12
-                            spacing: 10
-
-                            Label {
-                                text: "Navigator"
-                                color: Theme.textPrimary
-                                font.pixelSize: Theme.textMd
-                                font.weight: Font.DemiBold
-                            }
-
-                            Canvas {
-                                id: miniMapCanvas
-                                Layout.fillWidth: true
-                                Layout.preferredHeight: 160
-                                onPaint: {
-                                    var ctx = getContext("2d")
-                                    ctx.reset()
-                                    ctx.fillStyle = Theme.surfaceSunken
-                                    ctx.fillRect(0, 0, width, height)
-                                    ctx.strokeStyle = Theme.borderStrong
-                                    ctx.strokeRect(0.5, 0.5, width - 1, height - 1)
-                                    if (!activeController) return
-                                    var lx = Math.max(1, activeController.wholeGenomeView ? activeController.x1 : activeController.x1 - activeController.x0)
-                                    var ly = Math.max(1, activeController.wholeGenomeView ? activeController.y1 : activeController.y1 - activeController.y0)
-                                    if (activeController.wholeGenomeView) {
-                                        var bounds = activeController.chromosomeBoundaries()
-                                        ctx.strokeStyle = Theme.border
-                                        for (var i = 0; i < bounds.length; i++) {
-                                            var bx = bounds[i].end / Math.max(1, activeController.x1) * width
-                                            var by = bounds[i].end / Math.max(1, activeController.y1) * height
-                                            ctx.beginPath()
-                                            ctx.moveTo(bx, 0)
-                                            ctx.lineTo(bx, height)
-                                            ctx.moveTo(0, by)
-                                            ctx.lineTo(width, by)
-                                            ctx.stroke()
-                                        }
-                                    }
-                                    ctx.strokeStyle = Theme.danger
-                                    ctx.lineWidth = 2
-                                    ctx.strokeRect(4, 4, width - 8, height - 8)
-                                }
-                            }
-
-                            RowLayout {
-                                Layout.fillWidth: true
-                                spacing: 10
-                                AppCheckBox {
-                                    text: "Lock resolution"
-                                    checked: activeController && activeController.resolutionLocked
-                                    onToggled: if (activeController) activeController.resolutionLocked = checked
-                                }
-                                Slider {
-                                    id: resolutionSlider
-                                    Layout.fillWidth: true
-                                    enabled: activeController && !activeController.resolutionLocked
-                                    from: 0
-                                    to: activeController ? Math.max(0, activeController.resolutions().length - 1) : 0
-                                    stepSize: 1
-                                    snapMode: Slider.SnapAlways
-                                    value: activeController
-                                           ? Math.max(0, activeController.resolutions().indexOf(activeController.resolution))
-                                           : 0
-                                    onMoved: {
-                                        if (activeController && activeController.resolutions().length > value)
-                                            activeController.resolution = Number(activeController.resolutions()[Math.round(value)])
-                                    }
-                                    background: Rectangle {
-                                        x: resolutionSlider.leftPadding
-                                        y: resolutionSlider.topPadding + resolutionSlider.availableHeight / 2 - height / 2
-                                        width: resolutionSlider.availableWidth
-                                        height: 4
-                                        radius: 2
-                                        color: Theme.border
-                                        Rectangle {
-                                            width: resolutionSlider.visualPosition * parent.width
-                                            height: parent.height
-                                            radius: 2
-                                            color: Theme.accent
-                                        }
-                                    }
-                                    handle: Rectangle {
-                                        x: resolutionSlider.leftPadding + resolutionSlider.visualPosition * (resolutionSlider.availableWidth - width)
-                                        y: resolutionSlider.topPadding + resolutionSlider.availableHeight / 2 - height / 2
-                                        width: 16
-                                        height: 16
-                                        radius: 8
-                                        color: Theme.surface
-                                        border.width: 2
-                                        border.color: Theme.accent
-                                    }
-                                }
-                            }
-
-                            RowLayout {
-                                Layout.fillWidth: true
-                                spacing: 16
-                                AppCheckBox {
-                                    text: "Lock X"
-                                    checked: activeController && activeController.xLocusLocked
-                                    Accessible.name: "Lock X axis locus"
-                                    onToggled: if (activeController) activeController.xLocusLocked = checked
-                                }
-                                AppCheckBox {
-                                    text: "Lock Y"
-                                    checked: activeController && activeController.yLocusLocked
-                                    Accessible.name: "Lock Y axis locus"
-                                    onToggled: if (activeController) activeController.yLocusLocked = checked
-                                }
-                            }
-
-                            RowLayout {
-                                Layout.fillWidth: true
-                                spacing: 16
-                                AppCheckBox {
-                                    text: "Gridlines"
-                                    checked: activeController && activeController.showGridlines
-                                    onToggled: if (activeController) activeController.showGridlines = checked
-                                }
-                                AppCheckBox {
-                                    text: "Chromosome context"
-                                    checked: activeController && activeController.showChromosomeContext
-                                    onToggled: if (activeController) activeController.showChromosomeContext = checked
-                                }
-                            }
-                        }
-                    }
-
-                    Card {
-                        Layout.fillWidth: true
-                        Layout.leftMargin: 16
-                        Layout.rightMargin: 16
-                        implicitHeight: colorScaleColumn.implicitHeight + 24
-
-                        ColumnLayout {
-                            id: colorScaleColumn
-                            anchors.fill: parent
-                            anchors.margins: 12
-                            spacing: 10
-
-                            Label {
-                                text: "Color Scale"
-                                color: Theme.textPrimary
-                                font.pixelSize: Theme.textMd
-                                font.weight: Font.DemiBold
-                            }
-
-                            AppComboBox {
-                                id: colorMapBox
-                                Layout.fillWidth: true
-                                model: ["White-Red", "Viridis", "Blue-White-Red", "Grayscale", "Custom"]
-                                onActivated: if (activeController) activeController.colorMap = currentText
-                            }
-
-                            Canvas {
-                                id: histogramCanvas
-                                Layout.fillWidth: true
-                                Layout.preferredHeight: 52
-                                Accessible.name: "Visible matrix value distribution"
-                                onPaint: {
-                                    var ctx = getContext("2d")
-                                    ctx.reset()
-                                    ctx.fillStyle = Theme.surfaceSunken
-                                    ctx.fillRect(0, 0, width, height)
-                                    if (!activeController) return
-                                    var histogram = activeController.colorHistogram(40)
-                                    var barWidth = width / Math.max(1, histogram.length)
-                                    ctx.fillStyle = Theme.accent
-                                    for (var i = 0; i < histogram.length; i++) {
-                                        var h = Math.max(1, histogram[i].fraction * (height - 6))
-                                        ctx.fillRect(i * barWidth, height - h, Math.max(1, barWidth - 1), h)
-                                    }
-                                }
-                            }
-
-                            RowLayout {
-                                Layout.fillWidth: true
-                                AppCheckBox {
-                                    text: "Symmetric zero"
-                                    checked: activeController && activeController.symmetricColorScale
-                                    onToggled: if (activeController) activeController.symmetricColorScale = checked
-                                }
-                                AppCheckBox {
-                                    text: "Transparent zero"
-                                    checked: activeController && activeController.zeroTransparent
-                                    onToggled: if (activeController) activeController.zeroTransparent = checked
-                                }
-                            }
-
-                            RowLayout {
-                                Layout.fillWidth: true
-                                Label { text: "Clip"; color: Theme.textSecondary; font.pixelSize: Theme.textSm }
-                                Slider {
-                                    Layout.fillWidth: true
-                                    from: 50; to: 100; stepSize: 0.5
-                                    value: activeController ? activeController.colorPercentile : 95
-                                    onMoved: if (activeController) activeController.colorPercentile = value
-                                    Accessible.name: "Visible value clipping percentile"
-                                }
-                                Label { text: activeController ? activeController.colorPercentile.toFixed(1) + "%" : "95%"; color: Theme.textPrimary; font.pixelSize: Theme.textSm }
-                                AppButton { text: "Missing"; tonal: true; onClicked: missingColorDialog.open() }
-                            }
-
-                            RowLayout {
-                                Layout.fillWidth: true
-                                enabled: activeController && activeController.colorMap === "Custom"
-                                spacing: 8
-                                AppButton {
-                                    text: "Low"
-                                    tonal: true
-                                    Layout.fillWidth: true
-                                    onClicked: lowColorDialog.open()
-                                }
-                                Rectangle {
-                                    Layout.preferredWidth: 26
-                                    Layout.preferredHeight: 26
-                                    radius: Theme.radiusSm
-                                    border.color: Theme.border
-                                    color: activeController ? activeController.customLowColor : "white"
-                                }
-                                AppButton {
-                                    text: "High"
-                                    tonal: true
-                                    Layout.fillWidth: true
-                                    onClicked: highColorDialog.open()
-                                }
-                                Rectangle {
-                                    Layout.preferredWidth: 26
-                                    Layout.preferredHeight: 26
-                                    radius: Theme.radiusSm
-                                    border.color: Theme.border
-                                    color: activeController ? activeController.customHighColor : "#d7191c"
-                                }
-                            }
-
-                            RangeSlider {
-                                id: colorRangeSlider
-                                Layout.fillWidth: true
-                                Layout.topMargin: 4
-                                from: colorRangeLower()
-                                to: colorRangeUpper()
-                                first.value: activeController ? activeController.colorMin : 0
-                                second.value: activeController ? activeController.colorMax : 50
-                                first.onMoved: if (activeController) activeController.colorMin = first.value
-                                second.onMoved: if (activeController) activeController.colorMax = second.value
-
-                                background: Rectangle {
-                                    x: colorRangeSlider.leftPadding
-                                    y: colorRangeSlider.topPadding + colorRangeSlider.availableHeight / 2 - height / 2
-                                    width: colorRangeSlider.availableWidth
-                                    height: 4
-                                    radius: 2
-                                    color: Theme.border
-                                    Rectangle {
-                                        x: colorRangeSlider.first.visualPosition * parent.width
-                                        width: (colorRangeSlider.second.visualPosition - colorRangeSlider.first.visualPosition) * parent.width
-                                        height: parent.height
-                                        radius: 2
-                                        color: Theme.accent
-                                    }
-                                }
-                                first.handle: Rectangle {
-                                    x: colorRangeSlider.leftPadding + colorRangeSlider.first.visualPosition * (colorRangeSlider.availableWidth - width)
-                                    y: colorRangeSlider.topPadding + colorRangeSlider.availableHeight / 2 - height / 2
-                                    width: 16
-                                    height: 16
-                                    radius: 8
-                                    color: Theme.surface
-                                    border.width: 2
-                                    border.color: Theme.accent
-                                }
-                                second.handle: Rectangle {
-                                    x: colorRangeSlider.leftPadding + colorRangeSlider.second.visualPosition * (colorRangeSlider.availableWidth - width)
-                                    y: colorRangeSlider.topPadding + colorRangeSlider.availableHeight / 2 - height / 2
-                                    width: 16
-                                    height: 16
-                                    radius: 8
-                                    color: Theme.surface
-                                    border.width: 2
-                                    border.color: Theme.accent
-                                }
-                            }
-
-                            RowLayout {
-                                Layout.fillWidth: true
-                                spacing: 6
-                                AppToolButton {
-                                    text: "−"
-                                    onLightSurface: true
-                                    contentColor: Theme.textPrimary
-                                    enabled: !!activeController
-                                    onClicked: if (activeController) {
-                                        var center = (activeController.colorMin + activeController.colorMax) * 0.5
-                                        var half = Math.max(0.000001, (activeController.colorMax - activeController.colorMin) * 0.25)
-                                        activeController.colorMin = center - half
-                                        activeController.colorMax = center + half
-                                    }
-                                }
-                                Label {
-                                    text: activeController && activeController.colorMaxAuto ? "Auto" : "Min / Max"
-                                    color: Theme.textSecondary
-                                    font.pixelSize: Theme.textSm
-                                }
-                                AppTextField {
-                                    id: colorMinField
-                                    Layout.fillWidth: true
-                                    text: activeController ? activeController.colorMin.toString() : ""
-                                    validator: DoubleValidator {
-                                        notation: DoubleValidator.ScientificNotation
-                                    }
-                                    onAccepted: {
-                                        if (activeController && isFinite(Number(text)))
-                                            activeController.colorMin = Number(text)
-                                    }
-                                    onEditingFinished: {
-                                        if (activeController && isFinite(Number(text)))
-                                            activeController.colorMin = Number(text)
-                                    }
-                                }
-                                AppTextField {
-                                    id: colorMaxField
-                                    Layout.fillWidth: true
-                                    text: activeController ? activeController.colorMax.toString() : ""
-                                    validator: DoubleValidator {
-                                        notation: DoubleValidator.ScientificNotation
-                                    }
-                                    onAccepted: {
-                                        if (activeController && isFinite(Number(text)))
-                                            activeController.colorMax = Number(text)
-                                    }
-                                    onEditingFinished: {
-                                        if (activeController && isFinite(Number(text)))
-                                            activeController.colorMax = Number(text)
-                                    }
-                                }
-                                AppButton {
-                                    text: "Auto"
-                                    tonal: true
-                                    enabled: activeController && !activeController.colorMaxAuto
-                                    onClicked: activeController.resetColorScale()
-                                }
-                                AppToolButton {
-                                    text: "+"
-                                    onLightSurface: true
-                                    contentColor: Theme.textPrimary
-                                    enabled: !!activeController
-                                    onClicked: if (activeController) {
-                                        var center = (activeController.colorMin + activeController.colorMax) * 0.5
-                                        var half = Math.max(0.000001, activeController.colorMax - activeController.colorMin)
-                                        activeController.colorMin = center - half
-                                        activeController.colorMax = center + half
-                                    }
-                                }
-                            }
-                        }
-                    }
-
-                    Card {
-                        Layout.fillWidth: true
-                        Layout.leftMargin: 16
-                        Layout.rightMargin: 16
-                        implicitHeight: hoverColumn.implicitHeight + 24
-
-                        ColumnLayout {
-                            id: hoverColumn
-                            anchors.fill: parent
-                            anchors.margins: 12
-                            spacing: 8
-
-                            Label {
-                                text: "Hover"
-                                color: Theme.textPrimary
-                                font.pixelSize: Theme.textMd
-                                font.weight: Font.DemiBold
-                            }
-
-                            Rectangle {
-                                Layout.fillWidth: true
-                                Layout.preferredHeight: 84
-                                radius: Theme.radiusSm
-                                color: Theme.surfaceSunken
-                                border.color: Theme.borderSubtle
-
-                                ScrollView {
-                                    anchors.fill: parent
-                                    anchors.margins: 8
-                                    clip: true
-                                    TextArea {
-                                        text: hoverText
-                                        readOnly: true
-                                        wrapMode: Text.WordWrap
-                                        color: Theme.textPrimary
-                                        font.pixelSize: Theme.textSm
-                                        background: null
-                                    }
-                                }
-                            }
-                        }
-                    }
-
-                    ColumnLayout {
-                        Layout.fillWidth: true
-                        Layout.leftMargin: 16
-                        Layout.rightMargin: 16
-                        Layout.bottomMargin: 16
-                        Layout.preferredHeight: 420
-                        spacing: 0
-
-                        TabBar {
-                            id: sideTabs
-                            Layout.fillWidth: true
-                            background: Rectangle { color: "transparent" }
-                            AppTabButton { text: "Layers" }
-                            AppTabButton { text: "Tracks" }
-                        }
-
-                        Card {
-                            Layout.fillWidth: true
-                            Layout.fillHeight: true
-
-                            StackLayout {
-                                anchors.fill: parent
-                                anchors.margins: 12
-                                currentIndex: sideTabs.currentIndex
-
-                                ScrollView {
-                                    clip: true
-                                    ColumnLayout {
-                                        width: parent.width
-                                        spacing: 8
-                                        RowLayout {
-                                            Layout.fillWidth: true
-                                            spacing: 8
-                                            AppButton { text: "New"; tonal: true; onClicked: if (activeController) activeController.addAnnotationLayer("Layer") }
-                                            AppButton { text: "Merge"; tonal: true; onClicked: if (activeController) activeController.mergeVisibleAnnotationLayers("Merged") }
-                                            SpinBox {
-                                                from: 1
-                                                to: 1000000
-                                                value: activeController ? activeController.sparseFeatureLimit : 10000
-                                                editable: true
-                                                onValueModified: if (activeController) activeController.sparseFeatureLimit = value
-                                            }
-                                        }
-                                        Repeater {
-                                            model: activeController ? activeController.annotationLayerSummaries() : []
-                                            Rectangle {
-                                                Layout.fillWidth: true
-                                                height: 100
-                                                radius: Theme.radiusMd
-                                                color: modelData.active ? Theme.accentSoft : Theme.surface
-                                                border.color: modelData.active ? Theme.accent : Theme.border
-                                                ColumnLayout {
-                                                    anchors.fill: parent
-                                                    anchors.margins: 8
-                                                    spacing: 6
-                                                    RowLayout {
-                                                        Layout.fillWidth: true
-                                                        AppCheckBox { checked: modelData.visible; onToggled: activeController.setAnnotationLayerVisible(modelData.index, checked) }
-                                                        Label { text: modelData.name + "  ·  " + modelData.count; color: Theme.textPrimary; Layout.fillWidth: true; elide: Text.ElideRight }
-                                                        AppButton { text: "Active"; tonal: true; onClicked: activeController.setActiveAnnotationLayer(modelData.index) }
-                                                    }
-                                                    RowLayout {
-                                                        Layout.fillWidth: true
-                                                        AppCheckBox { text: "Trans"; checked: modelData.transparent; onToggled: activeController.setAnnotationLayerTransparent(modelData.index, checked) }
-                                                        AppCheckBox { text: "Sparse"; checked: modelData.sparse; onToggled: activeController.setAnnotationLayerSparse(modelData.index, checked) }
-                                                        AppCheckBox { text: "Large"; checked: modelData.enlarged; onToggled: activeController.setAnnotationLayerEnlarged(modelData.index, checked) }
-                                                    }
-                                                    RowLayout {
-                                                        spacing: 6
-                                                        AppButton { text: "Dup"; tonal: true; onClicked: activeController.duplicateAnnotationLayer(modelData.index) }
-                                                        AppButton { text: "Clear"; tonal: true; onClicked: activeController.clearAnnotationLayer(modelData.index) }
-                                                        AppButton {
-                                                            text: "Export"
-                                                            tonal: true
-                                                            onClicked: {
-                                                                pendingAnnotationLayerExport = modelData.index
-                                                                exportAnnotationDialog.open()
-                                                            }
-                                                        }
-                                                        AppButton { text: "Del"; tonal: true; onClicked: activeController.removeAnnotationLayer(modelData.index) }
-                                                    }
-                                                }
-                                            }
-                                        }
-                                    }
-                                }
-
-                                ScrollView {
-                                    clip: true
-                                    ColumnLayout {
-                                        width: parent.width
-                                        spacing: 8
-                                        RowLayout {
-                                            Layout.fillWidth: true
-                                            spacing: 8
-                                            AppButton { text: "Load"; tonal: true; onClicked: trackDialog.open() }
-                                            AppButton { text: "URL"; tonal: true; onClicked: urlDialog.open() }
-                                            AppButton { text: "Clear"; tonal: true; enabled: activeController && activeController.trackCount > 0; onClicked: activeController.clearTracks() }
-                                        }
-                                        Repeater {
-                                            model: activeController ? activeController.trackSummaries() : []
-                                            Rectangle {
-                                                Layout.fillWidth: true
-                                                height: modelData.collapsed ? 46 : (modelData.renderMode === "signal" ? 226 : 132)
-                                                radius: Theme.radiusMd
-                                                color: Theme.surface
-                                                border.color: Theme.border
-                                                Accessible.name: "Track " + modelData.name
-                                                ColumnLayout {
-                                                    anchors.fill: parent
-                                                    anchors.margins: 8
-                                                    spacing: 6
-                                                    RowLayout {
-                                                        Layout.fillWidth: true
-                                                        spacing: 5
-                                                        AppCheckBox {
-                                                            checked: modelData.visible
-                                                            text: ""
-                                                            Accessible.name: "Show " + modelData.name
-                                                            ToolTip.visible: hovered
-                                                            ToolTip.text: checked ? "Hide track" : "Show track"
-                                                            onToggled: activeController.setTrackVisible(modelData.index, checked)
-                                                        }
-                                                        AppToolButton {
-                                                            text: modelData.collapsed ? "›" : "⌄"
-                                                            Accessible.name: (modelData.collapsed ? "Expand " : "Collapse ") + modelData.name
-                                                            ToolTip.visible: hovered
-                                                            ToolTip.text: modelData.collapsed ? "Expand track controls" : "Collapse track controls"
-                                                            onClicked: activeController.setTrackCollapsed(modelData.index, !modelData.collapsed)
-                                                        }
-                                                        AppTextField {
-                                                            Layout.fillWidth: true
-                                                            text: modelData.name
-                                                            Accessible.name: "Track name"
-                                                            onAccepted: activeController.setTrackName(modelData.index, text)
-                                                            onEditingFinished: activeController.setTrackName(modelData.index, text)
-                                                        }
-                                                        AppToolButton {
-                                                            id: trackMenuButton
-                                                            text: "⋯"
-                                                            Accessible.name: "Track actions for " + modelData.name
-                                                            onClicked: openPlotTrackMenu(modelData.index)
-                                                        }
-                                                    }
-                                                    Label {
-                                                        visible: !modelData.collapsed
-                                                        text: modelData.featureCount + " intervals · " + modelData.format
-                                                        color: Theme.textMuted
-                                                        font.pixelSize: Theme.textXs
-                                                    }
-                                                    RowLayout {
-                                                        visible: !modelData.collapsed && modelData.renderMode === "signal"
-                                                        Layout.fillWidth: true
-                                                        AppCheckBox {
-                                                            text: "Autoscale"
-                                                            checked: modelData.autoscale
-                                                            onToggled: activeController.setTrackAutoscale(modelData.index, checked)
-                                                        }
-                                                        AppCheckBox {
-                                                            text: "Log"
-                                                            checked: modelData.logScale
-                                                            onToggled: activeController.setTrackRange(modelData.index, modelData.min, modelData.max, checked)
-                                                        }
-                                                        AppComboBox {
-                                                            Layout.preferredWidth: 100
-                                                            model: ["min", "mean", "max", "none"]
-                                                            currentIndex: Math.max(0, model.indexOf(modelData.reduction))
-                                                            onActivated: activeController.setTrackReduction(modelData.index, currentText)
-                                                        }
-                                                    }
-                                                    RowLayout {
-                                                        visible: !modelData.collapsed && modelData.renderMode === "signal"
-                                                        Layout.fillWidth: true
-                                                        Label { text: "Bin size"; color: Theme.textSecondary; font.pixelSize: Theme.textSm }
-                                                        Label {
-                                                            Layout.fillWidth: true
-                                                            text: modelData.binSize === 0
-                                                                  ? "Hi-C · " + formatBp(activeController ? activeController.resolution : modelData.effectiveBinSize)
-                                                                  : "Fixed · " + formatBp(modelData.effectiveBinSize)
-                                                            color: Theme.textMuted
-                                                            font.pixelSize: Theme.textSm
-                                                        }
-                                                        AppButton { text: "Match map"; tonal: true; onClicked: activeController.setTrackBinSize(modelData.index, 0) }
-                                                        AppButton { text: "Set…"; tonal: true; onClicked: openTrackBinEditor(modelData.index) }
-                                                    }
-                                                    RowLayout {
-                                                        visible: !modelData.collapsed && modelData.renderMode === "signal"
-                                                        Layout.fillWidth: true
-                                                        spacing: 6
-                                                        Label { text: "Min"; color: Theme.textSecondary; font.pixelSize: Theme.textSm }
-                                                        AppTextField { text: String(modelData.min); enabled: !modelData.autoscale; Layout.fillWidth: true; onAccepted: activeController.setTrackRange(modelData.index, Number(text), modelData.max, modelData.logScale) }
-                                                        Label { text: "Max"; color: Theme.textSecondary; font.pixelSize: Theme.textSm }
-                                                        AppTextField { text: String(modelData.max); enabled: !modelData.autoscale; Layout.fillWidth: true; onAccepted: activeController.setTrackRange(modelData.index, modelData.min, Number(text), modelData.logScale) }
-                                                    }
-                                                    RowLayout {
-                                                        visible: !modelData.collapsed
-                                                        Layout.fillWidth: true
-                                                        Label { text: "Height"; color: Theme.textSecondary; font.pixelSize: Theme.textSm }
-                                                        AppTextField {
-                                                            Layout.fillWidth: true
-                                                            text: String(modelData.height)
-                                                            inputMethodHints: Qt.ImhDigitsOnly
-                                                            validator: IntValidator { bottom: 20 }
-                                                            Accessible.name: "Height of " + modelData.name
-                                                            onAccepted: if (acceptableInput)
-                                                                activeController.setTrackHeight(modelData.index, Math.round(Number(text)))
-                                                            onEditingFinished: if (acceptableInput)
-                                                                activeController.setTrackHeight(modelData.index, Math.round(Number(text)))
-                                                        }
-                                                        Label { text: "px · no maximum"; color: Theme.textMuted; font.pixelSize: Theme.textXs }
-                                                    }
-                                                }
-                                            }
-                                        }
-                                    }
-                                }
-                            }
-                        }
-                    }
-
-                }
-            }
-        }
     }
 
     Rectangle {

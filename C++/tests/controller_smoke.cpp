@@ -58,14 +58,16 @@ int main(int argc, char** argv) {
     if (!require(writeFile(track, "chr1\t0\t100\t2.5\nchr1\t100\t200\t-1.5\n"), "write track")) return 1;
     controller.loadTrackFromPath(track);
     if (!require(controller.trackCount() == 1, "track parsing")) return 1;
-    if (!require(controller.trackSummaries().front().toMap().value("height").toInt() == 400,
+    if (!require(controller.trackSummaries().front().toMap().value("height").toInt() == 400 &&
+                 controller.visibleTrackHeight() == 400,
                  "default track height")) return 1;
     if (!require(controller.tracksModel()->rowCount() == 1 && controller.annotationsModel()->rowCount() == 1,
                  "workspace list models")) return 1;
     controller.setTrackVisible(0, false);
     controller.setTrackCollapsed(0, true);
     controller.setTrackHeight(0, 1200);
-    if (!require(controller.trackSummaries().front().toMap().value("height").toInt() == 1200,
+    if (!require(controller.trackSummaries().front().toMap().value("height").toInt() == 1200 &&
+                 controller.visibleTrackHeight() == 0,
                  "uncapped track height")) return 1;
     controller.setTrackHeight(0, 96);
     const QVariantMap summary = controller.trackSummaries().front().toMap();

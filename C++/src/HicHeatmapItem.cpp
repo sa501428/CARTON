@@ -88,11 +88,23 @@ void HicHeatmapItem::setController(HicDataController* controller) {
     m_controller = controller;
     if (m_controller) {
         connect(m_controller, &HicDataController::recordsChanged, this, &HicHeatmapItem::update);
+        connect(m_controller, &HicDataController::minimapChanged, this, &HicHeatmapItem::update);
         connect(m_controller, &HicDataController::viewChanged, this, &HicHeatmapItem::update);
         connect(m_controller, &HicDataController::colorMaxChanged, this, &HicHeatmapItem::update);
         connect(m_controller, &HicDataController::colorMapChanged, this, &HicHeatmapItem::update);
     }
     emit controllerChanged();
+    update();
+}
+
+bool HicHeatmapItem::overviewMode() const {
+    return m_overviewMode;
+}
+
+void HicHeatmapItem::setOverviewMode(bool enabled) {
+    if (m_overviewMode == enabled) return;
+    m_overviewMode = enabled;
+    emit overviewModeChanged();
     update();
 }
 
@@ -123,7 +135,11 @@ QSGNode* HicHeatmapItem::updatePaintNode(QSGNode* oldNode, UpdatePaintNodeData*)
     std::vector<contactRecord> records;
     std::vector<contactRecord> controlRecords;
     int dataResolution = m_controller->resolution();
-    m_controller->renderRecordsSnapshot(records, controlRecords, dataResolution, kMaxRenderedRecords);
+    if (m_overviewMode) {
+        m_controller->renderMinimapRecordsSnapshot(records, dataResolution, 25000);
+    } else {
+        m_controller->renderRecordsSnapshot(records, controlRecords, dataResolution, kMaxRenderedRecords);
+    }
     const QString matrixType = m_controller->matrixType();
     const bool isVsMode = (matrixType == QStringLiteral("vs") || matrixType.endsWith(QStringLiteral("vs"))) && !controlRecords.empty();
     if (records.empty() && controlRecords.empty()) {
@@ -132,10 +148,10 @@ QSGNode* HicHeatmapItem::updatePaintNode(QSGNode* oldNode, UpdatePaintNodeData*)
         return root;
     }
 
-    const qint64 x0 = m_controller->x0();
-    const qint64 x1 = m_controller->x1();
-    const qint64 y0 = m_controller->y0();
-    const qint64 y1 = m_controller->y1();
+    const qint64 x0 = m_overviewMode ? 0 : m_controller->x0();
+    const qint64 x1 = m_overviewMode ? m_controller->xChromosomeLength() : m_controller->x1();
+    const qint64 y0 = m_overviewMode ? 0 : m_controller->y0();
+    const qint64 y1 = m_overviewMode ? m_controller->yChromosomeLength() : m_controller->y1();
     const qint64 viewWidth = std::max<qint64>(1, x1 - x0);
     const qint64 viewHeight = std::max<qint64>(1, y1 - y0);
     const double scaleX = width() / static_cast<double>(viewWidth);

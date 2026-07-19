@@ -46,6 +46,7 @@ class HicDataController : public QObject {
     Q_PROPERTY(QColor customLowColor READ customLowColor WRITE setCustomLowColor NOTIFY colorMapChanged)
     Q_PROPERTY(QColor customHighColor READ customHighColor WRITE setCustomHighColor NOTIFY colorMapChanged)
     Q_PROPERTY(int trackCount READ trackCount NOTIFY tracksChanged)
+    Q_PROPERTY(int visibleTrackHeight READ visibleTrackHeight NOTIFY tracksChanged)
     Q_PROPERTY(int annotationCount READ annotationCount NOTIFY annotationsChanged)
     Q_PROPERTY(int cytobandCount READ cytobandCount NOTIFY cytobandsChanged)
     Q_PROPERTY(bool canUndoView READ canUndoView NOTIFY viewHistoryChanged)
@@ -67,6 +68,8 @@ class HicDataController : public QObject {
     Q_PROPERTY(double cacheMemoryMB READ cacheMemoryMB NOTIFY cacheStatsChanged)
     Q_PROPERTY(QString renderingBackend READ renderingBackend CONSTANT)
     Q_PROPERTY(QString matrixDimensions READ matrixDimensions NOTIFY viewChanged)
+    Q_PROPERTY(qint64 xChromosomeLength READ xChromosomeLength NOTIFY viewChanged)
+    Q_PROPERTY(qint64 yChromosomeLength READ yChromosomeLength NOTIFY viewChanged)
     Q_PROPERTY(bool symmetricColorScale READ symmetricColorScale WRITE setSymmetricColorScale NOTIFY colorMaxChanged)
     Q_PROPERTY(double colorPercentile READ colorPercentile WRITE setColorPercentile NOTIFY colorMaxChanged)
     Q_PROPERTY(QColor missingValueColor READ missingValueColor WRITE setMissingValueColor NOTIFY colorMapChanged)
@@ -105,6 +108,7 @@ public:
     QColor customLowColor() const;
     QColor customHighColor() const;
     int trackCount() const;
+    int visibleTrackHeight() const;
     int annotationCount() const;
     int cytobandCount() const;
     bool canUndoView() const;
@@ -126,6 +130,8 @@ public:
     double cacheMemoryMB() const;
     QString renderingBackend() const;
     QString matrixDimensions() const;
+    qint64 xChromosomeLength() const;
+    qint64 yChromosomeLength() const;
     bool symmetricColorScale() const;
     double colorPercentile() const;
     QColor missingValueColor() const;
@@ -194,6 +200,7 @@ public:
     Q_INVOKABLE void requestVisibleRegion();
     Q_INVOKABLE void zoom(double factor, double centerX, double centerY);
     Q_INVOKABLE void pan(double dxFraction, double dyFraction);
+    Q_INVOKABLE void centerViewAtFractions(double xFraction, double yFraction);
     Q_INVOKABLE void fitViewToAspectRatio(double aspectRatio);
     Q_INVOKABLE void resetView();
     Q_INVOKABLE void syncViewFrom(HicDataController* other, bool includeColor = true);
@@ -265,6 +272,9 @@ public:
                                std::vector<contactRecord>& controlRecords,
                                int& dataResolution,
                                int maxRecordsPerLayer) const;
+    void renderMinimapRecordsSnapshot(std::vector<contactRecord>& records,
+                                      int& dataResolution,
+                                      int maxRecords) const;
 
 signals:
     void filePathChanged();
@@ -283,6 +293,7 @@ signals:
     void viewHistoryChanged();
     void displayOptionsChanged();
     void cacheStatsChanged();
+    void minimapChanged();
     void workspaceSearchChanged();
 
 private:
@@ -293,6 +304,13 @@ private:
         QString error;
         bool fromCache = false;
         bool hasControl = false;
+    };
+
+    struct MinimapResult {
+        QString signature;
+        std::vector<contactRecord> records;
+        int resolution = 0;
+        QString error;
     };
 
     static QString localPathFromUrl(const QUrl& url);
@@ -351,6 +369,8 @@ private:
     QString readTextResource(const QString& pathOrUrl) const;
     void scheduleRequest();
     void startTileLoad(const HicTileKey& key, quint64 requestId);
+    void requestMinimap();
+    QString minimapSignature() const;
     void rebuildHoverLookupLocked();
     static quint64 recordLookupKey(int32_t binX, int32_t binY);
     void refreshDatasetsModel();
@@ -368,6 +388,12 @@ private:
         QString label;
     };
 
+    struct TrackChromosomeRange {
+        qsizetype begin = 0;
+        qsizetype end = 0;
+        qint64 maximumSpan = 0;
+    };
+
     struct TrackLayer {
         QString name;
         QVector<TrackFeature> features;
@@ -375,6 +401,7 @@ private:
         QString renderMode = QStringLiteral("signal");
         QColor color = QColor("#4b7bec");
         QColor negativeColor = QColor("#d1495b");
+        bool colorOverride = false;
         double minValue = 0.0;
         double maxValue = 1.0;
         bool logScale = false;
@@ -387,6 +414,7 @@ private:
         bool autoscale = true;
         qint64 binSize = 0; // 0 follows the active Hi-C map resolution.
         int height = 400;
+        QHash<QString, TrackChromosomeRange> chromosomeRanges;
     };
 
     struct Annotation2D {
@@ -450,6 +478,11 @@ private:
     HicFileMetadata m_controlMetadata;
     std::vector<contactRecord> m_records;
     std::vector<contactRecord> m_controlRecords;
+    std::vector<contactRecord> m_minimapRecords;
+    int m_minimapResolution = 0;
+    QString m_minimapLoadedSignature;
+    QString m_minimapRequestSignature;
+    bool m_minimapReloadPending = false;
     QHash<quint64, float> m_recordHoverLookup;
     QHash<quint64, float> m_controlHoverLookup;
     std::vector<TrackLayer> m_tracks;
@@ -483,6 +516,7 @@ private:
     QFutureWatcher<HicFileMetadata> m_metadataWatcher;
     QFutureWatcher<HicFileMetadata> m_controlMetadataWatcher;
     QFutureWatcher<TileResult> m_tileWatcher;
+    QFutureWatcher<MinimapResult> m_minimapWatcher;
     quint64 m_requestSerial = 0;
     bool m_reloadPending = false;
     QVector<QVariantMap> m_undoStack;
