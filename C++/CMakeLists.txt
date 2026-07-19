@@ -39,8 +39,14 @@ set(APP_ICON "${CMAKE_CURRENT_SOURCE_DIR}/carton.icns")
 set_source_files_properties("${APP_ICON}" PROPERTIES MACOSX_PACKAGE_LOCATION Resources)
 
 add_library(carton_core STATIC
+    src/DatasetRegistry.cpp
+    src/DatasetRegistry.h
     src/HicDataController.cpp
     src/HicDataController.h
+    src/RegionSetModel.cpp
+    src/RegionSetModel.h
+    src/TabSession.cpp
+    src/TabSession.h
     src/GenomicTrackReader.cpp
     src/GenomicTrackReader.h
     src/HicTileCache.h
@@ -84,10 +90,11 @@ qt_add_qml_module(carton
         qml/DialogFrame.qml
         qml/SvgIcon.qml
         qml/NavigationPanel.qml
-        qml/ComparisonViewport.qml
+        qml/MapViewport.qml
+        qml/TabWorkspaceView.qml
+        qml/TrackAxisStrip.qml
     RESOURCES
         qml/icons/navigation.svg
-        qml/icons/compare.svg
         qml/icons/inspector.svg
 )
 

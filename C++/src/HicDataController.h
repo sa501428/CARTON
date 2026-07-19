@@ -16,6 +16,7 @@
 #include <memory>
 #include <vector>
 
+#include "DatasetRegistry.h"
 #include "HicTileCache.h"
 #include "straw.h"
 
@@ -74,6 +75,7 @@ class HicDataController : public QObject {
     Q_PROPERTY(double colorPercentile READ colorPercentile WRITE setColorPercentile NOTIFY colorMaxChanged)
     Q_PROPERTY(QColor missingValueColor READ missingValueColor WRITE setMissingValueColor NOTIFY colorMapChanged)
     Q_PROPERTY(bool zeroTransparent READ zeroTransparent WRITE setZeroTransparent NOTIFY colorMapChanged)
+    Q_PROPERTY(bool minimapEnabled READ minimapEnabled WRITE setMinimapEnabled NOTIFY minimapChanged)
     Q_PROPERTY(QAbstractItemModel* datasetsModel READ datasetsModel CONSTANT)
     Q_PROPERTY(QAbstractItemModel* bookmarksModel READ bookmarksModel CONSTANT)
     Q_PROPERTY(QAbstractItemModel* tracksModel READ tracksModel CONSTANT)
@@ -136,6 +138,7 @@ public:
     double colorPercentile() const;
     QColor missingValueColor() const;
     bool zeroTransparent() const;
+    bool minimapEnabled() const;
     QAbstractItemModel* datasetsModel() const;
     QAbstractItemModel* bookmarksModel() const;
     QAbstractItemModel* tracksModel() const;
@@ -149,8 +152,10 @@ public:
     Q_INVOKABLE void openRecentControlMap(const QString& path);
     Q_INVOKABLE void loadTrack(const QUrl& url);
     Q_INVOKABLE void loadTrackFromPath(const QString& path);
+    Q_INVOKABLE void loadTrackResource(const QString& resourceId);
     Q_INVOKABLE void loadAnnotations(const QUrl& url);
     Q_INVOKABLE void loadAnnotationsFromPath(const QString& path);
+    Q_INVOKABLE void loadAnnotationResource(const QString& resourceId);
     Q_INVOKABLE void loadCytobands(const QUrl& url);
     Q_INVOKABLE void clearCytobands();
     Q_INVOKABLE QVariantList visibleCytobands(bool xAxis) const;
@@ -177,6 +182,8 @@ public:
     Q_INVOKABLE void copyLeftPosition(double yFraction) const;
     Q_INVOKABLE void jumpToDiagonal(double xFraction, double yFraction);
     Q_INVOKABLE void goTo(const QString& xLocation, const QString& yLocation);
+    Q_INVOKABLE void setViewRegion(const QString& chrX, qint64 x0, qint64 x1,
+                                   const QString& chrY, qint64 y0, qint64 y1);
     Q_INVOKABLE void saveCurrentLocation(const QString& name);
     Q_INVOKABLE void restoreSavedLocation(int index);
     Q_INVOKABLE void saveCurrentState(const QString& name);
@@ -186,6 +193,8 @@ public:
     Q_INVOKABLE void exportFigurePdf(const QUrl& url, int width, int height) const;
     Q_INVOKABLE bool exportFigurePng(const QUrl& url, int width, int height) const;
     Q_INVOKABLE bool exportVisibleMatrix(const QUrl& url) const;
+    Q_INVOKABLE QVariantMap sessionState() const;
+    Q_INVOKABLE void restoreSessionState(const QVariantMap& state, bool includeView = true);
     Q_INVOKABLE QVariantList colorHistogram(int bins = 32) const;
     Q_INVOKABLE void removeSavedLocation(int index);
     Q_INVOKABLE void renameGenome(const QString& genomeId);
@@ -204,6 +213,7 @@ public:
     Q_INVOKABLE void fitViewToAspectRatio(double aspectRatio);
     Q_INVOKABLE void resetView();
     Q_INVOKABLE void syncViewFrom(HicDataController* other, bool includeColor = true);
+    Q_INVOKABLE void syncColorFrom(HicDataController* other);
     Q_INVOKABLE void setTrackName(int index, const QString& name);
     Q_INVOKABLE void setTrackColor(int index, const QColor& positiveColor, const QColor& negativeColor);
     Q_INVOKABLE void setTrackRange(int index, double minValue, double maxValue, bool logScale);
@@ -264,6 +274,7 @@ public:
     void setColorPercentile(double value);
     void setMissingValueColor(const QColor& value);
     void setZeroTransparent(bool value);
+    void setMinimapEnabled(bool value);
     void setWorkspaceSearch(const QString& value);
 
     std::vector<contactRecord> recordsSnapshot() const;
@@ -328,7 +339,7 @@ private:
 
     void setStatus(const QString& value);
     void setBusy(bool value);
-    void applyMetadata(const HicFileMetadata& metadata);
+    void applyMetadata(const std::shared_ptr<const HicFileMetadata>& metadata);
     chromosome chromosomeByName(const QString& name) const;
     qint64 chromosomeLength(const QString& name) const;
     qint64 genomeLength() const;
@@ -379,24 +390,10 @@ private:
     void refreshAnnotationsModel();
     void refreshSearchResultsModel();
 
-    struct TrackFeature {
-        QString chr;
-        qint64 start = 0;
-        qint64 end = 0;
-        double value = 0.0;
-        QColor color = QColor("#4b7bec");
-        QString label;
-    };
-
-    struct TrackChromosomeRange {
-        qsizetype begin = 0;
-        qsizetype end = 0;
-        qint64 maximumSpan = 0;
-    };
-
     struct TrackLayer {
         QString name;
-        QVector<TrackFeature> features;
+        QString resourceId;
+        std::shared_ptr<const PooledTrackData> data;
         QString format;
         QString renderMode = QStringLiteral("signal");
         QColor color = QColor("#4b7bec");
@@ -414,22 +411,9 @@ private:
         bool autoscale = true;
         qint64 binSize = 0; // 0 follows the active Hi-C map resolution.
         int height = 400;
-        QHash<QString, TrackChromosomeRange> chromosomeRanges;
     };
 
-    struct Annotation2D {
-        QString id;
-        QString name;
-        QString chr1;
-        qint64 start1 = 0;
-        qint64 end1 = 0;
-        QString chr2;
-        qint64 start2 = 0;
-        qint64 end2 = 0;
-        QColor color = QColor("#111111");
-        QMap<QString, QString> attributes;
-        bool highlighted = false;
-    };
+    using Annotation2D = PooledAnnotation;
 
     struct Cytoband {
         QString chr;
@@ -442,14 +426,20 @@ private:
 
     struct AnnotationLayer {
         QString name;
+        QString resourceId;
+        std::shared_ptr<PooledAnnotationData> data;
         QColor color = QColor("#111111");
         bool visible = true;
         bool transparent = false;
         bool sparse = false;
         bool enlarged = false;
-        QVector<Annotation2D> annotations;
         QVector<Annotation2D> undoStack;
     };
+
+    QVector<Annotation2D>& editableAnnotations(AnnotationLayer& layer);
+    const QVector<Annotation2D>& layerAnnotations(const AnnotationLayer& layer) const;
+    void appendTrackLayer(const std::shared_ptr<const PooledTrackData>& data);
+    void appendAnnotationLayer(const std::shared_ptr<PooledAnnotationData>& data);
 
     mutable QMutex m_mutex;
     QString m_filePath;
@@ -474,8 +464,8 @@ private:
     QString m_colorMap = "White-Red";
     QColor m_customLowColor = QColor("#ffffff");
     QColor m_customHighColor = QColor("#d7191c");
-    HicFileMetadata m_metadata;
-    HicFileMetadata m_controlMetadata;
+    std::shared_ptr<const HicFileMetadata> m_metadata;
+    std::shared_ptr<const HicFileMetadata> m_controlMetadata;
     std::vector<contactRecord> m_records;
     std::vector<contactRecord> m_controlRecords;
     std::vector<contactRecord> m_minimapRecords;
@@ -504,17 +494,19 @@ private:
     double m_colorPercentile = 95.0;
     QColor m_missingValueColor = QColor("#4b5563");
     bool m_zeroTransparent = false;
+    bool m_minimapEnabled = true;
     WorkspaceListModel* m_datasetsModel = nullptr;
     WorkspaceListModel* m_bookmarksModel = nullptr;
     WorkspaceListModel* m_tracksModel = nullptr;
     WorkspaceListModel* m_annotationsModel = nullptr;
     WorkspaceListModel* m_searchResultsModel = nullptr;
     QString m_workspaceSearch;
-    std::unique_ptr<HicTileCache> m_cache;
+    DatasetRegistry* m_registry = nullptr;
+    HicTileCache* m_cache = nullptr;
     HicTileKey m_loadedKey;
     bool m_hasLoadedKey = false;
-    QFutureWatcher<HicFileMetadata> m_metadataWatcher;
-    QFutureWatcher<HicFileMetadata> m_controlMetadataWatcher;
+    QFutureWatcher<PooledHicMetadataResult> m_metadataWatcher;
+    QFutureWatcher<PooledHicMetadataResult> m_controlMetadataWatcher;
     QFutureWatcher<TileResult> m_tileWatcher;
     QFutureWatcher<MinimapResult> m_minimapWatcher;
     quint64 m_requestSerial = 0;

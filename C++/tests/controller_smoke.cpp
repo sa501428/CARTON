@@ -9,6 +9,9 @@
 
 #include "HicDataController.h"
 #include "HicTileCache.h"
+#include "DatasetRegistry.h"
+#include "RegionSetModel.h"
+#include "TabSession.h"
 
 namespace {
 bool require(bool condition, const char* message) {
@@ -187,5 +190,113 @@ int main(int argc, char** argv) {
     if (!require(inferredBedSummary.value("format").toString() == QStringLiteral("bed") &&
                  inferredBedSummary.value("renderMode").toString() == QStringLiteral("feature"),
                  "three-column text tracks infer BED rendering")) return 1;
+
+    const PooledTrackResult pooledTrackA = DatasetRegistry::instance()->loadTrack(track);
+    const PooledTrackResult pooledTrackB = DatasetRegistry::instance()->loadTrack(track);
+    if (!require(pooledTrackA.data && pooledTrackA.data == pooledTrackB.data,
+                 "track resources are pooled by canonical source")) return 1;
+
+    prefixController.addAnnotationFromFractions(0.1, 0.1, 0.2, 0.2);
+    const QVariantMap customLayer = prefixController.annotationLayerSummaries().front().toMap();
+    const QString customResource = customLayer.value("resourceId").toString();
+    if (!require(!customResource.isEmpty() && customResource.startsWith("annotation:custom:"),
+                 "hand annotations create a custom registry resource")) return 1;
+    HicDataController restoredAnnotationController;
+    restoredAnnotationController.restoreSessionState(prefixController.sessionState(), false);
+    if (!require(restoredAnnotationController.annotationLayerSummaries().front().toMap().value("resourceId").toString() == customResource,
+                 "restored custom annotations reuse their pooled resource ID")) return 1;
+    HicDataController annotationConsumer;
+    annotationConsumer.loadAnnotationResource(customResource);
+    const QString sharedResource = annotationConsumer.annotationLayerSummaries().back().toMap().value("resourceId").toString();
+    annotationConsumer.setAnnotationLayerColor(1, QColor("#ff00ff"));
+    const QString forkedResource = annotationConsumer.annotationLayerSummaries().back().toMap().value("resourceId").toString();
+    if (!require(sharedResource == customResource && forkedResource != customResource,
+                 "editing a shared annotation resource uses copy-on-write")) return 1;
+
+    const QString regionsBed = temporary.filePath(QStringLiteral("regions.bed"));
+    if (!require(writeFile(regionsBed,
+            "chr1\t100\t200\tA\nchr1\t180\t300\tB\nchr2\t500\t600\tC\n"), "write region BED")) return 1;
+    const QString regionsBedpe = temporary.filePath(QStringLiteral("regions.bedpe"));
+    if (!require(writeFile(regionsBedpe,
+            "chr1\t100\t200\tchr1\t900\t1000\tloop-a\n"
+            "chr2\t500\t600\tchr3\t700\t800\tloop-b\n"), "write region BEDPE")) return 1;
+
+    RegionSetModel regionSet;
+    regionSet.setWindowSize(2000);
+    if (!require(regionSet.loadBed(QUrl::fromLocalFile(regionsBed)) && regionSet.rowCount() == 2,
+                 "BED regions merge overlaps")) return 1;
+    const QVariantMap firstRegion = regionSet.entries().front().toMap();
+    if (!require(firstRegion.value("end").toLongLong() - firstRegion.value("start").toLongLong() == 2000,
+                 "single regions use a fixed recentered window")) return 1;
+    if (!require(regionSet.loadBedpe(QUrl::fromLocalFile(regionsBedpe)) && regionSet.rowCount() == 2 &&
+                 regionSet.entries().front().toMap().value("chrY").toString() == QStringLiteral("chr1"),
+                 "BEDPE produces paired regions")) return 1;
+    if (!require(regionSet.loadBedpeAsBed(QUrl::fromLocalFile(regionsBedpe)) && regionSet.rowCount() == 4 &&
+                 regionSet.kind() == QStringLiteral("bedpe-as-bed"),
+                 "BEDPE endpoints project to a merged BED region set")) return 1;
+    RegionSetModel restoredProjection;
+    if (!require(restoredProjection.restoreState(regionSet.state()) && restoredProjection.rowCount() == 4 &&
+                 restoredProjection.kind() == QStringLiteral("bedpe-as-bed"),
+                 "BEDPE projection mode round-trips")) return 1;
+
+    TabSession multiMap;
+    multiMap.initialize(QStringLiteral("multi-map"));
+    multiMap.addMap();
+    if (!require(multiMap.mapCount() == 3 && multiMap.cellCount() == 3,
+                 "multi-map tabs create independent map cells")) return 1;
+    multiMap.loadTrackFromPath(track);
+    int multiMapTrackCells = 0;
+    for (const QVariant& value : multiMap.cells()) {
+        if (auto* cellController = value.toMap().value("controller").value<HicDataController*>();
+            cellController && cellController->trackCount() == 1) ++multiMapTrackCells;
+    }
+    if (!require(multiMapTrackCells == 1, "multi-map layers default to the active cell")) return 1;
+
+    TabSession multiRegion;
+    multiRegion.initialize(QStringLiteral("multi-region"));
+    if (!require(multiRegion.loadRegions(QUrl::fromLocalFile(regionsBedpe), QStringLiteral("bedpe")) &&
+                 multiRegion.regionCount() == 2 && multiRegion.cellCount() == 2,
+                 "multi-region tabs build one cell per BEDPE row")) return 1;
+    multiRegion.loadTrackFromPath(track);
+    int multiRegionTrackCells = 0;
+    for (const QVariant& value : multiRegion.cells()) {
+        if (auto* cellController = value.toMap().value("controller").value<HicDataController*>();
+            cellController && cellController->trackCount() == 1) ++multiRegionTrackCells;
+    }
+    if (!require(multiRegionTrackCells == 2, "multi-region layers default to the whole tab")) return 1;
+
+    TabSession mapRegion;
+    mapRegion.initialize(QStringLiteral("map-region"));
+    if (!require(mapRegion.loadRegions(QUrl::fromLocalFile(regionsBedpe), QStringLiteral("bedpe")) &&
+                 mapRegion.cellCount() == 4 && mapRegion.rowCount() == 2 && mapRegion.columnCount() == 2,
+                 "map-by-region tabs build the Cartesian product")) return 1;
+    mapRegion.loadTrackFromPath(track);
+    int mapScopedTrackCells = 0;
+    for (const QVariant& value : mapRegion.cells()) {
+        if (auto* cellController = value.toMap().value("controller").value<HicDataController*>();
+            cellController && cellController->trackCount() == 1) ++mapScopedTrackCells;
+    }
+    if (!require(mapScopedTrackCells == 2, "map-by-region layers default to the active map")) return 1;
+    mapRegion.addMap();
+    if (!require(mapRegion.cellCount() == 6 && mapRegion.rowCount() == 2 && mapRegion.columnCount() == 3,
+                 "map-by-region tabs grow by map columns")) return 1;
+    mapRegion.setTransposed(true);
+    if (!require(mapRegion.rowCount() == 3 && mapRegion.columnCount() == 2,
+                 "map-by-region axes can be transposed")) return 1;
+
+    TabSession pairwise;
+    pairwise.initialize(QStringLiteral("pairwise"));
+    if (!require(pairwise.loadRegions(QUrl::fromLocalFile(regionsBed), QStringLiteral("bed")) &&
+                 pairwise.regionCount() == 2 && pairwise.cellCount() == 4,
+                 "pairwise tabs build an N by N grid")) return 1;
+    pairwise.setDiagonalMode(QStringLiteral("blank"));
+    int blankCells = 0;
+    for (const QVariant& value : pairwise.cells()) if (value.toMap().value("blank").toBool()) ++blankCells;
+    if (!require(blankCells == 2, "pairwise diagonal cells can be blanked")) return 1;
+    const QVariantMap pairwiseState = pairwise.state();
+    TabSession restored;
+    if (!require(restored.restoreState(pairwiseState) && restored.type() == QStringLiteral("pairwise") &&
+                 restored.cellCount() == 4 && restored.diagonalMode() == QStringLiteral("blank"),
+                 "versioned tab state round-trips")) return 1;
     return 0;
 }

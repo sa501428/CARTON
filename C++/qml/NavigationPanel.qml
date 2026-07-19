@@ -9,6 +9,7 @@ Rectangle {
     id: root
 
     property var controller: null
+    property var tabSession: null
     property bool landscapeMode: false
     property bool hoverTextVisible: true
     property bool trackPanelsOpen: false
@@ -17,19 +18,12 @@ Rectangle {
     property real interfaceScale: 1.0
     property real applicationFontScale: 1.0
     property bool reducedMotion: false
-    property bool comparisonOpen: false
-    property bool comparisonAvailable: false
-    property string comparisonLabel: ""
-    property bool linkNavigation: true
-    property bool linkCrosshair: true
-    property bool linkColorScale: true
 
     property bool dataExpanded: true
     property bool viewControlsExpanded: true
     property bool displayExpanded: false
     property bool tracksExpanded: true
     property bool annotationsExpanded: true
-    property bool comparisonExpanded: false
     property bool chromosomesExpanded: false
     property bool bookmarksExpanded: false
     property bool resultsExpanded: false
@@ -42,6 +36,8 @@ Rectangle {
     signal loadTrackRequested()
     signal loadTrackUrlRequested()
     signal loadAnnotationsRequested()
+    signal pooledResourceRequested(string resourceId, string kind)
+    signal pooledControlRequested(string resourceId)
     signal exportAnnotationRequested(int index)
     signal trackMenuRequested(int index)
     signal trackBinEditorRequested(int index)
@@ -55,10 +51,6 @@ Rectangle {
     signal lowColorRequested()
     signal highColorRequested()
     signal missingColorRequested()
-    signal comparisonToggled(bool enabled)
-    signal linkNavigationToggled(bool enabled)
-    signal linkCrosshairToggled(bool enabled)
-    signal linkColorScaleToggled(bool enabled)
 
     color: Theme.panelBg
     border.color: Theme.borderSubtle
@@ -238,7 +230,53 @@ Rectangle {
                                 Text { text: datasetDelegate.entry.name; color: Theme.textPrimary; font.pixelSize: Theme.textSm; elide: Text.ElideRight; width: parent.width - 12 }
                                 Text { text: datasetDelegate.entry.path; color: Theme.textMuted; font.pixelSize: Theme.textXs; elide: Text.ElideMiddle; width: parent.width - 12 }
                             }
-                            onClicked: root.controller.openRecentMap(datasetDelegate.entry.path)
+                            onClicked: {
+                                if (root.tabSession) root.tabSession.setPrimaryFile(root.tabSession.activeCellIndex, datasetDelegate.entry.path)
+                                else if (root.controller) root.controller.openRecentMap(datasetDelegate.entry.path)
+                            }
+                        }
+                    }
+                    Label {
+                        visible: DatasetRegistry.resourceCount > 0
+                        text: "SESSION DATASET POOL"
+                        color: Theme.textMuted
+                        font.pixelSize: Theme.textXs
+                        font.weight: Font.DemiBold
+                    }
+                    Repeater {
+                        model: DatasetRegistry.resourcesModel
+                        ItemDelegate {
+                            id: pooledDelegate
+                            required property var entry
+                            Layout.fillWidth: true
+                            height: 42
+                            hoverEnabled: true
+                            background: Rectangle { color: pooledDelegate.hovered ? Theme.hoverSurface : "transparent" }
+                            contentItem: RowLayout {
+                                Label {
+                                    text: pooledDelegate.entry.kind.toUpperCase()
+                                    color: Theme.accent
+                                    font.pixelSize: Theme.textXs
+                                    font.weight: Font.Bold
+                                    Layout.preferredWidth: 72
+                                }
+                                ColumnLayout {
+                                    spacing: 0
+                                    Layout.fillWidth: true
+                                    Label { text: pooledDelegate.entry.name; color: Theme.textPrimary; font.pixelSize: Theme.textSm; elide: Text.ElideRight; Layout.fillWidth: true }
+                                    Label { text: pooledDelegate.entry.count + (pooledDelegate.entry.custom ? " custom" : " items"); color: Theme.textMuted; font.pixelSize: Theme.textXs }
+                                }
+                                AppToolButton {
+                                    visible: pooledDelegate.entry.kind === "hic"
+                                    text: "C"
+                                    onLightSurface: true
+                                    Accessible.name: "Use as control map"
+                                    ToolTip.visible: hovered
+                                    ToolTip.text: Accessible.name
+                                    onClicked: root.pooledControlRequested(pooledDelegate.entry.id)
+                                }
+                            }
+                            onClicked: root.pooledResourceRequested(pooledDelegate.entry.id, pooledDelegate.entry.kind)
                         }
                     }
                 }
@@ -551,44 +589,6 @@ Rectangle {
                                 }
                             }
                         }
-                    }
-                }
-
-                SectionHeader {
-                    title: "Comparison"
-                    expanded: root.comparisonExpanded
-                    detail: root.comparisonOpen ? "on" : "off"
-                    onToggled: root.comparisonExpanded = !root.comparisonExpanded
-                }
-                ColumnLayout {
-                    visible: root.comparisonExpanded
-                    Layout.fillWidth: true
-                    Layout.leftMargin: 10
-                    Layout.rightMargin: 10
-                    Layout.topMargin: 8
-                    Layout.bottomMargin: 10
-                    spacing: 7
-                    Label {
-                        Layout.fillWidth: true
-                        text: "Shows the active map beside another open Hi-C tab. Loci, cursor, and color scale can be linked for direct visual comparison."
-                        color: Theme.textSecondary
-                        font.pixelSize: Theme.textXs
-                        wrapMode: Text.WordWrap
-                    }
-                    AppCheckBox {
-                        text: root.comparisonOpen ? "Comparison visible" : "Show comparison"
-                        checked: root.comparisonOpen
-                        enabled: root.comparisonAvailable
-                        onToggled: root.comparisonToggled(checked)
-                    }
-                    Label { visible: !root.comparisonAvailable; text: "Open a second Hi-C tab to enable comparison."; color: Theme.textMuted; font.pixelSize: Theme.textXs; wrapMode: Text.WordWrap; Layout.fillWidth: true }
-                    Label { visible: root.comparisonOpen && root.comparisonLabel.length > 0; text: "Comparing with: " + root.comparisonLabel; color: Theme.textPrimary; font.pixelSize: Theme.textSm; elide: Text.ElideMiddle; Layout.fillWidth: true }
-                    RowLayout {
-                        visible: root.comparisonOpen
-                        Layout.fillWidth: true
-                        AppCheckBox { text: "Loci"; checked: root.linkNavigation; onToggled: root.linkNavigationToggled(checked) }
-                        AppCheckBox { text: "Cursor"; checked: root.linkCrosshair; onToggled: root.linkCrosshairToggled(checked) }
-                        AppCheckBox { text: "Scale"; checked: root.linkColorScale; onToggled: root.linkColorScaleToggled(checked) }
                     }
                 }
 

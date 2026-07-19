@@ -36,9 +36,9 @@ ApplicationWindow {
     Binding { target: Theme; property: "fontScale"; value: fontScale }
     Binding { target: Theme; property: "reducedMotion"; value: reducedMotion }
 
-    property var controllers: []
+    property var tabs: []
+    property var activeTab: null
     property var activeController: null
-    property var comparisonController: null
     property int tabSerial: 0
     property real contextFx: 0.5
     property real contextFy: 0.5
@@ -55,10 +55,6 @@ ApplicationWindow {
     property bool minimapVisible: true
     property bool trackPanelsOpen: false
     property bool landscapeMode: false
-    property bool comparisonOpen: false
-    property bool linkNavigation: true
-    property bool linkCrosshair: true
-    property bool linkColorScale: true
     property real interfaceScale: 1.0
     property real fontScale: 1.0
     property bool reducedMotion: false
@@ -192,89 +188,72 @@ ApplicationWindow {
 
     ListModel { id: tabModel }
     Timer { id: toastTimer; interval: 3200; onTriggered: toastText = "" }
-
-    function createController() {
-        var controller = Qt.createQmlObject("import Carton; HicDataController {}", window)
-        controller.metadataChanged.connect(function() {
-            if (controller === activeController) {
-                syncControlModels()
-                Qt.callLater(plotFrame.fitControllerToCanvas)
-            }
-        })
-        controller.filePathChanged.connect(function() {
-            var index = controllers.indexOf(controller)
-            if (index >= 0) {
-                var path = controller.filePath
-                var slash = Math.max(path.lastIndexOf("/"), path.lastIndexOf("\\"))
-                tabModel.setProperty(index, "title", slash >= 0 ? path.substring(slash + 1) : path)
-            }
-        })
-        return controller
+    Menu {
+        id: newTabMenu
+        MenuItem { text: "Single map"; onTriggered: addTab("single") }
+        MenuItem { text: "Multi-map"; onTriggered: addTab("multi-map") }
+        MenuItem { text: "Multi-region (BEDPE)"; onTriggered: addTab("multi-region") }
+        MenuItem { text: "Maps × regions"; onTriggered: addTab("map-region") }
+        MenuItem { text: "Pairwise regions"; onTriggered: addTab("pairwise") }
     }
 
-    function addTab() {
-        var controller = createController()
-        controllers.push(controller)
-        controllers = controllers.slice()
+    function createTabSession(type) {
+        var session = Qt.createQmlObject("import Carton; TabSession {}", window)
+        session.initialize(type || "single")
+        session.titleChanged.connect(function() {
+            var index = tabs.indexOf(session)
+            if (index >= 0) tabModel.setProperty(index, "title", session.title)
+        })
+        session.activeCellChanged.connect(function() {
+            if (session === activeTab) {
+                activeController = session.activeController
+                syncControlModels()
+                if (session.type === "single") Qt.callLater(plotFrame.fitControllerToCanvas)
+            }
+        })
+        session.cellsChanged.connect(function() {
+            if (session === activeTab) {
+                activeController = session.activeController
+                syncControlModels()
+            }
+        })
+        session.errorOccurred.connect(function(message) { showToast(message, "error") })
+        return session
+    }
+
+    function addTab(type) {
+        var session = createTabSession(type || "single")
+        tabs.push(session)
+        tabs = tabs.slice()
         tabSerial += 1
-        tabModel.append({ "title": "Map " + tabSerial })
-        tabBar.currentIndex = controllers.length - 1
+        var initialTitle = session.typeLabel + " " + tabSerial
+        tabModel.append({ "title": initialTitle, "type": session.type })
+        session.title = initialTitle
+        tabBar.currentIndex = tabs.length - 1
         setActiveTab(tabBar.currentIndex)
     }
 
     function closeCurrentTab() {
-        if (controllers.length <= 1)
+        if (tabs.length <= 1)
             return
         var index = tabBar.currentIndex
-        var controller = controllers[index]
-        controllers.splice(index, 1)
-        controllers = controllers.slice()
+        var session = tabs[index]
+        tabs.splice(index, 1)
+        tabs = tabs.slice()
         tabModel.remove(index)
-        controller.destroy()
-        tabBar.currentIndex = Math.min(index, controllers.length - 1)
+        session.destroy()
+        tabBar.currentIndex = Math.min(index, tabs.length - 1)
         setActiveTab(tabBar.currentIndex)
-        if (controllers.length < 2) {
-            comparisonController = null
-            comparisonOpen = false
-        } else if (comparisonOpen) {
-            ensureComparisonController()
-        }
     }
 
     function setActiveTab(index) {
-        if (index < 0 || index >= controllers.length)
+        if (index < 0 || index >= tabs.length)
             return
-        activeController = controllers[index]
-        if (comparisonOpen && comparisonController === activeController)
-            comparisonController = controllers.length > 1 ? controllers[(index + 1) % controllers.length] : null
+        activeTab = tabs[index]
+        activeController = activeTab.activeController
         syncControlModels()
-        Qt.callLater(plotFrame.fitControllerToCanvas)
+        if (activeTab.type === "single") Qt.callLater(plotFrame.fitControllerToCanvas)
     }
-
-    function ensureComparisonController() {
-        if (comparisonController && comparisonController !== activeController)
-            return
-        for (var i = 0; i < controllers.length; i++) {
-            if (controllers[i] !== activeController) {
-                comparisonController = controllers[i]
-                return
-            }
-        }
-        comparisonController = null
-        comparisonOpen = false
-    }
-
-    function setComparisonEnabled(enabled) {
-        if (enabled && controllers.length < 2) {
-            comparisonOpen = false
-            showToast("Open a second Hi-C tab to use comparison", "info")
-            return
-        }
-        comparisonOpen = enabled
-        if (enabled) ensureComparisonController()
-    }
-
-    onComparisonOpenChanged: if (comparisonOpen) ensureComparisonController()
 
     function syncControlModels() {
         if (!activeController)
@@ -282,15 +261,55 @@ ApplicationWindow {
         navigationPanel.syncControllerModels()
     }
 
-    Component.onCompleted: addTab()
+    function exportWorkspace(url) {
+        var states = []
+        for (var i = 0; i < tabs.length; ++i) states.push(tabs[i].state())
+        if (DatasetRegistry.exportWorkspace(url, states)) showToast("Workspace exported", "success")
+        else showToast("Workspace export failed", "error")
+    }
+
+    function importWorkspace(url) {
+        var states = DatasetRegistry.importWorkspace(url)
+        if (!states || states.length === 0) {
+            showToast("Invalid CARTON workspace", "error")
+            return
+        }
+        for (var old = 0; old < tabs.length; ++old) tabs[old].destroy()
+        tabs = []
+        tabModel.clear()
+        for (var i = 0; i < states.length; ++i) {
+            var session = createTabSession(states[i].tabType || "single")
+            tabs.push(session)
+            tabModel.append({ "title": states[i].title || session.typeLabel, "type": states[i].tabType || "single" })
+            session.restoreState(states[i])
+        }
+        tabs = tabs.slice()
+        tabBar.currentIndex = 0
+        setActiveTab(0)
+        showToast("Workspace imported", "success")
+    }
+
+    Component.onCompleted: {
+        var initialType = "single"
+        var initialRegions = ""
+        var initialRegionFormat = ""
+        for (var i = 0; i < Qt.application.arguments.length; ++i) {
+            var argument = String(Qt.application.arguments[i])
+            if (argument.indexOf("--tab-type=") === 0) initialType = argument.substring(11)
+            else if (argument.indexOf("--regions=") === 0) initialRegions = argument.substring(10)
+            else if (argument.indexOf("--regions-format=") === 0) initialRegionFormat = argument.substring(17)
+        }
+        addTab(initialType)
+        if (initialRegions.length > 0 && activeTab) activeTab.loadRegions(initialRegions, initialRegionFormat)
+    }
 
     FileDialog {
         id: openDialog
         title: "Open primary Hi-C file"
         nameFilters: ["Hi-C files (*.hic)", "All files (*)"]
         onAccepted: {
-            if (activeController)
-                activeController.openFile(selectedFile)
+            if (activeTab)
+                activeTab.setPrimaryFile(activeTab.activeCellIndex, selectedFile)
         }
     }
 
@@ -299,8 +318,8 @@ ApplicationWindow {
         title: "Open control Hi-C file"
         nameFilters: ["Hi-C files (*.hic)", "All files (*)"]
         onAccepted: {
-            if (activeController)
-                activeController.openControlFile(selectedFile)
+            if (activeTab)
+                activeTab.setControlFile(activeTab.activeCellIndex, selectedFile)
         }
     }
 
@@ -308,9 +327,9 @@ ApplicationWindow {
         id: trackDialog
         title: "Load 1D Track"
         nameFilters: ["Genomics tracks (*.bed *.bed.gz *.bedgraph *.bedGraph *.bedgraph.gz *.wig *.wig.gz *.bw *.bigWig *.bigwig *.bb *.bigBed *.bigbed *.txt *.tsv)", "All files (*)"]
-        onAccepted: if (activeController) {
+        onAccepted: if (activeTab) {
             trackPanelsOpen = true
-            activeController.loadTrack(selectedFile)
+            activeTab.loadTrack(selectedFile, activeTab.layerScope)
         }
     }
 
@@ -318,7 +337,17 @@ ApplicationWindow {
         id: annotationDialog
         title: "Load 2D Annotations"
         nameFilters: ["BEDPE annotations (*.bedpe *.txt *.tsv)", "All files (*)"]
-        onAccepted: if (activeController) activeController.loadAnnotations(selectedFile)
+        onAccepted: if (activeTab) activeTab.loadAnnotations(selectedFile, activeTab.layerScope)
+    }
+
+    FileDialog {
+        id: regionDialog
+        property string regionFormat: "bedpe"
+        title: regionFormat === "bed" ? "Load BED regions" :
+               (regionFormat === "bedpe-as-bed" ? "Project BEDPE endpoints" : "Load BEDPE regions")
+        nameFilters: regionFormat === "bed" ? ["BED regions (*.bed *.txt *.tsv)", "All files (*)"]
+                                             : ["BEDPE regions (*.bedpe *.txt *.tsv)", "All files (*)"]
+        onAccepted: if (activeTab) activeTab.loadRegions(selectedFile, regionFormat)
     }
 
     FileDialog {
@@ -332,7 +361,7 @@ ApplicationWindow {
         id: importStateDialog
         title: "Import CARTON state"
         nameFilters: ["CARTON state (*.json)", "All files (*)"]
-        onAccepted: if (activeController) activeController.importState(selectedFile)
+        onAccepted: importWorkspace(selectedFile)
     }
 
     FileDialog {
@@ -341,7 +370,7 @@ ApplicationWindow {
         fileMode: FileDialog.SaveFile
         defaultSuffix: "json"
         nameFilters: ["CARTON state (*.json)", "All files (*)"]
-        onAccepted: if (activeController) activeController.exportState(selectedFile)
+        onAccepted: exportWorkspace(selectedFile)
     }
 
     FileDialog {
@@ -405,9 +434,9 @@ ApplicationWindow {
                 placeholderText: "https://..."
             }
         }
-        onAccepted: if (activeController) {
+        onAccepted: if (activeTab) {
             trackPanelsOpen = true
-            activeController.loadTrackFromPath(urlField.text)
+            activeTab.loadTrackFromPath(urlField.text, activeTab.layerScope)
         }
     }
 
@@ -734,8 +763,15 @@ ApplicationWindow {
             MenuItem { text: "Export PNG Image..."; enabled: !!activeController; onTriggered: exportPngDialog.open() }
             MenuItem { text: "Export Visible Matrix..."; enabled: activeController && activeController.recordCount > 0; onTriggered: exportMatrixDialog.open() }
             MenuSeparator {}
-            MenuItem { text: "New Tab"; onTriggered: addTab() }
-            MenuItem { text: "Close Tab"; enabled: controllers.length > 1; onTriggered: closeCurrentTab() }
+            Menu {
+                title: "New Tab"
+                MenuItem { text: "Single map"; onTriggered: addTab("single") }
+                MenuItem { text: "Multi-map"; onTriggered: addTab("multi-map") }
+                MenuItem { text: "Multi-region (BEDPE)"; onTriggered: addTab("multi-region") }
+                MenuItem { text: "Maps × regions"; onTriggered: addTab("map-region") }
+                MenuItem { text: "Pairwise regions"; onTriggered: addTab("pairwise") }
+            }
+            MenuItem { text: "Close Tab"; enabled: tabs.length > 1; onTriggered: closeCurrentTab() }
             MenuSeparator {}
             MenuItem { text: "About CARTON"; onTriggered: aboutDialog.open() }
         }
@@ -800,7 +836,6 @@ ApplicationWindow {
             MenuItem { text: "Hover Text"; checkable: true; checked: hoverTextVisible; onTriggered: hoverTextVisible = checked }
             MenuSeparator {}
             MenuItem { text: "Navigation Panel"; checkable: true; checked: navigationOpen; onTriggered: navigationOpen = checked }
-            MenuItem { text: "Comparison View"; checkable: true; checked: comparisonOpen; onTriggered: setComparisonEnabled(checked) }
             MenuItem { text: "Fullscreen Visualization"; onTriggered: window.visibility = window.visibility === Window.FullScreen ? Window.Windowed : Window.FullScreen }
             MenuSeparator {}
             MenuItem { text: "White-Red"; checkable: true; checked: activeController && activeController.colorMap === "White-Red"; onTriggered: if (activeController) activeController.colorMap = "White-Red" }
@@ -836,6 +871,7 @@ ApplicationWindow {
             SplitView.minimumWidth: 260
             SplitView.maximumWidth: 520
             controller: activeController
+            tabSession: activeTab
             landscapeMode: window.landscapeMode
             hoverTextVisible: window.hoverTextVisible
             trackPanelsOpen: window.trackPanelsOpen
@@ -844,19 +880,24 @@ ApplicationWindow {
             interfaceScale: window.interfaceScale
             applicationFontScale: window.fontScale
             reducedMotion: window.reducedMotion
-            comparisonOpen: window.comparisonOpen
-            comparisonAvailable: controllers.length > 1
-            comparisonLabel: comparisonController && comparisonController.filePath.length > 0
-                             ? String(comparisonController.filePath).split(/[\\/]/).pop() : ""
-            linkNavigation: window.linkNavigation
-            linkCrosshair: window.linkCrosshair
-            linkColorScale: window.linkColorScale
             onToggleRequested: navigationOpen = false
             onOpenDatasetRequested: openDialog.open()
             onLoadControlRequested: controlDialog.open()
             onLoadTrackRequested: trackDialog.open()
             onLoadTrackUrlRequested: urlDialog.open()
             onLoadAnnotationsRequested: annotationDialog.open()
+            onPooledResourceRequested: function(resourceId, kind) {
+                if (!activeTab) return
+                if (kind === "hic")
+                    activeTab.setPrimaryFile(activeTab.activeCellIndex, DatasetRegistry.resourcePath(resourceId))
+                else if (kind === "track")
+                    activeTab.loadTrackFromPath(DatasetRegistry.resourcePath(resourceId), activeTab.layerScope)
+                else if (kind === "annotation")
+                    activeTab.loadAnnotationResource(resourceId, activeTab.layerScope)
+            }
+            onPooledControlRequested: function(resourceId) {
+                if (activeTab) activeTab.setControlFile(activeTab.activeCellIndex, DatasetRegistry.resourcePath(resourceId))
+            }
             onExportAnnotationRequested: function(index) {
                 pendingAnnotationLayerExport = index
                 exportAnnotationDialog.open()
@@ -876,10 +917,6 @@ ApplicationWindow {
             onLowColorRequested: lowColorDialog.open()
             onHighColorRequested: highColorDialog.open()
             onMissingColorRequested: missingColorDialog.open()
-            onComparisonToggled: function(enabled) { setComparisonEnabled(enabled) }
-            onLinkNavigationToggled: function(enabled) { window.linkNavigation = enabled }
-            onLinkCrosshairToggled: function(enabled) { window.linkCrosshair = enabled }
-            onLinkColorScaleToggled: function(enabled) { window.linkColorScale = enabled }
         }
 
         Rectangle {
@@ -940,14 +977,14 @@ ApplicationWindow {
                         onLightSurface: true
                         contentColor: Theme.textSecondary
                         Layout.preferredWidth: 40
-                        onClicked: addTab()
+                        onClicked: newTabMenu.popup()
                     }
 
                     AppToolButton {
                         text: "×"
                         onLightSurface: true
                         contentColor: Theme.textSecondary
-                        enabled: controllers.length > 1
+                        enabled: tabs.length > 1
                         Layout.preferredWidth: 40
                         onClicked: closeCurrentTab()
                     }
@@ -966,8 +1003,6 @@ ApplicationWindow {
                             leftTrackCanvas.requestPaint()
                             annotationCanvas.requestPaint()
                             guideCanvas.requestPaint()
-                            if (comparisonOpen && linkNavigation && comparisonController)
-                                comparisonController.syncViewFrom(activeController, linkColorScale)
                         }
                         function onTracksChanged() {
                             topTrackCanvas.requestPaint()
@@ -984,8 +1019,6 @@ ApplicationWindow {
                             annotationCanvas.requestPaint()
                         }
                         function onColorMaxChanged() {
-                            if (comparisonOpen && linkColorScale && comparisonController)
-                                comparisonController.syncViewFrom(activeController, true)
                         }
                         function onDisplayOptionsChanged() {
                             topTrackCanvas.requestPaint()
@@ -1197,10 +1230,11 @@ ApplicationWindow {
 
                     Item {
                         id: plotFrame
+                        visible: !activeTab || activeTab.type === "single"
                         anchors.centerIn: parent
-                        anchors.horizontalCenterOffset: comparisonOpen ? -parent.width * 0.25 : 0
+                        anchors.horizontalCenterOffset: 0
                         anchors.verticalCenterOffset: 0
-                        property real availableWidth: (comparisonOpen ? parent.width * 0.5 : parent.width) - 12
+                        property real availableWidth: parent.width - 12
                         property real availableHeight: parent.height - 12
                         width: Math.max(240, landscapeMode ? availableWidth : Math.min(availableWidth, availableHeight))
                         height: Math.max(240, landscapeMode ? availableHeight : width)
@@ -1885,12 +1919,12 @@ ApplicationWindow {
                     Rectangle {
                         id: minimapFrame
                         z: 80
-                        visible: minimapVisible && activeController && activeController.filePath.length > 0 &&
+                        visible: (!activeTab || activeTab.type === "single") && minimapVisible && activeController && activeController.filePath.length > 0 &&
                                  activeController.xChromosomeLength > 0 && activeController.yChromosomeLength > 0
                         anchors.top: parent.top
                         anchors.right: parent.right
                         anchors.topMargin: 12
-                        anchors.rightMargin: comparisonOpen ? parent.width * 0.5 + 20 : 12
+                        anchors.rightMargin: 12
                         width: 196
                         height: 220
                         radius: Theme.radiusMd
@@ -2004,34 +2038,20 @@ ApplicationWindow {
                         }
                     }
 
-                    ComparisonViewport {
-                        id: comparisonViewport
-                        visible: comparisonOpen
-                        anchors.top: parent.top
-                        anchors.right: parent.right
-                        anchors.bottom: parent.bottom
-                        anchors.topMargin: 10
-                        anchors.rightMargin: 10
-                        anchors.bottomMargin: 10
-                        width: parent.width * 0.5 - 16
-                        controller: comparisonController
-                        viewLabel: comparisonController && comparisonController.filePath.length > 0
-                                   ? String(comparisonController.filePath).split(/[\\/]/).pop() : "Comparison view"
-                        crosshairVisible: linkCrosshair && hoverActive
-                        crosshairX: contextFx
-                        crosshairY: contextFy
-                        onCrosshairMoved: function(xFraction, yFraction) {
-                            if (linkCrosshair) {
-                                contextFx = xFraction
-                                contextFy = yFraction
-                                hoverPlotX = xFraction * heatmapHost.width
-                                hoverPlotY = yFraction * heatmapHost.height
-                                hoverActive = true
-                                guideCanvas.requestPaint()
-                            }
+                    TabWorkspaceView {
+                        z: 100
+                        anchors.fill: parent
+                        visible: activeTab && activeTab.type !== "single"
+                        tabSession: activeTab
+                        onLoadRegionsRequested: function(format) {
+                            regionDialog.regionFormat = format
+                            regionDialog.open()
                         }
-                        onViewportInteracted: if (linkNavigation && activeController && comparisonController)
-                            activeController.syncViewFrom(comparisonController, linkColorScale)
+                        onHoverInfo: function(text, active) {
+                            hoverText = text
+                            hoverActive = active
+                        }
+                        onToastRequested: function(text, kind) { showToast(text, kind) }
                     }
 
                 }

@@ -8,4 +8,4 @@ cmake --build C++/build-carton --target carton -j4
 open C++/build-carton/carton.app
 ```
 
-The Straw `.hic` reader is compiled directly into the CARTON desktop application through the `carton_hic` library.
+The Straw `.hic` reader is compiled directly into the CARTON desktop application through the `carton_hic` library. CARTON supports single-map, multi-map, multi-region, maps-by-region, and pairwise-region tabs backed by a shared session dataset/cache registry; see [C++/README.md](C++/README.md) for the full feature and usage notes.

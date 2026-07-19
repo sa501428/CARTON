@@ -7,6 +7,9 @@
 
 #include "HicDataController.h"
 #include "HicHeatmapItem.h"
+#include "DatasetRegistry.h"
+#include "RegionSetModel.h"
+#include "TabSession.h"
 
 int main(int argc, char* argv[]) {
     QGuiApplication app(argc, argv);
@@ -22,6 +25,9 @@ int main(int argc, char* argv[]) {
 
     qmlRegisterType<HicDataController>("Carton", 1, 0, "HicDataController");
     qmlRegisterType<HicHeatmapItem>("Carton", 1, 0, "HicHeatmapItem");
+    qmlRegisterType<RegionSetModel>("Carton", 1, 0, "RegionSetModel");
+    qmlRegisterType<TabSession>("Carton", 1, 0, "TabSession");
+    qmlRegisterSingletonInstance("Carton", 1, 0, "DatasetRegistry", DatasetRegistry::instance());
 
     QQmlApplicationEngine engine;
     QObject::connect(&engine, &QQmlApplicationEngine::objectCreationFailed, &app, []() {
