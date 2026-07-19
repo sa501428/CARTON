@@ -43,6 +43,7 @@
 #include <queue>
 #include <condition_variable>
 #include <type_traits>
+#include <memory>
 #include "hic_slice.h"
 
 using namespace std;
@@ -77,7 +78,14 @@ static size_t WriteMemoryCallback(void *contents, size_t size, size_t nmemb, voi
     return realsize;
 }
 
-// get a buffer that can be used as an input stream from the URL
+// get a buffer that can be used as an input stream from the URL.
+// Every call site constructs a memstream sized to the *requested* chunksize,
+// not however many bytes the server actually returned (a short/truncated HTTP
+// range response, a mid-transfer failure, or a server that ignores Range
+// entirely all produce fewer bytes). Rather than touch every call site, this
+// guarantees the returned buffer is always at least chunksize+1 bytes,
+// zero-padding any shortfall, so downstream memstream reads can never run
+// past the allocation.
 char *getData(CURL *curl, int64_t position, int64_t chunksize) {
     std::ostringstream oss;
     struct MemoryStruct chunk{};
@@ -92,6 +100,16 @@ char *getData(CURL *curl, int64_t position, int64_t chunksize) {
                 curl_easy_strerror(res));
     }
 
+    const size_t required = static_cast<size_t>(chunksize) + 1;
+    if (chunk.size < required) {
+        char *padded = static_cast<char *>(realloc(chunk.memory, required));
+        if (padded == nullptr) {
+            free(chunk.memory);
+            return static_cast<char *>(calloc(required, 1));
+        }
+        std::memset(padded + chunk.size, 0, required - chunk.size);
+        chunk.memory = padded;
+    }
     return chunk.memory;
 }
 
@@ -152,8 +170,9 @@ static CURL *initCURL(const char *url) {
         curl_easy_setopt(curl, CURLOPT_FOLLOWLOCATION, 1L);
         curl_easy_setopt(curl, CURLOPT_USERAGENT, "straw");
     } else {
-        cerr << "Unable to initialize curl " << endl;
-        exit(2);
+        // This runs inside the GUI app's worker threads (via straw()/inspectHicFile()),
+        // which already catch std::exception; exit() would kill the whole app instead.
+        throw std::runtime_error("Unable to initialize curl");
     }
     return curl;
 }
@@ -162,7 +181,7 @@ class HiCFileStream {
 public:
     string prefix = "http"; // HTTP code
     ifstream fin;
-    CURL *curl;
+    CURL *curl = nullptr;
     bool isHttp = false;
 
     explicit HiCFileStream(const string &fileName) {
@@ -170,31 +189,36 @@ public:
             isHttp = true;
             curl = initCURL(fileName.c_str());
             if (!curl) {
-                cerr << "URL " << fileName << " cannot be opened for reading" << endl;
-                exit(3);
+                throw std::runtime_error("URL " + fileName + " cannot be opened for reading");
             }
         } else {
             fin.open(fileName, fstream::in | fstream::binary);
             if (!fin) {
-                cerr << "File " << fileName << " cannot be opened for reading" << endl;
-                exit(4);
+                throw std::runtime_error("File " + fileName + " cannot be opened for reading");
             }
         }
     }
 
+    ~HiCFileStream() { close(); }
+
     void close() {
         if (isHttp) {
-            curl_easy_cleanup(curl);
+            if (curl) {
+                curl_easy_cleanup(curl);
+                curl = nullptr;
+            }
         } else {
             fin.close();
         }
     }
 
+    // Always returns a malloc'd buffer (matching getData()'s allocator) so
+    // every caller can uniformly free() it, regardless of which branch ran.
     char *readCompressedBytes(indexEntry idx) {
         if (isHttp) {
             return getData(curl, idx.position, idx.size);
         } else {
-            char *buffer = new char[idx.size];
+            char *buffer = static_cast<char *>(malloc(static_cast<size_t>(idx.size)));
             fin.seekg(idx.position, ios::beg);
             fin.read(buffer, idx.size);
             return buffer;
@@ -203,11 +227,8 @@ public:
 };
 
 char *readCompressedBytesFromFile(const string &fileName, indexEntry idx) {
-    HiCFileStream *stream = new HiCFileStream(fileName);
-    char *compressedBytes = stream->readCompressedBytes(idx);
-    stream->close();
-    delete stream;
-    return compressedBytes;
+    HiCFileStream stream(fileName);
+    return stream.readCompressedBytes(idx);
 }
 
 // reads the header, storing the positions of the normalization vectors and returning the masterIndexPosition pointer
@@ -311,7 +332,7 @@ int64_t readThroughExpectedVectorURL(CURL *curl, int64_t currentPointer, int32_t
         } else {
             populateVectorWithDoubles(fin, expectedValues, nValues);
         }
-        delete buffer;
+        free(buffer);
     }
 
     if (version > 8) {
@@ -363,7 +384,7 @@ int64_t readThroughNormalizationFactorsURL(CURL *curl, int64_t currentPointer, i
                 }
             }
         }
-        delete buffer;
+        free(buffer);
     }
 
     if (version > 8) {
@@ -434,7 +455,7 @@ bool readFooterURL(CURL *curl, int64_t master, int32_t version, int32_t c1, int3
     int32_t nEntries = readInt32FromFile(newFin);
 
     currentPointer += 4;
-    delete buffer;
+    free(buffer);
 
     int32_t bufferSize0 = nEntries * 50;
     buffer = getData(curl, currentPointer, bufferSize0);
@@ -457,7 +478,7 @@ bool readFooterURL(CURL *curl, int64_t master, int32_t version, int32_t c1, int3
             found = true;
         }
     }
-    delete buffer;
+    free(buffer);
     if (!found) {
         cerr << "Remote file doesn't have the given chr_chr map " << key << endl;
         return false;
@@ -476,7 +497,7 @@ bool readFooterURL(CURL *curl, int64_t master, int32_t version, int32_t c1, int3
     int32_t nExpectedValues = readInt32FromFile(newFin3);
 
     currentPointer += 4;
-    delete buffer;
+    free(buffer);
     for (int i = 0; i < nExpectedValues; i++) {
 
         buffer = getData(curl, currentPointer, 1000);
@@ -501,7 +522,7 @@ bool readFooterURL(CURL *curl, int64_t master, int32_t version, int32_t c1, int3
             currentPointer += 4;
         }
 
-        delete buffer;
+        free(buffer);
 
         bool store = c1 == c2 && (matrixType == "oe" || matrixType == "expected") && norm == "NONE" && unit0 == unit &&
                      binSize == resolution;
@@ -514,7 +535,7 @@ bool readFooterURL(CURL *curl, int64_t master, int32_t version, int32_t c1, int3
         int32_t nNormalizationFactors = readInt32FromFile(newFin5);
 
         currentPointer += 4;
-        delete buffer;
+        free(buffer);
 
         currentPointer += readThroughNormalizationFactorsURL(curl, currentPointer, version, store, expectedValues, c1, nNormalizationFactors);
     }
@@ -533,7 +554,7 @@ bool readFooterURL(CURL *curl, int64_t master, int32_t version, int32_t c1, int3
     nExpectedValues = readInt32FromFile(newFin6);
 
     currentPointer += 4;
-    delete buffer;
+    free(buffer);
     for (int i = 0; i < nExpectedValues; i++) {
         buffer = getData(curl, currentPointer, 1000);
 
@@ -560,7 +581,7 @@ bool readFooterURL(CURL *curl, int64_t master, int32_t version, int32_t c1, int3
         bool store = c1 == c2 && (matrixType == "oe" || matrixType == "expected") && nType == norm && unit0 == unit &&
                      binSize == resolution;
 
-        delete buffer;
+        free(buffer);
 
         currentPointer += readThroughExpectedVectorURL(curl, currentPointer, version, expectedValues, nValues, store, resolution);
 
@@ -570,7 +591,7 @@ bool readFooterURL(CURL *curl, int64_t master, int32_t version, int32_t c1, int3
         int32_t nNormalizationFactors = readInt32FromFile(newFin8);
 
         currentPointer += 4;
-        delete buffer;
+        free(buffer);
 
         currentPointer += readThroughNormalizationFactorsURL(curl, currentPointer, version, store, expectedValues, c1, nNormalizationFactors);
     }
@@ -588,7 +609,7 @@ bool readFooterURL(CURL *curl, int64_t master, int32_t version, int32_t c1, int3
     nEntries = readInt32FromFile(newFin9);
 
     currentPointer += 4;
-    delete buffer;
+    free(buffer);
 
     bool found1 = false;
     bool found2 = false;
@@ -633,7 +654,7 @@ bool readFooterURL(CURL *curl, int64_t master, int32_t version, int32_t c1, int3
             found2 = true;
         }
     }
-    delete buffer;
+    free(buffer);
     if (!found1 || !found2) {
         cerr << "Remote file did not contain " << norm << " normalization vectors for one or both chromosomes at "
              << resolution << " " << unit << endl;
@@ -836,19 +857,19 @@ map<int32_t, indexEntry> readMatrixZoomDataHttp(CURL *curl, int64_t &myFilePosit
         cerr << "Unit not understood" << endl;
         return blockMap;
     }
-    delete first;
+    free(first);
     char *buffer = getData(curl, myFilePosition, header_size);
     memstream fin(buffer, header_size);
     setValuesForMZD(fin, myunit, mySumCounts, mybinsize, myBlockBinCount, myBlockColumnCount, found);
     int32_t nBlocks = readInt32FromFile(fin);
-    delete buffer;
+    free(buffer);
 
     if (found) {
         int32_t chunkSize = nBlocks * (sizeof(int32_t) + sizeof(int64_t) + sizeof(int32_t));
         buffer = getData(curl, myFilePosition + header_size, chunkSize);
         memstream fin2(buffer, chunkSize);
         populateBlockMap(fin2, nBlocks, blockMap);
-        delete buffer;
+        free(buffer);
     } else {
         myFilePosition = myFilePosition + header_size
                          + (nBlocks * (sizeof(int32_t) + sizeof(int64_t) + sizeof(int32_t)));
@@ -870,7 +891,7 @@ map<int32_t, indexEntry> readMatrixHttp(CURL *curl, int64_t myFilePosition, cons
     int32_t i = 0;
     bool found = false;
     myFilePosition = myFilePosition + size;
-    delete buffer;
+    free(buffer);
     map<int32_t, indexEntry> blockMap;
 
     while (i < nRes && !found) {
@@ -984,48 +1005,69 @@ static bool isZstdCompressed(const char *data, int32_t size) {
            (unsigned char)data[3] == 0x28;
 }
 
-int32_t decompressBlock(indexEntry idx, char *compressedBytes, char *uncompressedBytes) {
+// Returns the uncompressed size on success, or -1 if `capacity` was too small
+// to hold the whole block (or the input was corrupt) so the caller can retry
+// with a bigger buffer instead of silently accepting a truncated block.
+int32_t decompressBlock(indexEntry idx, char *compressedBytes, char *uncompressedBytes, size_t capacity) {
     if (isZstdCompressed(compressedBytes, idx.size)) {
-        size_t const dstCapacity = static_cast<size_t>(idx.size) * 10;
-        size_t const result = ZSTD_decompress(uncompressedBytes, dstCapacity,
+        size_t const result = ZSTD_decompress(uncompressedBytes, capacity,
                                                compressedBytes, static_cast<size_t>(idx.size));
         if (ZSTD_isError(result)) {
             cerr << "zstd decompression error: " << ZSTD_getErrorName(result) << endl;
-            return 0;
+            return -1;
         }
         return static_cast<int32_t>(result);
     }
-    z_stream infstream;
+    z_stream infstream{};
     infstream.zalloc = Z_NULL;
     infstream.zfree = Z_NULL;
     infstream.opaque = Z_NULL;
     infstream.avail_in = static_cast<uInt>(idx.size); // size of input
     infstream.next_in = (Bytef *) compressedBytes; // input char array
-    infstream.avail_out = static_cast<uInt>(idx.size * 10); // size of output
+    infstream.avail_out = static_cast<uInt>(capacity); // size of output
     infstream.next_out = (Bytef *) uncompressedBytes; // output char array
-    // the actual decompression work.
-    inflateInit(&infstream);
-    inflate(&infstream, Z_NO_FLUSH);
-    inflateEnd(&infstream);
+    if (inflateInit(&infstream) != Z_OK) {
+        return -1;
+    }
+    // all input is available at once, so a single Z_FINISH call either
+    // completes the stream or tells us the output buffer wasn't big enough.
+    int ret = inflate(&infstream, Z_FINISH);
     int32_t uncompressedSize = static_cast<int32_t>(infstream.total_out);
+    inflateEnd(&infstream);
+    if (ret != Z_STREAM_END) {
+        return -1;
+    }
     return uncompressedSize;
+}
+
+// Decompresses a Hi-C contact block, growing the destination buffer and
+// retrying if the initial size guess (10x the compressed size - the largest
+// ratio previously observed) turns out too small, instead of silently
+// truncating the block. Caller owns the returned buffer (delete[]).
+char *decompressBlockWithRetry(indexEntry idx, char *compressedBytes, int32_t &uncompressedSize) {
+    size_t capacity = static_cast<size_t>(idx.size) * 10;
+    for (int attempt = 0; attempt < 6; ++attempt) {
+        std::unique_ptr<char[]> uncompressedBytes(new char[capacity]);
+        uncompressedSize = decompressBlock(idx, compressedBytes, uncompressedBytes.get(), capacity);
+        if (uncompressedSize >= 0) {
+            return uncompressedBytes.release();
+        }
+        capacity *= 4;
+    }
+    throw std::runtime_error("Failed to decompress Hi-C contact block (corrupt file or unexpectedly large block)");
 }
 
 long getNumRecordsInBlock(const string &fileName, indexEntry idx, int32_t version){
     if (idx.size <= 0) {
         return 0;
     }
-    char *compressedBytes = readCompressedBytesFromFile(fileName, idx);
-    char *uncompressedBytes = new char[idx.size * 10]; //biggest seen so far is 3
-    int32_t uncompressedSize = decompressBlock(idx, compressedBytes, uncompressedBytes);
+    std::unique_ptr<char, decltype(&free)> compressedBytes(readCompressedBytesFromFile(fileName, idx), &free);
+    int32_t uncompressedSize = 0;
+    std::unique_ptr<char[]> uncompressedBytes(decompressBlockWithRetry(idx, compressedBytes.get(), uncompressedSize));
 
     // create stream from buffer for ease of use
-    memstream bufferin(uncompressedBytes, uncompressedSize);
-    uint64_t nRecords;
-    nRecords = static_cast<uint64_t>(readInt32FromFile(bufferin));
-    delete[] compressedBytes;
-    delete[] uncompressedBytes; // don't forget to delete your heap arrays in C++!
-    return nRecords;
+    memstream bufferin(uncompressedBytes.get(), uncompressedSize);
+    return static_cast<uint64_t>(readInt32FromFile(bufferin));
 }
 
 // this is the meat of reading the data.  takes in the block number and returns the set of contact records corresponding to
@@ -1035,14 +1077,20 @@ vector<contactRecord> readBlock(const string &fileName, indexEntry idx, int32_t 
         vector<contactRecord> v;
         return v;
     }
-    char *compressedBytes = readCompressedBytesFromFile(fileName, idx);
-    char *uncompressedBytes = new char[idx.size * 10]; //biggest seen so far is 3
-    int32_t uncompressedSize = decompressBlock(idx, compressedBytes, uncompressedBytes);
+    std::unique_ptr<char, decltype(&free)> compressedBytes(readCompressedBytesFromFile(fileName, idx), &free);
+    int32_t uncompressedSize = 0;
+    std::unique_ptr<char[]> uncompressedBytes(decompressBlockWithRetry(idx, compressedBytes.get(), uncompressedSize));
 
     // create stream from buffer for ease of use
-    memstream bufferin(uncompressedBytes, uncompressedSize);
+    memstream bufferin(uncompressedBytes.get(), uncompressedSize);
     uint64_t nRecords;
     nRecords = static_cast<uint64_t>(readInt32FromFile(bufferin));
+    // A corrupt/truncated block could otherwise report a bogus record count;
+    // each record needs at least one byte, so bound it by the decompressed
+    // size rather than trying to allocate an unbounded vector.
+    if (nRecords > static_cast<uint64_t>(std::max(0, uncompressedSize))) {
+        throw std::runtime_error("Hi-C contact block reports an implausible record count (corrupt file?)");
+    }
     vector<contactRecord> v(nRecords);
     // different versions have different specific formats
     if (version < 7) {
@@ -1170,8 +1218,6 @@ vector<contactRecord> readBlock(const string &fileName, indexEntry idx, int32_t 
             }
         }
     }
-    delete[] compressedBytes;
-    delete[] uncompressedBytes; // don't forget to delete your heap arrays in C++!
     return v;
 }
 
@@ -1233,6 +1279,13 @@ BlockResult processBlock(const string &filename, indexEntry idx, int32_t version
 
             float c = rec.counts;
             if (norm != "NONE") {
+                // A corrupt file or an edge bin beyond a truncated normalization
+                // vector could otherwise index out of bounds; skip the record
+                // rather than read garbage.
+                if (rec.binX < 0 || static_cast<size_t>(rec.binX) >= c1Norm.size() ||
+                    rec.binY < 0 || static_cast<size_t>(rec.binY) >= c2Norm.size()) {
+                    continue;
+                }
                 c = static_cast<float>(c / (c1Norm[rec.binX] * c2Norm[rec.binY]));
             }
             if (matrixType == "oe") {
@@ -1286,6 +1339,13 @@ void processBlockRecords(const string &filename, indexEntry idx, int32_t version
 
             float c = rec.counts;
             if (norm != "NONE") {
+                // A corrupt file or an edge bin beyond a truncated normalization
+                // vector could otherwise index out of bounds; skip the record
+                // rather than read garbage.
+                if (rec.binX < 0 || static_cast<size_t>(rec.binX) >= c1Norm.size() ||
+                    rec.binY < 0 || static_cast<size_t>(rec.binY) >= c2Norm.size()) {
+                    continue;
+                }
                 c = static_cast<float>(c / (c1Norm[rec.binX] * c2Norm[rec.binY]));
             }
             if (matrixType == "oe") {
@@ -1423,17 +1483,22 @@ public:
         this->norm = norm;
         this->resolution = resolution;
 
-        HiCFileStream *stream = new HiCFileStream(fileName);
+        // Stack-allocated (RAII): the previous heap-allocated stream objects
+        // were only ever close()'d, never delete'd (leaking one HiCFileStream
+        // per MatrixZoomData construction - i.e. per tile request), and the
+        // "!foundFooter" early return skipped close() entirely, leaking the
+        // underlying curl handle/file descriptor too.
+        HiCFileStream stream(fileName);
         indexEntry c1NormEntry{}, c2NormEntry{};
 
-        if (stream->isHttp) {
-            foundFooter = readFooterURL(stream->curl, master, version, c1, c2, matrixType, norm, unit,
+        if (stream.isHttp) {
+            foundFooter = readFooterURL(stream.curl, master, version, c1, c2, matrixType, norm, unit,
                                      resolution,
                                      myFilePos,
                                      c1NormEntry, c2NormEntry, expectedValues);
         } else {
-            stream->fin.seekg(master, ios::beg);
-            foundFooter = readFooter(stream->fin, master, version, c1, c2, matrixType, norm,
+            stream.fin.seekg(master, ios::beg);
+            foundFooter = readFooter(stream.fin, master, version, c1, c2, matrixType, norm,
                                      unit,
                                      resolution, myFilePos,
                                      c1NormEntry, c2NormEntry, expectedValues);
@@ -1442,7 +1507,7 @@ public:
         if (!foundFooter) {
             return;
         }
-        stream->close();
+        stream.close();
 
         if (norm != "NONE") {
             c1Norm = readNormalizationVectorFromFooter(c1NormEntry, version, fileName);
@@ -1453,19 +1518,19 @@ public:
             }
         }
 
-        HiCFileStream *stream2 = new HiCFileStream((fileName));
-        if (stream2->isHttp) {
+        HiCFileStream stream2(fileName);
+        if (stream2.isHttp) {
             // readMatrix will assign blockBinCount and blockColumnCount
-            blockMap = readMatrixHttp(stream2->curl, myFilePos, unit, resolution, sumCounts,
+            blockMap = readMatrixHttp(stream2.curl, myFilePos, unit, resolution, sumCounts,
                                       blockBinCount,
                                       blockColumnCount);
         } else {
             // readMatrix will assign blockBinCount and blockColumnCount
-            blockMap = readMatrix(stream2->fin, myFilePos, unit, resolution, sumCounts,
+            blockMap = readMatrix(stream2.fin, myFilePos, unit, resolution, sumCounts,
                                   blockBinCount,
                                   blockColumnCount);
         }
-        stream2->close();
+        stream2.close();
 
         if (!isIntra) {
             avgCount = (sumCounts / numBins1) / numBins2;   // <= trying to avoid overflows
@@ -1477,7 +1542,7 @@ public:
         char *buffer = readCompressedBytesFromFile(fileName, cNormEntry);
         memstream bufferin(buffer, cNormEntry.size);
         vector<double> cNorm = readNormalizationVector(bufferin, version);
-        delete buffer;
+        free(buffer);
         return cNorm;
     }
 
@@ -1522,8 +1587,13 @@ public:
         vector<BlockResult> allResults;
         vector<future<BlockResult>> futures;
         
-        // Adjust thread count based on block count and available cores
-        unsigned int maxThreads = thread::hardware_concurrency() - 1;
+        // Adjust thread count based on block count and available cores.
+        // hardware_concurrency() may return 0 when it can't detect the core
+        // count (permitted by the standard, seen in some containers); the
+        // naive "- 1" would then underflow to UINT_MAX and spawn one thread
+        // per block regardless of core count.
+        const unsigned int detectedCores = thread::hardware_concurrency();
+        unsigned int maxThreads = detectedCores > 1 ? detectedCores - 1 : 1;
         unsigned int numThreads = max(1u, min(
             maxThreads,                // Don't use more than available cores minus one
             static_cast<unsigned int>(blockNumbers.size())  // Don't create more threads than blocks
@@ -1677,8 +1747,10 @@ public:
 
     static size_t hdf(char *b, size_t size, size_t nitems, void *userdata) {
         size_t numbytes = size * nitems;
-        b[numbytes + 1] = '\0';
-        string s(b);
+        // libcurl only guarantees `numbytes` valid bytes in `b` (not null
+        // terminated, no slack for an appended terminator), so build the
+        // string from the counted length instead of writing/reading past it.
+        string s(b, numbytes);
         int32_t found;
         found = static_cast<int32_t>(s.find("content-range"));
         if ((size_t) found == string::npos) {
@@ -1716,13 +1788,12 @@ public:
                                        version, nviPosition, nviLength);
             resolutions = readResolutionsFromHeader(bufin);
             curl_easy_cleanup(curl);
-            delete buffer;
+            free(buffer);
         } else {
             ifstream fin;
             fin.open(fileName, fstream::in | fstream::binary);
             if (!fin) {
-                cerr << "File " << fileName << " cannot be opened for reading" << endl;
-                exit(6);
+                throw std::runtime_error("File " + fileName + " cannot be opened for reading");
             }
             chromosomeMap = readHeader(fin, master, genomeID, numChromosomes,
                                        version, nviPosition, nviLength);
@@ -1740,20 +1811,20 @@ public:
     }
 
     vector<chromosome> getChromosomes() {
-        vector<chromosome> chromosomes(chromosomeMap.size());
-        map<string, chromosome>::iterator iter = chromosomeMap.begin();
-        while (iter != chromosomeMap.end()) {
-            chromosome chrom = static_cast<chromosome>(iter->second);
-            chromosomes[chrom.index] = chrom;
-            iter++;
+        // Sized by the map's element count previously: a file with two
+        // chromosome entries sharing the same name collapses the map (fewer
+        // entries than numChromosomes) while still storing index values up to
+        // numChromosomes-1, which wrote past the end of a vector sized by
+        // chromosomeMap.size(). Size by the actual max index instead.
+        int32_t maxIndex = -1;
+        for (const auto &entry : chromosomeMap) {
+            maxIndex = std::max(maxIndex, entry.second.index);
         }
-
-        vector<chromosome> final_chromosomes;
-        final_chromosomes.reserve(chromosomeMap.size());
-        for(int32_t i = 0; i < chromosomeMap.size(); i++){
-            final_chromosomes.push_back(chromosomes[i]);
+        vector<chromosome> chromosomes(static_cast<size_t>(maxIndex + 1));
+        for (const auto &entry : chromosomeMap) {
+            chromosomes[static_cast<size_t>(entry.second.index)] = entry.second;
         }
-        return final_chromosomes;
+        return chromosomes;
     }
 
     MatrixZoomData * getMatrixZoomData(const string &chr1, const string &chr2, const string &matrixType,
@@ -1868,8 +1939,7 @@ void parsePositions(const string &chrLoc, string &chrom, int64_t &pos1, int64_t 
     stringstream ss(chrLoc);
     getline(ss, chrom, ':');
     if (map.count(chrom) == 0) {
-        cerr << "chromosome " << chrom << " not found in the file." << endl;
-        exit(7);
+        throw std::runtime_error("chromosome " + chrom + " not found in the file.");
     }
 
     if (getline(ss, x, ':') && getline(ss, y, ':')) {
@@ -1891,24 +1961,24 @@ bool strawStream(const string &matrixType, const string &norm, const string &fil
         return false;
     }
 
-    HiCFile *hiCFile = new HiCFile(fileName);
+    // RAII: parsePositions() and the block-reading path can both throw on a
+    // malformed chromosome name or a corrupt block, which previously would
+    // have skipped the manual `delete` below and leaked hiCFile/mzd.
+    auto hiCFile = std::make_unique<HiCFile>(fileName);
     string chr1, chr2;
     int64_t origRegionIndices[4] = {-100LL, -100LL, -100LL, -100LL};
     parsePositions((chr1loc), chr1, origRegionIndices[0], origRegionIndices[1], hiCFile->chromosomeMap);
     parsePositions((chr2loc), chr2, origRegionIndices[2], origRegionIndices[3], hiCFile->chromosomeMap);
 
     if (hiCFile->chromosomeMap[chr1].index > hiCFile->chromosomeMap[chr2].index) {
-        MatrixZoomData *mzd = hiCFile->getMatrixZoomData(chr2, chr1, matrixType, norm, unit, binsize);
+        std::unique_ptr<MatrixZoomData> mzd(hiCFile->getMatrixZoomData(chr2, chr1, matrixType, norm, unit, binsize));
         mzd->streamRecords(origRegionIndices[2], origRegionIndices[3], origRegionIndices[0], origRegionIndices[1],
                            callback);
-        delete mzd;
     } else {
-        MatrixZoomData *mzd = hiCFile->getMatrixZoomData(chr1, chr2, matrixType, norm, unit, binsize);
+        std::unique_ptr<MatrixZoomData> mzd(hiCFile->getMatrixZoomData(chr1, chr2, matrixType, norm, unit, binsize));
         mzd->streamRecords(origRegionIndices[0], origRegionIndices[1], origRegionIndices[2], origRegionIndices[3],
                            callback);
-        delete mzd;
     }
-    delete hiCFile;
     return true;
 }
 
