@@ -386,7 +386,7 @@ private:
         bool collapsed = false;
         bool autoscale = true;
         qint64 binSize = 0; // 0 follows the active Hi-C map resolution.
-        int height = 48;
+        int height = 400;
     };
 
     struct Annotation2D {

@@ -1953,7 +1953,7 @@ void HicDataController::setTrackCollapsed(int index, bool collapsed) {
 
 void HicDataController::setTrackHeight(int index, int height) {
     if (index < 0 || index >= static_cast<int>(m_tracks.size())) return;
-    m_tracks[static_cast<std::size_t>(index)].height = std::clamp(height, 20, 240);
+    m_tracks[static_cast<std::size_t>(index)].height = std::max(20, height);
     emit tracksChanged();
 }
 

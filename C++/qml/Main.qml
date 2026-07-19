@@ -48,9 +48,10 @@ ApplicationWindow {
     property real hoverPlotY: 0
     property bool straightEdgeEnabled: false
     property bool diagonalEdgeEnabled: false
+    property bool hoverTextVisible: true
     property int pendingAnnotationLayerExport: -1
     property int pendingTrackIndex: -1
-    property bool navigationOpen: false
+    property bool navigationOpen: true
     property bool inspectorOpen: false
     property bool trackPanelsOpen: false
     property bool landscapeMode: false
@@ -268,16 +269,7 @@ ApplicationWindow {
     function syncControlModels() {
         if (!activeController)
             return
-        chromosomeX.model = activeController.chromosomeNames()
-        chromosomeY.model = activeController.chromosomeNames()
-        resolutionBox.model = activeController.resolutions()
-        normBox.model = activeController.normalizations()
-        chromosomeX.currentIndex = Math.max(0, chromosomeX.find(activeController.chrX))
-        chromosomeY.currentIndex = Math.max(0, chromosomeY.find(activeController.chrY))
-        resolutionBox.currentIndex = Math.max(0, resolutionBox.find(String(activeController.resolution)))
-        matrixBox.model = activeController.matrixTypes()
-        matrixBox.currentIndex = Math.max(0, matrixBox.find(activeController.matrixType))
-        normBox.currentIndex = Math.max(0, normBox.find(activeController.norm))
+        navigationPanel.syncControllerModels()
         colorMapBox.currentIndex = Math.max(0, colorMapBox.find(activeController.colorMap))
     }
 
@@ -615,11 +607,12 @@ ApplicationWindow {
         ColumnLayout {
             anchors.fill: parent
             spacing: 8
-            Label { text: "Height (20–240 px)"; color: Theme.textSecondary }
+            Label { text: "Height (20 px minimum)"; color: Theme.textSecondary }
             AppTextField {
                 id: trackHeightField
                 Layout.fillWidth: true
                 inputMethodHints: Qt.ImhDigitsOnly
+                validator: IntValidator { bottom: 20 }
             }
         }
     }
@@ -795,6 +788,7 @@ ApplicationWindow {
             MenuItem { text: "Axis Endpoints Only"; checkable: true; checked: activeController && activeController.axisEndpointsOnly; onTriggered: if (activeController) activeController.axisEndpointsOnly = checked }
             MenuItem { text: "Chromosome Context"; checkable: true; checked: activeController && activeController.showChromosomeContext; onTriggered: if (activeController) activeController.showChromosomeContext = checked }
             MenuItem { text: "Display Tiles"; checkable: true; checked: activeController && activeController.showTilesDebug; onTriggered: if (activeController) activeController.showTilesDebug = checked }
+            MenuItem { text: "Hover Text"; checkable: true; checked: hoverTextVisible; onTriggered: hoverTextVisible = checked }
             MenuSeparator {}
             MenuItem { text: "Navigation Panel"; checkable: true; checked: navigationOpen; onTriggered: navigationOpen = checked }
             MenuItem { text: "Inspector"; checkable: true; checked: inspectorOpen; onTriggered: inspectorOpen = checked }
@@ -888,110 +882,6 @@ ApplicationWindow {
 
             Rectangle { Layout.preferredWidth: 1; Layout.preferredHeight: 24; color: Theme.chromeBorder }
 
-            AppComboBox {
-                id: chromosomeX
-                Accessible.name: "Horizontal chromosome"
-                Layout.preferredWidth: 100
-                model: []
-                enabled: activeController && model.length > 0
-                onActivated: if (activeController) activeController.chrX = currentText
-            }
-
-            Label { text: "×"; color: Theme.chromeTextMuted; font.pixelSize: Theme.textBase }
-
-            AppComboBox {
-                id: chromosomeY
-                Accessible.name: "Vertical chromosome"
-                Layout.preferredWidth: 100
-                model: []
-                enabled: activeController && model.length > 0
-                onActivated: if (activeController) activeController.chrY = currentText
-            }
-
-            Label {
-                text: "Bin"
-                color: Theme.chromeTextMuted
-                font.pixelSize: Theme.textXs
-            }
-
-            AppComboBox {
-                id: resolutionBox
-                Accessible.name: "Hi-C bin size in base pairs"
-                Layout.preferredWidth: 100
-                model: []
-                enabled: activeController && model.length > 0 && !activeController.resolutionLocked
-                onActivated: if (activeController) activeController.resolution = Number(currentText)
-            }
-
-            AppToolButton {
-                text: activeController && activeController.resolutionLocked ? "Locked" : "Lock"
-                enabled: activeController && activeController.resolution > 0
-                idleColor: activeController && activeController.resolutionLocked
-                           ? Qt.rgba(1, 1, 1, 0.1) : "transparent"
-                Accessible.name: activeController && activeController.resolutionLocked
-                                 ? "Unlock Hi-C bin size" : "Lock Hi-C bin size"
-                ToolTip.visible: hovered
-                ToolTip.text: Accessible.name
-                onClicked: activeController.resolutionLocked = !activeController.resolutionLocked
-            }
-
-            AppComboBox {
-                id: matrixBox
-                Accessible.name: "Matrix display mode"
-                Layout.preferredWidth: 115
-                model: activeController ? activeController.matrixTypes() : ["observed", "log", "oe", "expected", "vs"]
-                onActivated: if (activeController) activeController.matrixType = currentText
-            }
-
-            AppComboBox {
-                id: normBox
-                Accessible.name: "Matrix normalization"
-                Layout.preferredWidth: 90
-                model: ["NONE"]
-                onActivated: if (activeController) activeController.norm = currentText
-            }
-
-            Rectangle { Layout.preferredWidth: 1; Layout.preferredHeight: 24; color: Theme.chromeBorder }
-
-            AppTextField {
-                id: topLocationField
-                Accessible.name: "Horizontal genomic locus"
-                Layout.preferredWidth: 140
-                placeholderText: "chr:start-end"
-                enabled: activeController && activeController.filePath.length > 0
-                onAccepted: if (activeController) activeController.goTo(text, leftLocationField.text.length > 0 ? leftLocationField.text : text)
-            }
-
-            AppTextField {
-                id: leftLocationField
-                Accessible.name: "Vertical genomic locus"
-                Layout.preferredWidth: 140
-                placeholderText: "left / optional"
-                enabled: activeController && activeController.filePath.length > 0
-                onAccepted: if (activeController) activeController.goTo(topLocationField.text, text.length > 0 ? text : topLocationField.text)
-            }
-
-            AppButton {
-                text: "Go"
-                tonal: true
-                enabled: activeController && topLocationField.text.length > 0
-                onClicked: activeController.goTo(topLocationField.text, leftLocationField.text.length > 0 ? leftLocationField.text : topLocationField.text)
-            }
-
-            AppToolButton {
-                text: "Reset"
-                enabled: activeController && activeController.filePath.length > 0
-                onClicked: activeController.resetView()
-            }
-
-            AppToolButton {
-                text: "All"
-                enabled: activeController && activeController.filePath.length > 0
-                onClicked: activeController.setWholeGenomeView()
-            }
-
-            Rectangle { Layout.preferredWidth: 1; Layout.preferredHeight: 24; color: Theme.chromeBorder }
-
             AppToolButton {
                 text: "Track"
                 enabled: !!activeController
@@ -1061,14 +951,24 @@ ApplicationWindow {
         NavigationPanel {
             id: navigationPanel
             visible: navigationOpen
-            SplitView.preferredWidth: 240
-            SplitView.minimumWidth: 180
-            SplitView.maximumWidth: 340
+            SplitView.preferredWidth: 320
+            SplitView.minimumWidth: 260
+            SplitView.maximumWidth: 520
             controller: activeController
+            landscapeMode: window.landscapeMode
+            hoverTextVisible: window.hoverTextVisible
+            trackPanelsOpen: window.trackPanelsOpen
+            hoverText: window.hoverText
             onToggleRequested: navigationOpen = false
             onOpenDatasetRequested: openDialog.open()
             onLoadTrackRequested: trackDialog.open()
             onLoadAnnotationsRequested: annotationDialog.open()
+            onLandscapeModeToggled: function(enabled) {
+                window.landscapeMode = enabled
+                Qt.callLater(plotFrame.fitControllerToCanvas)
+            }
+            onHoverTextToggled: function(enabled) { window.hoverTextVisible = enabled }
+            onTrackPanelsToggled: function(enabled) { window.trackPanelsOpen = enabled }
         }
 
         Rectangle {
@@ -1135,7 +1035,6 @@ ApplicationWindow {
                     Connections {
                         target: activeController
                         function onViewChanged() {
-                            resolutionBox.currentIndex = Math.max(0, resolutionBox.find(String(activeController.resolution)))
                             topTrackCanvas.requestPaint()
                             leftTrackCanvas.requestPaint()
                             annotationCanvas.requestPaint()
@@ -1259,13 +1158,12 @@ ApplicationWindow {
                         }
                         Menu {
                             title: "Track height"
-                            MenuItem { text: "24 px"; onTriggered: activeController.setTrackHeight(plotTrackContextMenu.trackIndex, 24) }
-                            MenuItem { text: "48 px"; onTriggered: activeController.setTrackHeight(plotTrackContextMenu.trackIndex, 48) }
-                            MenuItem { text: "72 px"; onTriggered: activeController.setTrackHeight(plotTrackContextMenu.trackIndex, 72) }
-                            MenuItem { text: "96 px"; onTriggered: activeController.setTrackHeight(plotTrackContextMenu.trackIndex, 96) }
-                            MenuItem { text: "128 px"; onTriggered: activeController.setTrackHeight(plotTrackContextMenu.trackIndex, 128) }
-                            MenuItem { text: "160 px"; onTriggered: activeController.setTrackHeight(plotTrackContextMenu.trackIndex, 160) }
-                            MenuItem { text: "240 px"; onTriggered: activeController.setTrackHeight(plotTrackContextMenu.trackIndex, 240) }
+                            MenuItem { text: "100 px"; onTriggered: activeController.setTrackHeight(plotTrackContextMenu.trackIndex, 100) }
+                            MenuItem { text: "200 px"; onTriggered: activeController.setTrackHeight(plotTrackContextMenu.trackIndex, 200) }
+                            MenuItem { text: "300 px"; onTriggered: activeController.setTrackHeight(plotTrackContextMenu.trackIndex, 300) }
+                            MenuItem { text: "400 px"; onTriggered: activeController.setTrackHeight(plotTrackContextMenu.trackIndex, 400) }
+                            MenuItem { text: "600 px"; onTriggered: activeController.setTrackHeight(plotTrackContextMenu.trackIndex, 600) }
+                            MenuItem { text: "800 px"; onTriggered: activeController.setTrackHeight(plotTrackContextMenu.trackIndex, 800) }
                             MenuSeparator {}
                             MenuItem { text: "Custom…"; onTriggered: openTrackHeightEditor(plotTrackContextMenu.trackIndex) }
                         }
@@ -1379,9 +1277,9 @@ ApplicationWindow {
                         id: plotFrame
                         anchors.centerIn: parent
                         anchors.horizontalCenterOffset: comparisonOpen ? -parent.width * 0.25 : 0
-                        anchors.verticalCenterOffset: -16
+                        anchors.verticalCenterOffset: 0
                         property real availableWidth: (comparisonOpen ? parent.width * 0.5 : parent.width) - 12
-                        property real availableHeight: parent.height - 40
+                        property real availableHeight: parent.height - 12
                         width: Math.max(240, landscapeMode ? availableWidth : Math.min(availableWidth, availableHeight))
                         height: Math.max(240, landscapeMode ? availableHeight : width)
                         onWidthChanged: aspectRefitTimer.restart()
@@ -1402,9 +1300,9 @@ ApplicationWindow {
                             var extent = 38
                             for (var i = 0; i < tracks.length; ++i) {
                                 if (tracks[i].visible && !tracks[i].collapsed)
-                                    extent += Math.max(20, Math.min(240, tracks[i].height))
+                                    extent += Math.max(20, tracks[i].height)
                             }
-                            var available = Math.floor(Math.min(plotFrame.width, plotFrame.height) * 0.45)
+                            var available = Math.floor(Math.min(plotFrame.width, plotFrame.height) - 80)
                             return Math.max(46, Math.min(available, extent))
                         }
 
@@ -2044,7 +1942,7 @@ ApplicationWindow {
                             Rectangle {
                                 id: hoverBadge
                                 z: 20
-                                visible: hoverActive && hoverText.length > 0
+                                visible: hoverTextVisible && hoverActive && hoverText.length > 0
                                 width: Math.min(parent.width - 16, hoverBadgeLabel.implicitWidth + 16)
                                 height: hoverBadgeLabel.implicitHeight + 10
                                 x: Math.max(8, Math.min(parent.width - width - 8, hoverPlotX + 14))
@@ -2067,60 +1965,6 @@ ApplicationWindow {
                         }
                     }
 
-                    Rectangle {
-                        z: 50
-                        anchors.left: parent.left
-                        anchors.bottom: parent.bottom
-                        anchors.leftMargin: 12
-                        anchors.bottomMargin: 44
-                        width: viewportControls.implicitWidth + 12
-                        height: 38
-                        radius: Theme.radiusSm
-                        color: Theme.surfaceAlt
-                        border.color: Theme.borderStrong
-
-                        RowLayout {
-                            id: viewportControls
-                            anchors.centerIn: parent
-                            spacing: 2
-                            AppToolButton {
-                                text: "−"
-                                onLightSurface: true
-                                Layout.preferredWidth: 34
-                                enabled: activeController && activeController.filePath.length > 0
-                                Accessible.name: "Zoom out"
-                                ToolTip.visible: hovered
-                                ToolTip.text: Accessible.name
-                                onClicked: activeController.zoom(0.5, 0.5, 0.5)
-                            }
-                            AppToolButton {
-                                text: "+"
-                                onLightSurface: true
-                                Layout.preferredWidth: 34
-                                enabled: activeController && activeController.filePath.length > 0
-                                Accessible.name: "Zoom in"
-                                ToolTip.visible: hovered
-                                ToolTip.text: Accessible.name
-                                onClicked: activeController.zoom(2.0, 0.5, 0.5)
-                            }
-                            Rectangle { Layout.preferredWidth: 1; Layout.preferredHeight: 20; color: Theme.border }
-                            AppToolButton {
-                                text: landscapeMode ? "Square" : "Landscape"
-                                onLightSurface: true
-                                enabled: !!activeController
-                                Accessible.name: landscapeMode ? "Use square heatmap layout" : "Use landscape heatmap layout"
-                                ToolTip.visible: hovered
-                                ToolTip.text: landscapeMode
-                                              ? "Return to the square viewport"
-                                              : "Use the full width and show additional loci"
-                                onClicked: {
-                                    landscapeMode = !landscapeMode
-                                    Qt.callLater(plotFrame.fitControllerToCanvas)
-                                }
-                            }
-                        }
-                    }
-
                     ComparisonViewport {
                         id: comparisonViewport
                         visible: comparisonOpen
@@ -2129,7 +1973,7 @@ ApplicationWindow {
                         anchors.bottom: parent.bottom
                         anchors.topMargin: 10
                         anchors.rightMargin: 10
-                        anchors.bottomMargin: 42
+                        anchors.bottomMargin: 10
                         width: parent.width * 0.5 - 16
                         controller: comparisonController
                         viewLabel: comparisonController && comparisonController.filePath.length > 0
@@ -2172,61 +2016,6 @@ ApplicationWindow {
                         }
                     }
 
-                    Rectangle {
-                        anchors.left: parent.left
-                        anchors.right: parent.right
-                        anchors.bottom: parent.bottom
-                        height: 32
-                        color: Theme.footerBg
-                        RowLayout {
-                            anchors.fill: parent
-                            anchors.leftMargin: 16
-                            anchors.rightMargin: 16
-                            spacing: 14
-                            Label {
-                                text: activeController ? activeController.chrX + ":" + activeController.x0 + "-" + activeController.x1 : ""
-                                color: Theme.chromeText
-                                font.pixelSize: Theme.textSm
-                                elide: Text.ElideRight
-                                Layout.fillWidth: true
-                            }
-                            Label {
-                                text: activeController ? activeController.chrY + ":" + activeController.y0 + "-" + activeController.y1 : ""
-                                color: Theme.chromeText
-                                font.pixelSize: Theme.textSm
-                                elide: Text.ElideRight
-                                Layout.fillWidth: true
-                            }
-                            Label {
-                                text: activeController ? activeController.recordCount + " records" : ""
-                                color: Theme.chromeTextMuted
-                                font.pixelSize: Theme.textSm
-                            }
-                            Rectangle { Layout.preferredWidth: 1; Layout.preferredHeight: 14; color: Theme.chromeBorder }
-                            Label {
-                                text: activeController ? activeController.matrixDimensions + " · " + activeController.resolution + " bp" : ""
-                                color: Theme.chromeTextMuted
-                                font.pixelSize: Theme.textXs
-                            }
-                            Label {
-                                text: activeController ? "Cache " + activeController.cacheMemoryMB.toFixed(1) + "/" + activeController.cacheLimitMB + " MB" : ""
-                                color: Theme.chromeTextMuted
-                                font.pixelSize: Theme.textXs
-                            }
-                            Label {
-                                text: activeController ? activeController.renderingBackend : ""
-                                color: Theme.chromeTextMuted
-                                font.pixelSize: Theme.textXs
-                            }
-                            Label {
-                                text: hoverText
-                                color: Theme.chromeText
-                                font.pixelSize: Theme.textSm
-                                elide: Text.ElideRight
-                                Layout.preferredWidth: 280
-                            }
-                        }
-                    }
                 }
             }
         }
@@ -2270,6 +2059,7 @@ ApplicationWindow {
                     }
 
                     Card {
+                        visible: hoverTextVisible
                         Layout.fillWidth: true
                         Layout.leftMargin: 16
                         Layout.rightMargin: 16
@@ -2413,7 +2203,9 @@ ApplicationWindow {
                                     to: activeController ? Math.max(0, activeController.resolutions().length - 1) : 0
                                     stepSize: 1
                                     snapMode: Slider.SnapAlways
-                                    value: resolutionBox.currentIndex
+                                    value: activeController
+                                           ? Math.max(0, activeController.resolutions().indexOf(activeController.resolution))
+                                           : 0
                                     onMoved: {
                                         if (activeController && activeController.resolutions().length > value)
                                             activeController.resolution = Number(activeController.resolutions()[Math.round(value)])
@@ -2949,16 +2741,18 @@ ApplicationWindow {
                                                         visible: !modelData.collapsed
                                                         Layout.fillWidth: true
                                                         Label { text: "Height"; color: Theme.textSecondary; font.pixelSize: Theme.textSm }
-                                                        Slider {
+                                                        AppTextField {
                                                             Layout.fillWidth: true
-                                                            from: 20
-                                                            to: 240
-                                                            stepSize: 4
-                                                            value: modelData.height
+                                                            text: String(modelData.height)
+                                                            inputMethodHints: Qt.ImhDigitsOnly
+                                                            validator: IntValidator { bottom: 20 }
                                                             Accessible.name: "Height of " + modelData.name
-                                                            onMoved: activeController.setTrackHeight(modelData.index, value)
+                                                            onAccepted: if (acceptableInput)
+                                                                activeController.setTrackHeight(modelData.index, Math.round(Number(text)))
+                                                            onEditingFinished: if (acceptableInput)
+                                                                activeController.setTrackHeight(modelData.index, Math.round(Number(text)))
                                                         }
-                                                        Label { text: Math.round(modelData.height) + " px"; color: Theme.textMuted; font.pixelSize: Theme.textXs }
+                                                        Label { text: "px · no maximum"; color: Theme.textMuted; font.pixelSize: Theme.textXs }
                                                     }
                                                 }
                                             }
@@ -2969,16 +2763,6 @@ ApplicationWindow {
                         }
                     }
 
-                    Label {
-                        Layout.fillWidth: true
-                        Layout.leftMargin: 16
-                        Layout.rightMargin: 16
-                        Layout.bottomMargin: 16
-                        text: activeController ? activeController.status : ""
-                        color: Theme.textSecondary
-                        font.pixelSize: Theme.textSm
-                        wrapMode: Text.WordWrap
-                    }
                 }
             }
         }
