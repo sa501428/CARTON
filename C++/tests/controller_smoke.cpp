@@ -5,6 +5,8 @@
 #include <QTemporaryDir>
 #include <QUrl>
 
+#include <limits>
+
 #include "HicDataController.h"
 #include "HicTileCache.h"
 
@@ -64,7 +66,8 @@ int main(int argc, char** argv) {
     const QVariantMap summary = controller.trackSummaries().front().toMap();
     if (!require(!summary.value("visible").toBool() && summary.value("collapsed").toBool() &&
                  summary.value("height").toInt() == 96 && summary.value("format").toString() == QStringLiteral("bedGraph") &&
-                 summary.value("renderMode").toString() == QStringLiteral("signal"), "track display state")) return 1;
+                 summary.value("renderMode").toString() == QStringLiteral("signal") &&
+                 summary.value("binSize").toLongLong() == 0, "track display state")) return 1;
     controller.setWorkspaceSearch(QStringLiteral("signal"));
     if (!require(controller.searchResultsModel()->rowCount() >= 1, "workspace search model")) return 1;
 
@@ -90,6 +93,7 @@ int main(int argc, char** argv) {
     // still be considered visible in that case instead of silently matching
     // nothing.
     HicDataController prefixController;
+    prefixController.setResolution(100);
     prefixController.setChrX(QStringLiteral("1"));
     prefixController.setChrY(QStringLiteral("1"));
     prefixController.setX0(0);
@@ -120,6 +124,40 @@ int main(int argc, char** argv) {
         if (value.toMap().value("trackIndex").toInt() == 1) ++denseSegmentCount;
     }
     if (!require(denseSegmentCount > 0 && denseSegmentCount <= 100, "dense signal is bounded by display pixels")) return 1;
+    const QVariantMap mapBinnedSummary = prefixController.trackSummaries()[1].toMap();
+    if (!require(mapBinnedSummary.value("binSize").toLongLong() == 0 &&
+                 mapBinnedSummary.value("effectiveBinSize").toLongLong() == 100,
+                 "quantitative tracks default to the Hi-C resolution")) return 1;
+
+    prefixController.setTrackBinSize(1, 50);
+    prefixController.setTrackReduction(1, QStringLiteral("min"));
+    const QVariantList minimumSegments = prefixController.visibleTrackSegmentsForPixels(true, 1000);
+    double firstMinimum = std::numeric_limits<double>::quiet_NaN();
+    qint64 renderedBinSize = 0;
+    for (const QVariant& value : minimumSegments) {
+        const QVariantMap segment = value.toMap();
+        if (segment.value("trackIndex").toInt() == 1) {
+            firstMinimum = segment.value("value").toDouble();
+            renderedBinSize = segment.value("renderedBinSize").toLongLong();
+            break;
+        }
+    }
+    prefixController.setTrackReduction(1, QStringLiteral("max"));
+    const QVariantList maximumSegments = prefixController.visibleTrackSegmentsForPixels(true, 1000);
+    double firstMaximum = std::numeric_limits<double>::quiet_NaN();
+    for (const QVariant& value : maximumSegments) {
+        const QVariantMap segment = value.toMap();
+        if (segment.value("trackIndex").toInt() == 1) {
+            firstMaximum = segment.value("value").toDouble();
+            break;
+        }
+    }
+    if (!require(renderedBinSize == 50 && firstMinimum == 0.0 && firstMaximum == 9.0,
+                 "fixed genomic bins honor min/max windowing")) return 1;
+    const QVariantMap denseSummary = prefixController.trackSummaries()[1].toMap();
+    if (!require(denseSummary.value("binSize").toLongLong() == 50 &&
+                 denseSummary.value("effectiveBinSize").toLongLong() == 50,
+                 "fixed bin size is exposed in track summary")) return 1;
 
     const QString bedTrack = temporary.filePath(QStringLiteral("features.bed"));
     if (!require(writeFile(bedTrack, "chr1\t10\t30\tfeature-a\t500\n"), "write BED")) return 1;

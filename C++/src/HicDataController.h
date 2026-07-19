@@ -201,6 +201,7 @@ public:
     Q_INVOKABLE void setTrackColor(int index, const QColor& positiveColor, const QColor& negativeColor);
     Q_INVOKABLE void setTrackRange(int index, double minValue, double maxValue, bool logScale);
     Q_INVOKABLE void setTrackReduction(int index, const QString& reduction);
+    Q_INVOKABLE void setTrackBinSize(int index, qint64 binSize);
     Q_INVOKABLE void setTrackVisible(int index, bool visible);
     Q_INVOKABLE void setTrackCollapsed(int index, bool collapsed);
     Q_INVOKABLE void setTrackHeight(int index, int height);
@@ -384,6 +385,7 @@ private:
         bool visible = true;
         bool collapsed = false;
         bool autoscale = true;
+        qint64 binSize = 0; // 0 follows the active Hi-C map resolution.
         int height = 48;
     };
 

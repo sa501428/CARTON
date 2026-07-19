@@ -637,6 +637,8 @@ QVariantList HicDataController::trackSummaries() const {
         item["max"] = track.maxValue;
         item["logScale"] = track.logScale;
         item["reduction"] = track.reduction;
+        item["binSize"] = track.binSize;
+        item["effectiveBinSize"] = track.binSize > 0 ? track.binSize : std::max(1, m_resolution);
         item["coverage"] = track.coverage;
         item["eigenvector"] = track.eigenvector;
         item["featureCount"] = track.features.size();
@@ -688,6 +690,7 @@ QVariantList HicDataController::visibleTrackSegmentsForPixels(bool xAxis, int pi
         double rawValue = 0.0;
         QColor color;
         QString name;
+        qint64 renderedBinSize = 0;
     };
 
     for (int trackIndex = 0; trackIndex < static_cast<int>(m_tracks.size()); ++trackIndex) {
@@ -701,26 +704,42 @@ QVariantList HicDataController::visibleTrackSegmentsForPixels(bool xAxis, int pi
         }
 
         QVector<RenderedSegment> rendered;
-        if (track.renderMode == QStringLiteral("signal") && pixelCount > 0) {
-            QVector<double> sums(pixelCount, 0.0);
-            QVector<double> weights(pixelCount, 0.0);
-            QVector<double> maxima(pixelCount, -std::numeric_limits<double>::infinity());
-            QVector<double> rawSums(pixelCount, 0.0);
-            QVector<bool> occupied(pixelCount, false);
+        if (track.renderMode == QStringLiteral("signal") && pixelCount > 0 &&
+            track.reduction != QStringLiteral("none")) {
+            // Quantitative tracks are first aligned to the Hi-C map's genomic
+            // bins (or a per-track fixed override). If several genomic bins
+            // land in one screen pixel, apply the selected IGV-style windowing
+            // function again at that coarser display resolution.
+            const qint64 sourceBinSize = std::max<qint64>(1, track.binSize > 0 ? track.binSize : m_resolution);
             const double basesPerPixel = static_cast<double>(span) / pixelCount;
+            const qint64 binsPerPixel = std::max<qint64>(1, static_cast<qint64>(std::ceil(basesPerPixel / sourceBinSize)));
+            const qint64 renderBinSize = sourceBinSize > std::numeric_limits<qint64>::max() / binsPerPixel
+                                             ? std::numeric_limits<qint64>::max()
+                                             : sourceBinSize * binsPerPixel;
+            const qint64 alignedStart = start >= 0 ? (start / renderBinSize) * renderBinSize : start;
+            const int binCount = static_cast<int>(std::clamp<qint64>(
+                (end - alignedStart + renderBinSize - 1) / renderBinSize, 1, pixelCount + 2));
+            QVector<double> sums(binCount, 0.0);
+            QVector<double> weights(binCount, 0.0);
+            QVector<double> maxima(binCount, -std::numeric_limits<double>::infinity());
+            QVector<double> minima(binCount, std::numeric_limits<double>::infinity());
+            QVector<double> rawSums(binCount, 0.0);
+            QVector<double> rawMaxima(binCount, -std::numeric_limits<double>::infinity());
+            QVector<double> rawMinima(binCount, std::numeric_limits<double>::infinity());
+            QVector<bool> occupied(binCount, false);
 
             for (const TrackFeature* segment : visible) {
                 const double clippedStart = static_cast<double>(std::max(segment->start, start));
                 const double clippedEnd = static_cast<double>(std::min(segment->end, end));
                 if (clippedEnd <= clippedStart) continue;
                 const double displayValue = track.logScale ? signedLog(segment->value) : segment->value;
-                const int firstBin = std::clamp(static_cast<int>(std::floor((clippedStart - start) / basesPerPixel)),
-                                                0, pixelCount - 1);
-                const int lastBin = std::clamp(static_cast<int>(std::ceil((clippedEnd - start) / basesPerPixel)) - 1,
-                                               firstBin, pixelCount - 1);
+                const int firstBin = std::clamp(static_cast<int>(std::floor((clippedStart - alignedStart) / renderBinSize)),
+                                                0, binCount - 1);
+                const int lastBin = std::clamp(static_cast<int>(std::ceil((clippedEnd - alignedStart) / renderBinSize)) - 1,
+                                               firstBin, binCount - 1);
                 for (int bin = firstBin; bin <= lastBin; ++bin) {
-                    const double binStart = start + bin * basesPerPixel;
-                    const double binEnd = start + (bin + 1) * basesPerPixel;
+                    const double binStart = alignedStart + bin * static_cast<double>(renderBinSize);
+                    const double binEnd = alignedStart + (bin + 1) * static_cast<double>(renderBinSize);
                     const double overlap = std::max(0.0, std::min(clippedEnd, binEnd) - std::max(clippedStart, binStart));
                     if (overlap <= 0.0) continue;
                     occupied[bin] = true;
@@ -728,18 +747,46 @@ QVariantList HicDataController::visibleTrackSegmentsForPixels(bool xAxis, int pi
                     rawSums[bin] += segment->value * overlap;
                     weights[bin] += overlap;
                     maxima[bin] = std::max(maxima[bin], displayValue);
+                    minima[bin] = std::min(minima[bin], displayValue);
+                    rawMaxima[bin] = std::max(rawMaxima[bin], segment->value);
+                    rawMinima[bin] = std::min(rawMinima[bin], segment->value);
                 }
             }
 
-            rendered.reserve(pixelCount);
-            for (int bin = 0; bin < pixelCount; ++bin) {
+            rendered.reserve(binCount);
+            for (int bin = 0; bin < binCount; ++bin) {
                 if (!occupied[bin] || weights[bin] <= 0.0) continue;
                 RenderedSegment segment;
-                segment.start = start + static_cast<qint64>(std::floor(bin * basesPerPixel));
-                segment.end = start + static_cast<qint64>(std::ceil((bin + 1) * basesPerPixel));
-                segment.end = std::max(segment.start + 1, std::min(segment.end, end));
-                segment.value = track.reduction == QStringLiteral("max") ? maxima[bin] : sums[bin] / weights[bin];
-                segment.rawValue = rawSums[bin] / weights[bin];
+                segment.start = alignedStart + bin * renderBinSize;
+                segment.end = segment.start + renderBinSize;
+                segment.renderedBinSize = renderBinSize;
+                if (track.reduction == QStringLiteral("max")) {
+                    segment.value = maxima[bin];
+                    segment.rawValue = rawMaxima[bin];
+                } else if (track.reduction == QStringLiteral("min")) {
+                    segment.value = minima[bin];
+                    segment.rawValue = rawMinima[bin];
+                } else {
+                    segment.value = sums[bin] / weights[bin];
+                    segment.rawValue = rawSums[bin] / weights[bin];
+                }
+                segment.color = segment.value < 0 ? track.negativeColor : track.color;
+                rendered.push_back(std::move(segment));
+            }
+        } else if (track.renderMode == QStringLiteral("signal") && pixelCount > 0) {
+            // "None" preserves individual values, subject only to a generous
+            // draw-command cap so a million-record track cannot stall Canvas.
+            const qsizetype maxSegments = std::max(200, pixelCount * 4);
+            const qsizetype stride = std::max<qsizetype>(1, (visible.size() + maxSegments - 1) / maxSegments);
+            rendered.reserve(std::min<qsizetype>(visible.size(), maxSegments));
+            for (qsizetype index = 0; index < visible.size(); index += stride) {
+                const TrackFeature* source = visible[index];
+                RenderedSegment segment;
+                segment.start = source->start;
+                segment.end = source->end;
+                segment.name = source->label;
+                segment.rawValue = source->value;
+                segment.value = track.logScale ? signedLog(source->value) : source->value;
                 segment.color = segment.value < 0 ? track.negativeColor : track.color;
                 rendered.push_back(std::move(segment));
             }
@@ -816,6 +863,8 @@ QVariantList HicDataController::visibleTrackSegmentsForPixels(bool xAxis, int pi
             item["trackName"] = track.name;
             item["kind"] = track.renderMode;
             item["format"] = track.format;
+            item["binSize"] = track.binSize > 0 ? track.binSize : std::max(1, m_resolution);
+            item["renderedBinSize"] = segment.renderedBinSize;
             item["name"] = segment.name;
             item["start"] = segment.start;
             item["end"] = segment.end;
@@ -1868,16 +1917,25 @@ void HicDataController::setTrackColor(int index, const QColor& positiveColor, co
 
 void HicDataController::setTrackRange(int index, double minValue, double maxValue, bool logScale) {
     if (index < 0 || index >= static_cast<int>(m_tracks.size())) return;
+    if (!std::isfinite(minValue) || !std::isfinite(maxValue) || maxValue <= minValue) return;
     TrackLayer& track = m_tracks[static_cast<std::size_t>(index)];
     track.minValue = minValue;
-    track.maxValue = std::max(minValue + 0.0001, maxValue);
+    track.maxValue = maxValue;
     track.logScale = logScale;
     emit tracksChanged();
 }
 
 void HicDataController::setTrackReduction(int index, const QString& reduction) {
     if (index < 0 || index >= static_cast<int>(m_tracks.size())) return;
-    m_tracks[static_cast<std::size_t>(index)].reduction = reduction == QStringLiteral("max") ? QStringLiteral("max") : QStringLiteral("mean");
+    static const QStringList supported = {QStringLiteral("min"), QStringLiteral("mean"),
+                                          QStringLiteral("max"), QStringLiteral("none")};
+    m_tracks[static_cast<std::size_t>(index)].reduction = supported.contains(reduction) ? reduction : QStringLiteral("mean");
+    emit tracksChanged();
+}
+
+void HicDataController::setTrackBinSize(int index, qint64 binSize) {
+    if (index < 0 || index >= static_cast<int>(m_tracks.size())) return;
+    m_tracks[static_cast<std::size_t>(index)].binSize = std::clamp<qint64>(binSize, 0, 1000000000LL);
     emit tracksChanged();
 }
 

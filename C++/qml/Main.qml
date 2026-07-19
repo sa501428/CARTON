@@ -49,6 +49,7 @@ ApplicationWindow {
     property bool straightEdgeEnabled: false
     property bool diagonalEdgeEnabled: false
     property int pendingAnnotationLayerExport: -1
+    property int pendingTrackIndex: -1
     property bool navigationOpen: false
     property bool inspectorOpen: false
     property bool trackPanelsOpen: false
@@ -67,6 +68,79 @@ ApplicationWindow {
         toastText = message
         toastKind = kind || "info"
         toastTimer.restart()
+    }
+
+    function trackSummary(index) {
+        if (!activeController || index < 0 || index >= activeController.trackCount)
+            return null
+        return activeController.trackSummaries()[index]
+    }
+
+    function openPlotTrackMenu(index) {
+        var summary = trackSummary(index)
+        if (!summary) return
+        pendingTrackIndex = index
+        plotTrackContextMenu.summary = summary
+        plotTrackContextMenu.popup()
+    }
+
+    function chooseTrackColor(index, negative) {
+        var summary = trackSummary(index)
+        if (!summary) return
+        pendingTrackIndex = index
+        if (negative) {
+            trackNegativeColorDialog.selectedColor = summary.negativeColor
+            trackNegativeColorDialog.open()
+        } else {
+            trackPositiveColorDialog.selectedColor = summary.positiveColor
+            trackPositiveColorDialog.open()
+        }
+    }
+
+    function openTrackRangeEditor(index) {
+        var summary = trackSummary(index)
+        if (!summary) return
+        pendingTrackIndex = index
+        trackRangeMin.text = String(summary.min)
+        trackRangeMax.text = String(summary.max)
+        trackRangeLog.checked = summary.logScale
+        trackRangeDialog.open()
+    }
+
+    function openTrackBinEditor(index) {
+        var summary = trackSummary(index)
+        if (!summary) return
+        pendingTrackIndex = index
+        trackBinSizeField.text = String(summary.effectiveBinSize)
+        trackBinSizeDialog.open()
+    }
+
+    function openTrackHeightEditor(index) {
+        var summary = trackSummary(index)
+        if (!summary) return
+        pendingTrackIndex = index
+        trackHeightField.text = String(summary.height)
+        trackHeightDialog.open()
+    }
+
+    function trackIndexAtPanelPosition(position, trackStart, trackEnd, minimumLaneSize) {
+        if (!activeController || !trackPanelsOpen || position < trackStart || position >= trackEnd)
+            return -1
+        var summaries = activeController.trackSummaries()
+        var totalHeight = 0
+        for (var i = 0; i < summaries.length; ++i) {
+            if (summaries[i].visible && !summaries[i].collapsed)
+                totalHeight += Math.max(20, summaries[i].height)
+        }
+        var cursor = trackStart
+        for (var j = 0; j < summaries.length; ++j) {
+            if (!summaries[j].visible || summaries[j].collapsed) continue
+            var laneSize = Math.max(minimumLaneSize, (trackEnd - trackStart) * Math.max(20, summaries[j].height) / Math.max(1, totalHeight))
+            if (position >= cursor && position < cursor + laneSize)
+                return j
+            cursor += laneSize
+        }
+        return -1
     }
 
     function formatBp(value) {
@@ -440,6 +514,114 @@ ApplicationWindow {
         title: "Missing Value Color"
         selectedColor: activeController ? activeController.missingValueColor : Theme.missingData
         onAccepted: if (activeController) activeController.missingValueColor = selectedColor
+    }
+
+    ColorDialog {
+        id: trackPositiveColorDialog
+        title: "Track Color"
+        onAccepted: {
+            var summary = trackSummary(pendingTrackIndex)
+            if (summary) activeController.setTrackColor(pendingTrackIndex, selectedColor, summary.negativeColor)
+        }
+    }
+
+    ColorDialog {
+        id: trackNegativeColorDialog
+        title: "Negative Value Color"
+        onAccepted: {
+            var summary = trackSummary(pendingTrackIndex)
+            if (summary) activeController.setTrackColor(pendingTrackIndex, summary.positiveColor, selectedColor)
+        }
+    }
+
+    Dialog {
+        id: trackRangeDialog
+        title: "Set Track Data Range"
+        modal: true
+        width: 380
+        standardButtons: Dialog.Ok | Dialog.Cancel
+        background: DialogFrame {}
+        onAccepted: {
+            var minimum = Number(trackRangeMin.text)
+            var maximum = Number(trackRangeMax.text)
+            if (!activeController || pendingTrackIndex < 0 || !isFinite(minimum) || !isFinite(maximum) || maximum <= minimum) {
+                showToast("Track range requires a maximum greater than the minimum", "error")
+                return
+            }
+            activeController.setTrackRange(pendingTrackIndex, minimum, maximum, trackRangeLog.checked)
+            activeController.setTrackAutoscale(pendingTrackIndex, false)
+        }
+        ColumnLayout {
+            anchors.fill: parent
+            spacing: 10
+            GridLayout {
+                Layout.fillWidth: true
+                columns: 2
+                Label { text: "Minimum"; color: Theme.textSecondary }
+                AppTextField { id: trackRangeMin; Layout.fillWidth: true; inputMethodHints: Qt.ImhFormattedNumbersOnly }
+                Label { text: "Maximum"; color: Theme.textSecondary }
+                AppTextField { id: trackRangeMax; Layout.fillWidth: true; inputMethodHints: Qt.ImhFormattedNumbersOnly }
+            }
+            AppCheckBox { id: trackRangeLog; text: "Log scale" }
+        }
+    }
+
+    Dialog {
+        id: trackBinSizeDialog
+        title: "Set Fixed Track Bin Size"
+        modal: true
+        width: 380
+        standardButtons: Dialog.Ok | Dialog.Cancel
+        background: DialogFrame {}
+        onAccepted: {
+            var value = Math.round(Number(trackBinSizeField.text))
+            if (!activeController || pendingTrackIndex < 0 || !isFinite(value) || value < 1) {
+                showToast("Bin size must be a positive number of base pairs", "error")
+                return
+            }
+            activeController.setTrackBinSize(pendingTrackIndex, value)
+        }
+        ColumnLayout {
+            anchors.fill: parent
+            spacing: 8
+            Label { text: "Bin size (bp)"; color: Theme.textSecondary }
+            AppTextField {
+                id: trackBinSizeField
+                Layout.fillWidth: true
+                inputMethodHints: Qt.ImhDigitsOnly
+            }
+            Label {
+                text: "Use “Match Hi-C resolution” in the track menu to follow map resolution changes."
+                color: Theme.textMuted
+                font.pixelSize: Theme.textXs
+                wrapMode: Text.WordWrap
+                Layout.fillWidth: true
+            }
+        }
+    }
+
+    Dialog {
+        id: trackHeightDialog
+        title: "Set Track Height"
+        modal: true
+        width: 340
+        standardButtons: Dialog.Ok | Dialog.Cancel
+        background: DialogFrame {}
+        onAccepted: {
+            var value = Math.round(Number(trackHeightField.text))
+            if (!activeController || pendingTrackIndex < 0 || !isFinite(value)) return
+            activeController.setTrackHeight(pendingTrackIndex, value)
+        }
+        ColumnLayout {
+            anchors.fill: parent
+            spacing: 8
+            Label { text: "Height (20–240 px)"; color: Theme.textSecondary }
+            AppTextField {
+                id: trackHeightField
+                Layout.fillWidth: true
+                inputMethodHints: Qt.ImhDigitsOnly
+            }
+        }
     }
 
     Dialog {
@@ -993,6 +1175,116 @@ ApplicationWindow {
                     }
 
                     Menu {
+                        id: plotTrackContextMenu
+                        property int trackIndex: pendingTrackIndex
+                        property var summary: ({})
+
+                        MenuItem { text: plotTrackContextMenu.summary.name || "1D track"; enabled: false }
+                        MenuSeparator {}
+                        Menu {
+                            title: "Windowing function"
+                            enabled: plotTrackContextMenu.summary.renderMode === "signal"
+                            MenuItem {
+                                text: "Minimum"; checkable: true
+                                checked: plotTrackContextMenu.summary.reduction === "min"
+                                onTriggered: activeController.setTrackReduction(plotTrackContextMenu.trackIndex, "min")
+                            }
+                            MenuItem {
+                                text: "Mean"; checkable: true
+                                checked: plotTrackContextMenu.summary.reduction === "mean"
+                                onTriggered: activeController.setTrackReduction(plotTrackContextMenu.trackIndex, "mean")
+                            }
+                            MenuItem {
+                                text: "Maximum"; checkable: true
+                                checked: plotTrackContextMenu.summary.reduction === "max"
+                                onTriggered: activeController.setTrackReduction(plotTrackContextMenu.trackIndex, "max")
+                            }
+                            MenuItem {
+                                text: "None"; checkable: true
+                                checked: plotTrackContextMenu.summary.reduction === "none"
+                                onTriggered: activeController.setTrackReduction(plotTrackContextMenu.trackIndex, "none")
+                            }
+                        }
+                        Menu {
+                            title: "Bin size"
+                            enabled: plotTrackContextMenu.summary.renderMode === "signal"
+                            MenuItem {
+                                text: "Match Hi-C resolution (" + formatBp(activeController ? activeController.resolution : 0) + ")"
+                                checkable: true
+                                checked: plotTrackContextMenu.summary.binSize === 0
+                                onTriggered: activeController.setTrackBinSize(plotTrackContextMenu.trackIndex, 0)
+                            }
+                            MenuSeparator {}
+                            MenuItem { text: "1 kb"; checkable: true; checked: plotTrackContextMenu.summary.binSize === 1000; onTriggered: activeController.setTrackBinSize(plotTrackContextMenu.trackIndex, 1000) }
+                            MenuItem { text: "5 kb"; checkable: true; checked: plotTrackContextMenu.summary.binSize === 5000; onTriggered: activeController.setTrackBinSize(plotTrackContextMenu.trackIndex, 5000) }
+                            MenuItem { text: "10 kb"; checkable: true; checked: plotTrackContextMenu.summary.binSize === 10000; onTriggered: activeController.setTrackBinSize(plotTrackContextMenu.trackIndex, 10000) }
+                            MenuItem { text: "25 kb"; checkable: true; checked: plotTrackContextMenu.summary.binSize === 25000; onTriggered: activeController.setTrackBinSize(plotTrackContextMenu.trackIndex, 25000) }
+                            MenuItem { text: "50 kb"; checkable: true; checked: plotTrackContextMenu.summary.binSize === 50000; onTriggered: activeController.setTrackBinSize(plotTrackContextMenu.trackIndex, 50000) }
+                            MenuItem { text: "100 kb"; checkable: true; checked: plotTrackContextMenu.summary.binSize === 100000; onTriggered: activeController.setTrackBinSize(plotTrackContextMenu.trackIndex, 100000) }
+                            MenuItem { text: "250 kb"; checkable: true; checked: plotTrackContextMenu.summary.binSize === 250000; onTriggered: activeController.setTrackBinSize(plotTrackContextMenu.trackIndex, 250000) }
+                            MenuItem { text: "500 kb"; checkable: true; checked: plotTrackContextMenu.summary.binSize === 500000; onTriggered: activeController.setTrackBinSize(plotTrackContextMenu.trackIndex, 500000) }
+                            MenuItem { text: "1 Mb"; checkable: true; checked: plotTrackContextMenu.summary.binSize === 1000000; onTriggered: activeController.setTrackBinSize(plotTrackContextMenu.trackIndex, 1000000) }
+                            MenuSeparator {}
+                            MenuItem { text: "Custom…"; onTriggered: openTrackBinEditor(plotTrackContextMenu.trackIndex) }
+                        }
+                        MenuSeparator {}
+                        MenuItem {
+                            text: "Autoscale"
+                            enabled: plotTrackContextMenu.summary.renderMode === "signal"
+                            checkable: true
+                            checked: !!plotTrackContextMenu.summary.autoscale
+                            onTriggered: activeController.setTrackAutoscale(plotTrackContextMenu.trackIndex, checked)
+                        }
+                        MenuItem {
+                            text: "Set data range…"
+                            enabled: plotTrackContextMenu.summary.renderMode === "signal"
+                            onTriggered: openTrackRangeEditor(plotTrackContextMenu.trackIndex)
+                        }
+                        MenuItem {
+                            text: "Log scale"
+                            enabled: plotTrackContextMenu.summary.renderMode === "signal"
+                            checkable: true
+                            checked: !!plotTrackContextMenu.summary.logScale
+                            onTriggered: activeController.setTrackRange(plotTrackContextMenu.trackIndex,
+                                                                        plotTrackContextMenu.summary.min,
+                                                                        plotTrackContextMenu.summary.max,
+                                                                        checked)
+                        }
+                        MenuSeparator {}
+                        MenuItem { text: "Change track color…"; onTriggered: chooseTrackColor(plotTrackContextMenu.trackIndex, false) }
+                        MenuItem {
+                            text: "Change negative-value color…"
+                            enabled: plotTrackContextMenu.summary.renderMode === "signal"
+                            onTriggered: chooseTrackColor(plotTrackContextMenu.trackIndex, true)
+                        }
+                        Menu {
+                            title: "Track height"
+                            MenuItem { text: "24 px"; onTriggered: activeController.setTrackHeight(plotTrackContextMenu.trackIndex, 24) }
+                            MenuItem { text: "48 px"; onTriggered: activeController.setTrackHeight(plotTrackContextMenu.trackIndex, 48) }
+                            MenuItem { text: "72 px"; onTriggered: activeController.setTrackHeight(plotTrackContextMenu.trackIndex, 72) }
+                            MenuItem { text: "96 px"; onTriggered: activeController.setTrackHeight(plotTrackContextMenu.trackIndex, 96) }
+                            MenuItem { text: "128 px"; onTriggered: activeController.setTrackHeight(plotTrackContextMenu.trackIndex, 128) }
+                            MenuItem { text: "160 px"; onTriggered: activeController.setTrackHeight(plotTrackContextMenu.trackIndex, 160) }
+                            MenuItem { text: "240 px"; onTriggered: activeController.setTrackHeight(plotTrackContextMenu.trackIndex, 240) }
+                            MenuSeparator {}
+                            MenuItem { text: "Custom…"; onTriggered: openTrackHeightEditor(plotTrackContextMenu.trackIndex) }
+                        }
+                        MenuSeparator {}
+                        MenuItem {
+                            text: "Move up"
+                            enabled: plotTrackContextMenu.trackIndex > 0
+                            onTriggered: activeController.moveTrack(plotTrackContextMenu.trackIndex, plotTrackContextMenu.trackIndex - 1)
+                        }
+                        MenuItem {
+                            text: "Move down"
+                            enabled: activeController && plotTrackContextMenu.trackIndex + 1 < activeController.trackCount
+                            onTriggered: activeController.moveTrack(plotTrackContextMenu.trackIndex, plotTrackContextMenu.trackIndex + 1)
+                        }
+                        MenuItem { text: "Hide track"; onTriggered: activeController.setTrackVisible(plotTrackContextMenu.trackIndex, false) }
+                        MenuItem { text: "Remove track"; onTriggered: activeController.removeTrack(plotTrackContextMenu.trackIndex) }
+                    }
+
+                    Menu {
                         id: heatmapMenu
                         MenuItem {
                             text: "Undo Zoom"
@@ -1110,9 +1402,10 @@ ApplicationWindow {
                             var extent = 38
                             for (var i = 0; i < tracks.length; ++i) {
                                 if (tracks[i].visible && !tracks[i].collapsed)
-                                    extent += Math.max(20, Math.min(80, tracks[i].height))
+                                    extent += Math.max(20, Math.min(240, tracks[i].height))
                             }
-                            return Math.max(46, Math.min(220, extent))
+                            var available = Math.floor(Math.min(plotFrame.width, plotFrame.height) * 0.45)
+                            return Math.max(46, Math.min(available, extent))
                         }
 
                         Rectangle {
@@ -1241,7 +1534,22 @@ ApplicationWindow {
                                     var barTop = Math.min(zero, valueY)
                                     var h = Math.max(1.5, Math.abs(valueY - zero))
                                     ctx.fillStyle = s.color
-                                    ctx.fillRect(Math.max(0, x0), barTop, Math.max(1, x1 - x0), h)
+                                    ctx.fillRect(Math.max(0, x0), barTop,
+                                                 Math.max(1, Math.min(width, x1) - Math.max(0, x0)), h)
+                                }
+                            }
+                            MouseArea {
+                                anchors.fill: parent
+                                acceptedButtons: Qt.RightButton
+                                cursorShape: Qt.PointingHandCursor
+                                onPressed: function(mouse) {
+                                    var trackTop = activeController && activeController.showChromosomeContext ? 10 : 2
+                                    var trackBottom = parent.height - 18 - 0.5 - 3
+                                    var index = trackIndexAtPanelPosition(mouse.y, trackTop, trackBottom, 8)
+                                    if (index >= 0) {
+                                        openPlotTrackMenu(index)
+                                        mouse.accepted = true
+                                    }
                                 }
                             }
                         }
@@ -1345,7 +1653,22 @@ ApplicationWindow {
                                     var barLeft = Math.min(zero, valueX)
                                     var w = Math.max(1.5, Math.abs(valueX - zero))
                                     ctx.fillStyle = s.color
-                                    ctx.fillRect(barLeft, Math.max(0, y0), w, Math.max(1, y1 - y0))
+                                    ctx.fillRect(barLeft, Math.max(0, y0), w,
+                                                 Math.max(1, Math.min(height, y1) - Math.max(0, y0)))
+                                }
+                            }
+                            MouseArea {
+                                anchors.fill: parent
+                                acceptedButtons: Qt.RightButton
+                                cursorShape: Qt.PointingHandCursor
+                                onPressed: function(mouse) {
+                                    var trackLeft = activeController && activeController.showChromosomeContext ? 10 : 2
+                                    var trackRight = parent.width - 0.5 - 42 - 2
+                                    var index = trackIndexAtPanelPosition(mouse.x, trackLeft, trackRight, 7)
+                                    if (index >= 0) {
+                                        openPlotTrackMenu(index)
+                                        mouse.accepted = true
+                                    }
                                 }
                             }
                         }
@@ -2531,7 +2854,7 @@ ApplicationWindow {
                                             model: activeController ? activeController.trackSummaries() : []
                                             Rectangle {
                                                 Layout.fillWidth: true
-                                                height: modelData.collapsed ? 46 : 184
+                                                height: modelData.collapsed ? 46 : (modelData.renderMode === "signal" ? 226 : 132)
                                                 radius: Theme.radiusMd
                                                 color: Theme.surface
                                                 border.color: Theme.border
@@ -2569,14 +2892,7 @@ ApplicationWindow {
                                                             id: trackMenuButton
                                                             text: "⋯"
                                                             Accessible.name: "Track actions for " + modelData.name
-                                                            onClicked: trackContextMenu.popup()
-                                                            Menu {
-                                                                id: trackContextMenu
-                                                                MenuItem { text: "Move up"; enabled: modelData.index > 0; onTriggered: activeController.moveTrack(modelData.index, modelData.index - 1) }
-                                                                MenuItem { text: "Move down"; enabled: modelData.index + 1 < activeController.trackCount; onTriggered: activeController.moveTrack(modelData.index, modelData.index + 1) }
-                                                                MenuSeparator {}
-                                                                MenuItem { text: "Remove track"; onTriggered: activeController.removeTrack(modelData.index) }
-                                                            }
+                                                            onClicked: openPlotTrackMenu(modelData.index)
                                                         }
                                                     }
                                                     Label {
@@ -2586,7 +2902,7 @@ ApplicationWindow {
                                                         font.pixelSize: Theme.textXs
                                                     }
                                                     RowLayout {
-                                                        visible: !modelData.collapsed
+                                                        visible: !modelData.collapsed && modelData.renderMode === "signal"
                                                         Layout.fillWidth: true
                                                         AppCheckBox {
                                                             text: "Autoscale"
@@ -2599,14 +2915,29 @@ ApplicationWindow {
                                                             onToggled: activeController.setTrackRange(modelData.index, modelData.min, modelData.max, checked)
                                                         }
                                                         AppComboBox {
-                                                            Layout.preferredWidth: 90
-                                                            model: ["mean", "max"]
-                                                            currentIndex: modelData.reduction === "max" ? 1 : 0
+                                                            Layout.preferredWidth: 100
+                                                            model: ["min", "mean", "max", "none"]
+                                                            currentIndex: Math.max(0, model.indexOf(modelData.reduction))
                                                             onActivated: activeController.setTrackReduction(modelData.index, currentText)
                                                         }
                                                     }
                                                     RowLayout {
-                                                        visible: !modelData.collapsed
+                                                        visible: !modelData.collapsed && modelData.renderMode === "signal"
+                                                        Layout.fillWidth: true
+                                                        Label { text: "Bin size"; color: Theme.textSecondary; font.pixelSize: Theme.textSm }
+                                                        Label {
+                                                            Layout.fillWidth: true
+                                                            text: modelData.binSize === 0
+                                                                  ? "Hi-C · " + formatBp(activeController ? activeController.resolution : modelData.effectiveBinSize)
+                                                                  : "Fixed · " + formatBp(modelData.effectiveBinSize)
+                                                            color: Theme.textMuted
+                                                            font.pixelSize: Theme.textSm
+                                                        }
+                                                        AppButton { text: "Match map"; tonal: true; onClicked: activeController.setTrackBinSize(modelData.index, 0) }
+                                                        AppButton { text: "Set…"; tonal: true; onClicked: openTrackBinEditor(modelData.index) }
+                                                    }
+                                                    RowLayout {
+                                                        visible: !modelData.collapsed && modelData.renderMode === "signal"
                                                         Layout.fillWidth: true
                                                         spacing: 6
                                                         Label { text: "Min"; color: Theme.textSecondary; font.pixelSize: Theme.textSm }
@@ -2621,7 +2952,7 @@ ApplicationWindow {
                                                         Slider {
                                                             Layout.fillWidth: true
                                                             from: 20
-                                                            to: 160
+                                                            to: 240
                                                             stepSize: 4
                                                             value: modelData.height
                                                             Accessible.name: "Height of " + modelData.name
