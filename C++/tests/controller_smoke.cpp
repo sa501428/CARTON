@@ -61,8 +61,8 @@ int main(int argc, char** argv) {
     if (!require(writeFile(track, "chr1\t0\t100\t2.5\nchr1\t100\t200\t-1.5\n"), "write track")) return 1;
     controller.loadTrackFromPath(track);
     if (!require(controller.trackCount() == 1, "track parsing")) return 1;
-    if (!require(controller.trackSummaries().front().toMap().value("height").toInt() == 400 &&
-                 controller.visibleTrackHeight() == 400,
+    if (!require(controller.trackSummaries().front().toMap().value("height").toInt() == 100 &&
+                 controller.visibleTrackHeight() == 100,
                  "default track height")) return 1;
     if (!require(controller.tracksModel()->rowCount() == 1 && controller.annotationsModel()->rowCount() == 1,
                  "workspace list models")) return 1;
@@ -209,9 +209,54 @@ int main(int argc, char** argv) {
     annotationConsumer.loadAnnotationResource(customResource);
     const QString sharedResource = annotationConsumer.annotationLayerSummaries().back().toMap().value("resourceId").toString();
     annotationConsumer.setAnnotationLayerColor(1, QColor("#ff00ff"));
+    const QVariantMap overriddenLayer = annotationConsumer.annotationLayerSummaries().back().toMap();
+    if (!require(overriddenLayer.value("resourceId").toString() == customResource &&
+                 overriddenLayer.value("colorOverride").toBool(),
+                 "layer recoloring is a non-destructive display override")) return 1;
+    annotationConsumer.clearAnnotationLayerColorOverride(1);
+    annotationConsumer.clearAnnotationLayer(1);
     const QString forkedResource = annotationConsumer.annotationLayerSummaries().back().toMap().value("resourceId").toString();
     if (!require(sharedResource == customResource && forkedResource != customResource,
                  "editing a shared annotation resource uses copy-on-write")) return 1;
+
+    const QString placementAnnotations = temporary.filePath(QStringLiteral("placement.bedpe"));
+    if (!require(writeFile(placementAnnotations,
+            "chr1\t100\t200\tchr1\t700\t800\tloop\t0\t#00ff00\n"),
+            "write placement annotations")) return 1;
+    HicDataController placementController;
+    placementController.setResolution(100);
+    placementController.setChrX(QStringLiteral("1"));
+    placementController.setChrY(QStringLiteral("1"));
+    placementController.setX0(0);
+    placementController.setX1(1000);
+    placementController.setY0(0);
+    placementController.setY1(1000);
+    placementController.loadAnnotationsFromPath(placementAnnotations);
+    const int placementLayer = placementController.annotationLayerSummaries().size() - 1;
+    if (!require(placementController.visibleAnnotations().size() == 2,
+                 "intrachromosomal annotations render on both sides by default")) return 1;
+    placementController.setAnnotationLayerPlacement(placementLayer, QStringLiteral("above"));
+    const QVariantList aboveAnnotations = placementController.visibleAnnotations();
+    if (!require(aboveAnnotations.size() == 1 &&
+                 aboveAnnotations.front().toMap().value("x0").toLongLong() >
+                     aboveAnnotations.front().toMap().value("y0").toLongLong(),
+                 "annotation layers can render above the diagonal only")) return 1;
+    placementController.setAnnotationLayerPlacement(placementLayer, QStringLiteral("below"));
+    const QVariantList belowAnnotations = placementController.visibleAnnotations();
+    if (!require(belowAnnotations.size() == 1 &&
+                 belowAnnotations.front().toMap().value("x0").toLongLong() <
+                     belowAnnotations.front().toMap().value("y0").toLongLong(),
+                 "annotation layers can render below the diagonal only")) return 1;
+    placementController.setAnnotationLayerColor(placementLayer, QColor("#123456"));
+    if (!require(placementController.visibleAnnotations().front().toMap().value("color").value<QColor>() == QColor("#123456"),
+                 "annotation color override replaces BEDPE colors")) return 1;
+    HicDataController restoredPlacementController;
+    restoredPlacementController.restoreSessionState(placementController.sessionState(), false);
+    const QVariantMap restoredPlacementLayer = restoredPlacementController.annotationLayerSummaries().back().toMap();
+    if (!require(restoredPlacementLayer.value("placement").toString() == QStringLiteral("below") &&
+                 restoredPlacementLayer.value("colorOverride").toBool() &&
+                 restoredPlacementLayer.value("color").value<QColor>() == QColor("#123456"),
+                 "annotation placement and color override round-trip")) return 1;
 
     const QString regionsBed = temporary.filePath(QStringLiteral("regions.bed"));
     if (!require(writeFile(regionsBed,

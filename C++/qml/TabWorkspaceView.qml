@@ -146,11 +146,11 @@ Rectangle {
                     color: Theme.textSecondary
                     font.pixelSize: Theme.textXs
                 }
-                SpinBox {
+                AppComboBox {
                     visible: root.tabSession && (root.tabSession.type === "multi-map" || root.tabSession.type === "multi-region")
-                    from: 1; to: 8
-                    value: root.tabSession ? root.tabSession.layoutColumns : 2
-                    onValueModified: if (root.tabSession) root.tabSession.layoutColumns = value
+                    model: ["1", "2", "3", "4", "5", "6", "7", "8"]
+                    currentIndex: root.tabSession ? Math.max(0, Math.min(7, root.tabSession.layoutColumns - 1)) : 1
+                    onActivated: if (root.tabSession) root.tabSession.layoutColumns = Number(currentText)
                     Layout.preferredWidth: 72
                 }
             }
@@ -188,7 +188,7 @@ Rectangle {
                             Layout.column: modelData.column
                             Layout.fillWidth: true
                             Layout.preferredWidth: root.tabSession && root.tabSession.type === "map-region" ? 360 : 420
-                            Layout.preferredHeight: Math.max(300, Layout.preferredWidth)
+                            Layout.preferredHeight: Math.max(334, Layout.preferredWidth + 34)
                             controller: modelData.controller
                             viewLabel: modelData.label
                             selected: modelData.selected

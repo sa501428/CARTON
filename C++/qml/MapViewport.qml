@@ -186,12 +186,15 @@ Rectangle {
         anchors.right: parent.right
         anchors.top: root.showHeader ? header.bottom : parent.top
         anchors.bottom: parent.bottom
+        property real plotSize: Math.max(1, Math.min(width - root.axisExtent, height - root.axisExtent))
+        property real plotX: Math.max(0, (width - root.axisExtent - plotSize) / 2)
+        property real plotY: Math.max(0, (height - root.axisExtent - plotSize) / 2)
 
         Canvas {
             id: topTracks
-            x: root.axisExtent
-            y: 0
-            width: Math.max(1, content.width - root.axisExtent)
+            x: content.plotX + root.axisExtent
+            y: content.plotY
+            width: content.plotSize
             height: root.axisExtent
             onPaint: root.drawAxis(topTracks, true)
             onWidthChanged: requestPaint()
@@ -199,10 +202,10 @@ Rectangle {
         }
         Canvas {
             id: leftTracks
-            x: 0
-            y: root.axisExtent
+            x: content.plotX
+            y: content.plotY + root.axisExtent
             width: root.axisExtent
-            height: Math.max(1, content.height - root.axisExtent)
+            height: content.plotSize
             onPaint: root.drawAxis(leftTracks, false)
             onWidthChanged: requestPaint()
             onHeightChanged: requestPaint()
@@ -210,10 +213,10 @@ Rectangle {
 
         Rectangle {
             id: heatmapHost
-            x: root.axisExtent
-            y: root.axisExtent
-            width: Math.max(1, content.width - root.axisExtent)
-            height: Math.max(1, content.height - root.axisExtent)
+            x: content.plotX + root.axisExtent
+            y: content.plotY + root.axisExtent
+            width: content.plotSize
+            height: content.plotSize
             color: "white"
             border.color: Theme.borderStrong
             clip: true

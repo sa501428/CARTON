@@ -236,6 +236,8 @@ public:
     Q_INVOKABLE void setAnnotationLayerSparse(int index, bool sparse);
     Q_INVOKABLE void setAnnotationLayerEnlarged(int index, bool enlarged);
     Q_INVOKABLE void setAnnotationLayerColor(int index, const QColor& color);
+    Q_INVOKABLE void clearAnnotationLayerColorOverride(int index);
+    Q_INVOKABLE void setAnnotationLayerPlacement(int index, const QString& placement);
     Q_INVOKABLE void setActiveAnnotationLayer(int index);
     Q_INVOKABLE void exportAnnotationLayer(int index, const QUrl& url) const;
     Q_INVOKABLE void addAnnotationFromFractions(double xStartFraction, double yStartFraction,
@@ -410,7 +412,7 @@ private:
         bool collapsed = false;
         bool autoscale = true;
         qint64 binSize = 0; // 0 follows the active Hi-C map resolution.
-        int height = 400;
+        int height = 100;
     };
 
     using Annotation2D = PooledAnnotation;
@@ -429,6 +431,8 @@ private:
         QString resourceId;
         std::shared_ptr<PooledAnnotationData> data;
         QColor color = QColor("#111111");
+        bool colorOverride = false;
+        QString placement = QStringLiteral("both");
         bool visible = true;
         bool transparent = false;
         bool sparse = false;

@@ -28,8 +28,8 @@ The desktop app supports:
 9. Five tab layouts: single-map, multi-map, multi-region, maps-by-region, and pairwise region matrix
 10. Juicebox-compatible coloring: observed/expected use a linear white-to-red scale with an automatic 95th-percentile range, log is an explicit separate display mode, and OE uses a log-ratio blue-white-red scale with default threshold 5
 11. Right-click map actions for undo/redo zoom, jump to diagonal, copy genomic position, and layer loading/clearing
-12. Top and left 1D track panels for BED/bedGraph-like interval tracks
-13. 2D BEDPE-like annotation overlays with intrachromosomal reflection
+12. Top and left 1D track panels for BED/bedGraph-like interval tracks, with 100 px default height and multi-file loading
+13. 2D BEDPE-like annotation overlays with per-layer color overrides and both/above/below-diagonal placement controls
 14. Direct interaction layer for wheel zoom, drag pan, double-click zoom, and Shift-drag region zoom
 15. Coordinate lookup/jump fields and desktop menus for file, navigation, display, and layer actions
 16. A session-scoped dataset registry: `.hic` metadata, parsed tracks, parsed annotations, and the bounded tile cache are shared when the same resource is used by multiple tabs or cells

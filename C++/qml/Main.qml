@@ -325,19 +325,25 @@ ApplicationWindow {
 
     FileDialog {
         id: trackDialog
-        title: "Load 1D Track"
+        title: "Load 1D Tracks"
+        fileMode: FileDialog.OpenFiles
         nameFilters: ["Genomics tracks (*.bed *.bed.gz *.bedgraph *.bedGraph *.bedgraph.gz *.wig *.wig.gz *.bw *.bigWig *.bigwig *.bb *.bigBed *.bigbed *.txt *.tsv)", "All files (*)"]
         onAccepted: if (activeTab) {
             trackPanelsOpen = true
-            activeTab.loadTrack(selectedFile, activeTab.layerScope)
+            for (var i = 0; i < selectedFiles.length; ++i)
+                activeTab.loadTrack(selectedFiles[i], activeTab.layerScope)
         }
     }
 
     FileDialog {
         id: annotationDialog
         title: "Load 2D Annotations"
+        fileMode: FileDialog.OpenFiles
         nameFilters: ["BEDPE annotations (*.bedpe *.txt *.tsv)", "All files (*)"]
-        onAccepted: if (activeTab) activeTab.loadAnnotations(selectedFile, activeTab.layerScope)
+        onAccepted: if (activeTab) {
+            for (var i = 0; i < selectedFiles.length; ++i)
+                activeTab.loadAnnotations(selectedFiles[i], activeTab.layerScope)
+        }
     }
 
     FileDialog {
@@ -561,6 +567,17 @@ ApplicationWindow {
         onAccepted: {
             var summary = trackSummary(pendingTrackIndex)
             if (summary) activeController.setTrackColor(pendingTrackIndex, summary.positiveColor, selectedColor)
+        }
+    }
+
+    ColorDialog {
+        id: annotationLayerColorDialog
+        property var targetController: null
+        property int layerIndex: -1
+        title: "Override Annotation Color"
+        onAccepted: {
+            if (targetController && layerIndex >= 0)
+                targetController.setAnnotationLayerColor(layerIndex, selectedColor)
         }
     }
 
@@ -901,6 +918,12 @@ ApplicationWindow {
             onExportAnnotationRequested: function(index) {
                 pendingAnnotationLayerExport = index
                 exportAnnotationDialog.open()
+            }
+            onAnnotationColorRequested: function(index, currentColor) {
+                annotationLayerColorDialog.targetController = activeController
+                annotationLayerColorDialog.layerIndex = index
+                annotationLayerColorDialog.selectedColor = currentColor
+                annotationLayerColorDialog.open()
             }
             onTrackMenuRequested: function(index) { openPlotTrackMenu(index) }
             onTrackBinEditorRequested: function(index) { openTrackBinEditor(index) }

@@ -39,6 +39,7 @@ Rectangle {
     signal pooledResourceRequested(string resourceId, string kind)
     signal pooledControlRequested(string resourceId)
     signal exportAnnotationRequested(int index)
+    signal annotationColorRequested(int index, color currentColor)
     signal trackMenuRequested(int index)
     signal trackBinEditorRequested(int index)
     signal landscapeModeToggled(bool enabled)
@@ -579,6 +580,47 @@ Rectangle {
                                     AppCheckBox { text: "Transparent"; checked: annotationCard.entry.transparent; onToggled: root.controller.setAnnotationLayerTransparent(annotationCard.entry.index, checked) }
                                     AppCheckBox { text: "Sparse"; checked: annotationCard.entry.sparse; onToggled: root.controller.setAnnotationLayerSparse(annotationCard.entry.index, checked) }
                                     AppCheckBox { text: "Large"; checked: annotationCard.entry.enlarged; onToggled: root.controller.setAnnotationLayerEnlarged(annotationCard.entry.index, checked) }
+                                }
+                                RowLayout {
+                                    Layout.fillWidth: true
+                                    spacing: 5
+                                    Rectangle {
+                                        Layout.preferredWidth: 18
+                                        Layout.preferredHeight: 18
+                                        radius: 4
+                                        color: annotationCard.entry.color
+                                        border.color: Theme.borderStrong
+                                    }
+                                    AppButton {
+                                        text: annotationCard.entry.colorOverride ? "Recolor" : "Override color"
+                                        tonal: true
+                                        onClicked: root.annotationColorRequested(annotationCard.entry.index, annotationCard.entry.color)
+                                    }
+                                    AppButton {
+                                        visible: annotationCard.entry.colorOverride
+                                        text: "Original colors"
+                                        tonal: true
+                                        onClicked: root.controller.clearAnnotationLayerColorOverride(annotationCard.entry.index)
+                                    }
+                                    Item { Layout.fillWidth: true }
+                                }
+                                RowLayout {
+                                    Layout.fillWidth: true
+                                    spacing: 5
+                                    Label {
+                                        text: "Diagonal placement"
+                                        color: Theme.textSecondary
+                                        font.pixelSize: Theme.textXs
+                                    }
+                                    AppComboBox {
+                                        model: ["Both sides", "Above only", "Below only"]
+                                        currentIndex: annotationCard.entry.placement === "above" ? 1 :
+                                                      (annotationCard.entry.placement === "below" ? 2 : 0)
+                                        onActivated: root.controller.setAnnotationLayerPlacement(
+                                            annotationCard.entry.index,
+                                            currentIndex === 1 ? "above" : (currentIndex === 2 ? "below" : "both"))
+                                        Layout.fillWidth: true
+                                    }
                                 }
                                 RowLayout {
                                     Layout.fillWidth: true

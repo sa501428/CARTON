@@ -701,6 +701,8 @@ QVariantList HicDataController::annotationLayerSummaries() const {
         item["index"] = i;
         item["name"] = layer.name;
         item["color"] = layer.color;
+        item["colorOverride"] = layer.colorOverride;
+        item["placement"] = layer.placement;
         item["visible"] = layer.visible;
         item["transparent"] = layer.transparent;
         item["sparse"] = layer.sparse;
@@ -935,46 +937,48 @@ QVariantList HicDataController::visibleTrackSegmentsForPixels(bool xAxis, int pi
 QVariantList HicDataController::visibleAnnotations() const {
     QVariantList values;
     for (const AnnotationLayer& layer : m_annotationLayers) {
-        if (!layer.visible) {
-            continue;
-        }
+        if (!layer.visible) continue;
         int emitted = 0;
         for (const Annotation2D& annotation : layerAnnotations(layer)) {
-        if (layer.sparse && emitted >= m_sparseFeatureLimit) {
-            break;
-        }
-        const bool direct = chrNamesEqual(annotation.chr1, m_chrX) && chrNamesEqual(annotation.chr2, m_chrY) &&
-                            annotation.end1 >= m_x0 && annotation.start1 <= m_x1 &&
-                            annotation.end2 >= m_y0 && annotation.start2 <= m_y1;
-        const bool reflected = chrNamesEqual(annotation.chr1, m_chrY) && chrNamesEqual(annotation.chr2, m_chrX) &&
-                               annotation.end1 >= m_y0 && annotation.start1 <= m_y1 &&
-                               annotation.end2 >= m_x0 && annotation.start2 <= m_x1;
-        if (!direct && !reflected) {
-            continue;
-        }
-        QVariantMap item;
-        item["name"] = annotation.name;
-        item["x0"] = direct ? annotation.start1 : annotation.start2;
-        item["x1"] = direct ? annotation.end1 : annotation.end2;
-        item["y0"] = direct ? annotation.start2 : annotation.start1;
-        item["y1"] = direct ? annotation.end2 : annotation.end1;
-        item["id"] = annotation.id;
-        item["name"] = annotation.name;
-        item["color"] = annotation.highlighted || annotation.id == m_selectedAnnotationId ? QColor("#ffb703") : annotation.color;
-        item["transparent"] = layer.transparent;
-        item["enlarged"] = layer.enlarged;
-        values.push_back(item);
-        ++emitted;
+            if (layer.sparse && emitted >= m_sparseFeatureLimit) break;
+            const bool intrachromosomalView = chrNamesEqual(m_chrX, m_chrY) &&
+                                               chrNamesEqual(annotation.chr1, annotation.chr2) &&
+                                               chrNamesEqual(annotation.chr1, m_chrX);
+            bool annotationEmitted = false;
+            const auto appendIfVisible = [&](qint64 x0, qint64 x1, qint64 y0, qint64 y1) {
+                if (x1 < m_x0 || x0 > m_x1 || y1 < m_y0 || y0 > m_y1) return;
+                if (intrachromosomalView && layer.placement != QStringLiteral("both")) {
+                    const long double xCenter = static_cast<long double>(x0) + (x1 - x0) / 2.0L;
+                    const long double yCenter = static_cast<long double>(y0) + (y1 - y0) / 2.0L;
+                    if (layer.placement == QStringLiteral("above") && yCenter > xCenter) return;
+                    if (layer.placement == QStringLiteral("below") && yCenter < xCenter) return;
+                }
+                QVariantMap item;
+                item["id"] = annotation.id;
+                item["name"] = annotation.name;
+                item["x0"] = x0;
+                item["x1"] = x1;
+                item["y0"] = y0;
+                item["y1"] = y1;
+                item["color"] = annotation.highlighted || annotation.id == m_selectedAnnotationId
+                    ? QColor("#ffb703")
+                    : (layer.colorOverride ? layer.color : annotation.color);
+                item["transparent"] = layer.transparent;
+                item["enlarged"] = layer.enlarged;
+                values.push_back(item);
+                annotationEmitted = true;
+            };
 
-        if (m_chrX == m_chrY && chrNamesEqual(annotation.chr1, annotation.chr2) &&
-            (annotation.start1 != annotation.start2 || annotation.end1 != annotation.end2)) {
-            QVariantMap mirror = item;
-            mirror["x0"] = item["y0"];
-            mirror["x1"] = item["y1"];
-            mirror["y0"] = item["x0"];
-            mirror["y1"] = item["x1"];
-            values.push_back(mirror);
-        }
+            if (intrachromosomalView) {
+                appendIfVisible(annotation.start1, annotation.end1, annotation.start2, annotation.end2);
+                if (annotation.start1 != annotation.start2 || annotation.end1 != annotation.end2)
+                    appendIfVisible(annotation.start2, annotation.end2, annotation.start1, annotation.end1);
+            } else if (chrNamesEqual(annotation.chr1, m_chrX) && chrNamesEqual(annotation.chr2, m_chrY)) {
+                appendIfVisible(annotation.start1, annotation.end1, annotation.start2, annotation.end2);
+            } else if (chrNamesEqual(annotation.chr1, m_chrY) && chrNamesEqual(annotation.chr2, m_chrX)) {
+                appendIfVisible(annotation.start2, annotation.end2, annotation.start1, annotation.end1);
+            }
+            if (annotationEmitted) ++emitted;
         }
     }
     return values;
@@ -1503,6 +1507,8 @@ QVariantMap HicDataController::sessionState() const {
         item[QStringLiteral("source")] = layer.data ? layer.data->source : QString();
         item[QStringLiteral("name")] = layer.name;
         item[QStringLiteral("color")] = layer.color.name(QColor::HexArgb);
+        item[QStringLiteral("colorOverride")] = layer.colorOverride;
+        item[QStringLiteral("placement")] = layer.placement;
         item[QStringLiteral("visible")] = layer.visible;
         item[QStringLiteral("transparent")] = layer.transparent;
         item[QStringLiteral("sparse")] = layer.sparse;
@@ -1557,7 +1563,7 @@ void HicDataController::restoreSessionState(const QVariantMap& state, bool inclu
         track.visible = item.value(QStringLiteral("visible"), true).toBool();
         track.collapsed = item.value(QStringLiteral("collapsed"), false).toBool();
         track.autoscale = item.value(QStringLiteral("autoscale"), true).toBool();
-        track.height = item.value(QStringLiteral("height"), 400).toInt();
+        track.height = item.value(QStringLiteral("height"), 100).toInt();
     }
 
     m_annotationLayers.clear();
@@ -1595,6 +1601,10 @@ void HicDataController::restoreSessionState(const QVariantMap& state, bool inclu
         AnnotationLayer& layer = m_annotationLayers.back();
         layer.name = item.value(QStringLiteral("name"), layer.name).toString();
         layer.color = QColor(item.value(QStringLiteral("color"), layer.color.name()).toString());
+        layer.colorOverride = item.value(QStringLiteral("colorOverride"), false).toBool();
+        const QString placement = item.value(QStringLiteral("placement"), QStringLiteral("both")).toString();
+        layer.placement = placement == QStringLiteral("above") || placement == QStringLiteral("below")
+            ? placement : QStringLiteral("both");
         layer.visible = item.value(QStringLiteral("visible"), true).toBool();
         layer.transparent = item.value(QStringLiteral("transparent"), false).toBool();
         layer.sparse = item.value(QStringLiteral("sparse"), false).toBool();
@@ -2309,7 +2319,11 @@ void HicDataController::mergeVisibleAnnotationLayers(const QString& name) {
     QVector<Annotation2D> annotations;
     for (const AnnotationLayer& layer : m_annotationLayers) {
         if (layer.visible) {
-            annotations += layerAnnotations(layer);
+            QVector<Annotation2D> layerCopy = layerAnnotations(layer);
+            if (layer.colorOverride) {
+                for (Annotation2D& annotation : layerCopy) annotation.color = layer.color;
+            }
+            annotations += layerCopy;
         }
     }
     const PooledAnnotationResult custom = m_registry->createCustomAnnotations(merged.name, annotations);
@@ -2371,9 +2385,25 @@ void HicDataController::setAnnotationLayerColor(int index, const QColor& color) 
     if (index < 0 || index >= m_annotationLayers.size() || !color.isValid()) return;
     AnnotationLayer& layer = m_annotationLayers[index];
     layer.color = color;
-    for (Annotation2D& annotation : editableAnnotations(layer)) {
-        annotation.color = color;
-    }
+    layer.colorOverride = true;
+    emit annotationsChanged();
+}
+
+void HicDataController::clearAnnotationLayerColorOverride(int index) {
+    if (index < 0 || index >= m_annotationLayers.size()) return;
+    AnnotationLayer& layer = m_annotationLayers[index];
+    if (!layer.colorOverride) return;
+    layer.colorOverride = false;
+    emit annotationsChanged();
+}
+
+void HicDataController::setAnnotationLayerPlacement(int index, const QString& placement) {
+    if (index < 0 || index >= m_annotationLayers.size()) return;
+    const QString next = placement == QStringLiteral("above") || placement == QStringLiteral("below")
+        ? placement : QStringLiteral("both");
+    AnnotationLayer& layer = m_annotationLayers[index];
+    if (layer.placement == next) return;
+    layer.placement = next;
     emit annotationsChanged();
 }
 
@@ -2392,7 +2422,8 @@ void HicDataController::exportAnnotationLayer(int index, const QUrl& url) const 
     for (const Annotation2D& annotation : layerAnnotations(layer)) {
         out << annotation.chr1 << '\t' << annotation.start1 << '\t' << annotation.end1 << '\t'
             << annotation.chr2 << '\t' << annotation.start2 << '\t' << annotation.end2 << '\t'
-            << annotation.name << "\t0\t" << annotation.color.name() << '\n';
+            << annotation.name << "\t0\t"
+            << (layer.colorOverride ? layer.color : annotation.color).name() << '\n';
     }
     file.commit();
 }
@@ -2431,8 +2462,28 @@ void HicDataController::selectAnnotationAt(double xFraction, double yFraction) {
     for (const AnnotationLayer& layer : m_annotationLayers) {
         if (!layer.visible) continue;
         for (const Annotation2D& annotation : layerAnnotations(layer)) {
-            if (chrNamesEqual(annotation.chr1, m_chrX) && chrNamesEqual(annotation.chr2, m_chrY) &&
-                x >= annotation.start1 && x <= annotation.end1 && y >= annotation.start2 && y <= annotation.end2) {
+            const bool intrachromosomalView = chrNamesEqual(m_chrX, m_chrY) &&
+                                               chrNamesEqual(annotation.chr1, annotation.chr2) &&
+                                               chrNamesEqual(annotation.chr1, m_chrX);
+            const auto hit = [&](qint64 x0, qint64 x1, qint64 y0, qint64 y1) {
+                if (intrachromosomalView && layer.placement != QStringLiteral("both")) {
+                    const long double xCenter = static_cast<long double>(x0) + (x1 - x0) / 2.0L;
+                    const long double yCenter = static_cast<long double>(y0) + (y1 - y0) / 2.0L;
+                    if (layer.placement == QStringLiteral("above") && yCenter > xCenter) return false;
+                    if (layer.placement == QStringLiteral("below") && yCenter < xCenter) return false;
+                }
+                return x >= x0 && x <= x1 && y >= y0 && y <= y1;
+            };
+            bool selected = false;
+            if (intrachromosomalView) {
+                selected = hit(annotation.start1, annotation.end1, annotation.start2, annotation.end2) ||
+                           hit(annotation.start2, annotation.end2, annotation.start1, annotation.end1);
+            } else if (chrNamesEqual(annotation.chr1, m_chrX) && chrNamesEqual(annotation.chr2, m_chrY)) {
+                selected = hit(annotation.start1, annotation.end1, annotation.start2, annotation.end2);
+            } else if (chrNamesEqual(annotation.chr1, m_chrY) && chrNamesEqual(annotation.chr2, m_chrX)) {
+                selected = hit(annotation.start2, annotation.end2, annotation.start1, annotation.end1);
+            }
+            if (selected) {
                 m_selectedAnnotationId = annotation.id;
                 emit annotationsChanged();
                 return;
