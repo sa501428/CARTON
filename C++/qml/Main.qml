@@ -60,6 +60,11 @@ ApplicationWindow {
     property bool reducedMotion: false
     property string toastText: ""
     property string toastKind: "info"
+    property var bullseyeInspectorCells: []
+    property var bullseyeInspectorSource: null
+    property real bullseyeInspectorX: 0
+    property real bullseyeInspectorY: 0
+    property int bullseyeInspectorRadiusBins: 12
 
     function showToast(message, kind) {
         toastText = message
@@ -195,6 +200,11 @@ ApplicationWindow {
         MenuItem { text: "Multi-region (BEDPE)"; onTriggered: addTab("multi-region") }
         MenuItem { text: "Maps × regions"; onTriggered: addTab("map-region") }
         MenuItem { text: "Pairwise regions"; onTriggered: addTab("pairwise") }
+        MenuSeparator {}
+        MenuItem { text: "45° diagonal heatmaps"; onTriggered: addTab("rotated-45") }
+        MenuItem { text: "SIP bullseye"; onTriggered: addTab("bullseye") }
+        MenuItem { text: "Virtual 4C"; onTriggered: addTab("virtual-4c") }
+        MenuItem { text: "Experimental processing"; onTriggered: addTab("processing") }
     }
 
     function createTabSession(type) {
@@ -244,6 +254,52 @@ ApplicationWindow {
         session.destroy()
         tabBar.currentIndex = Math.min(index, tabs.length - 1)
         setActiveTab(tabBar.currentIndex)
+    }
+
+    function openBullseyeAt(sourceController, fx, fy) {
+        if (!sourceController) return
+        var sourceTab = activeTab
+        var sourceMaps = sourceTab ? sourceTab.maps : []
+        var resolution = Math.max(1, sourceController.resolution)
+        var centerX = Math.floor((sourceController.x0 + (sourceController.x1 - sourceController.x0) * fx) / resolution) * resolution
+        var centerY = Math.floor((sourceController.y0 + (sourceController.y1 - sourceController.y0) * fy) / resolution) * resolution
+        addTab("bullseye")
+        while (activeTab.mapCount < sourceMaps.length) activeTab.addMap()
+        while (activeTab.mapCount > Math.max(1, sourceMaps.length)) activeTab.removeMap(activeTab.mapCount - 1)
+        for (var i = 0; i < sourceMaps.length; ++i) {
+            if (sourceMaps[i].primaryPath && sourceMaps[i].primaryPath.length > 0)
+                activeTab.setPrimaryFile(i, sourceMaps[i].primaryPath)
+            if (sourceMaps[i].controlPath && sourceMaps[i].controlPath.length > 0)
+                activeTab.setControlFile(i, sourceMaps[i].controlPath)
+        }
+        activeTab.bullseyeCenterX = centerX
+        activeTab.bullseyeCenterY = centerY
+        activeTab.bullseyePinned = false
+    }
+
+    function updateBullseyeInspector(sourceController, fx, fy) {
+        if (!sourceController || !bullseyeInspector.visible) return
+        var resolution = Math.max(1, sourceController.resolution)
+        bullseyeInspectorSource = sourceController
+        bullseyeInspectorX = Math.floor((sourceController.x0 + (sourceController.x1 - sourceController.x0) * fx) / resolution) * resolution
+        bullseyeInspectorY = Math.floor((sourceController.y0 + (sourceController.y1 - sourceController.y0) * fy) / resolution) * resolution
+    }
+
+    function showBullseyeInspector(sourceController, fx, fy) {
+        if (!sourceController || !activeTab) return
+        bullseyeInspectorCells = activeTab.cells
+        for (var i = 0; i < bullseyeInspectorCells.length; ++i)
+            if (bullseyeInspectorCells[i].controller)
+                bullseyeInspectorCells[i].controller.setAnalysisPaddingBins(bullseyeInspectorRadiusBins + 2)
+        bullseyeInspector.open()
+        updateBullseyeInspector(sourceController, fx, fy)
+    }
+
+    function setBullseyeInspectorRadius(value) {
+        bullseyeInspectorRadiusBins = Math.max(1, Math.min(100, Math.round(value)))
+        for (var i = 0; i < bullseyeInspectorCells.length; ++i)
+            if (bullseyeInspectorCells[i].controller)
+                bullseyeInspectorCells[i].controller.setAnalysisPaddingBins(bullseyeInspectorRadiusBins + 2)
     }
 
     function setActiveTab(index) {
@@ -787,6 +843,11 @@ ApplicationWindow {
                 MenuItem { text: "Multi-region (BEDPE)"; onTriggered: addTab("multi-region") }
                 MenuItem { text: "Maps × regions"; onTriggered: addTab("map-region") }
                 MenuItem { text: "Pairwise regions"; onTriggered: addTab("pairwise") }
+                MenuSeparator {}
+                MenuItem { text: "45° diagonal heatmaps"; onTriggered: addTab("rotated-45") }
+                MenuItem { text: "SIP bullseye"; onTriggered: addTab("bullseye") }
+                MenuItem { text: "Virtual 4C"; onTriggered: addTab("virtual-4c") }
+                MenuItem { text: "Experimental processing"; onTriggered: addTab("processing") }
             }
             MenuItem { text: "Close Tab"; enabled: tabs.length > 1; onTriggered: closeCurrentTab() }
             MenuSeparator {}
@@ -908,7 +969,7 @@ ApplicationWindow {
                 if (kind === "hic")
                     activeTab.setPrimaryFile(activeTab.activeCellIndex, DatasetRegistry.resourcePath(resourceId))
                 else if (kind === "track")
-                    activeTab.loadTrackFromPath(DatasetRegistry.resourcePath(resourceId), activeTab.layerScope)
+                    activeTab.loadTrackResource(resourceId, activeTab.layerScope)
                 else if (kind === "annotation")
                     activeTab.loadAnnotationResource(resourceId, activeTab.layerScope)
             }
@@ -1197,6 +1258,17 @@ ApplicationWindow {
                             text: "Copy Left Position"
                             enabled: !!activeController
                             onTriggered: activeController.copyLeftPosition(contextFy)
+                        }
+                        MenuSeparator {}
+                        MenuItem {
+                            text: "Inspect live SIP bullseye"
+                            enabled: !!activeController
+                            onTriggered: showBullseyeInspector(activeController, contextFx, contextFy)
+                        }
+                        MenuItem {
+                            text: "Open SIP bullseye tab"
+                            enabled: !!activeController
+                            onTriggered: openBullseyeAt(activeController, contextFx, contextFy)
                         }
                         MenuSeparator {}
                         MenuItem {
@@ -1807,6 +1879,7 @@ ApplicationWindow {
                                     contextFy = fractionY(mouse.y)
                                     pendingHoverFx = contextFx
                                     pendingHoverFy = contextFy
+                                    updateBullseyeInspector(activeController, contextFx, contextFy)
                                     if (!hoverValueTimer.running)
                                         hoverValueTimer.start()
                                     guideCanvas.requestPaint()
@@ -2075,12 +2148,135 @@ ApplicationWindow {
                             hoverActive = active
                         }
                         onToastRequested: function(text, kind) { showToast(text, kind) }
+                        onBullseyeRequested: function(controller, xFraction, yFraction) {
+                            showBullseyeInspector(controller, xFraction, yFraction)
+                        }
+                        onBullseyeHover: function(controller, xFraction, yFraction) {
+                            updateBullseyeInspector(controller, xFraction, yFraction)
+                        }
                     }
 
                 }
             }
         }
 
+    }
+
+    Popup {
+        id: bullseyeInspector
+        parent: Overlay.overlay
+        x: Math.max(12, window.width - width - 22)
+        y: 86
+        width: Math.min(720, window.width * 0.48)
+        height: Math.min(520, window.height - 130)
+        modal: false
+        dim: false
+        padding: 0
+        closePolicy: Popup.CloseOnEscape
+        onClosed: {
+            for (var i = 0; i < bullseyeInspectorCells.length; ++i)
+                if (bullseyeInspectorCells[i].controller &&
+                        (!activeTab || (activeTab.type !== "bullseye" && activeTab.type !== "rotated-45")))
+                    bullseyeInspectorCells[i].controller.setAnalysisPaddingBins(0)
+        }
+        background: Rectangle {
+            color: Theme.surface
+            border.color: Theme.borderStrong
+            border.width: 1
+            radius: Theme.radiusMd
+        }
+        contentItem: ColumnLayout {
+            spacing: 0
+            Rectangle {
+                Layout.fillWidth: true
+                Layout.preferredHeight: 42
+                color: Theme.surfaceAlt
+                RowLayout {
+                    anchors.fill: parent; anchors.leftMargin: 10; anchors.rightMargin: 8; spacing: 8
+                    Label { text: "Live SIP bullseye"; color: Theme.textPrimary; font.weight: Font.DemiBold }
+                    Label {
+                        text: bullseyeInspectorSource
+                            ? bullseyeInspectorSource.chrX + ":" + bullseyeInspectorX + " × " +
+                              bullseyeInspectorSource.chrY + ":" + bullseyeInspectorY
+                            : ""
+                        color: Theme.textMuted; font.pixelSize: Theme.textXs; Layout.fillWidth: true; elide: Text.ElideMiddle
+                    }
+                    Label { text: "Bins"; color: Theme.textSecondary; font.pixelSize: Theme.textXs }
+                    SpinBox {
+                        from: 1; to: 100
+                        value: bullseyeInspectorRadiusBins
+                        onValueModified: setBullseyeInspectorRadius(value)
+                        Layout.preferredWidth: 84
+                    }
+                    Label { text: "bp"; color: Theme.textSecondary; font.pixelSize: Theme.textXs }
+                    AppTextField {
+                        text: String(bullseyeInspectorRadiusBins *
+                                     Math.max(1, bullseyeInspectorSource ? bullseyeInspectorSource.resolution : 1))
+                        validator: DoubleValidator { bottom: 1; decimals: 0 }
+                        onEditingFinished: {
+                            var resolution = Math.max(1, bullseyeInspectorSource ? bullseyeInspectorSource.resolution : 1)
+                            setBullseyeInspectorRadius(Number(text) / resolution)
+                        }
+                        Layout.preferredWidth: 96
+                    }
+                    AppButton {
+                        text: "Pin to tab"
+                        tonal: true
+                        onClicked: {
+                            var source = bullseyeInspectorSource
+                            var fx = source ? (bullseyeInspectorX - source.x0) / Math.max(1, source.x1 - source.x0) : 0.5
+                            var fy = source ? (bullseyeInspectorY - source.y0) / Math.max(1, source.y1 - source.y0) : 0.5
+                            bullseyeInspector.close()
+                            openBullseyeAt(source, fx, fy)
+                            if (activeTab) {
+                                activeTab.bullseyeRadiusBins = bullseyeInspectorRadiusBins
+                                activeTab.bullseyePinned = true
+                            }
+                        }
+                    }
+                    AppToolButton { text: "×"; onClicked: bullseyeInspector.close() }
+                }
+            }
+            ScrollView {
+                Layout.fillWidth: true; Layout.fillHeight: true
+                clip: true
+                contentHeight: availableHeight
+                Row {
+                    height: parent.height
+                    spacing: 8
+                    padding: 8
+                    Repeater {
+                        model: bullseyeInspectorCells
+                        Rectangle {
+                            required property var modelData
+                            width: Math.max(260, (bullseyeInspector.width - 32) /
+                                            Math.min(2, Math.max(1, bullseyeInspectorCells.length)))
+                            height: parent.height - 16
+                            color: "white"
+                            border.color: Theme.border
+                            ColumnLayout {
+                                anchors.fill: parent; spacing: 0
+                                Label {
+                                    Layout.fillWidth: true; Layout.preferredHeight: 28
+                                    text: modelData.label
+                                    color: Theme.textPrimary
+                                    horizontalAlignment: Text.AlignHCenter
+                                    verticalAlignment: Text.AlignVCenter
+                                    elide: Text.ElideMiddle
+                                }
+                                BullseyeItem {
+                                    Layout.fillWidth: true; Layout.fillHeight: true
+                                    controller: modelData.controller
+                                    centerX: bullseyeInspectorX
+                                    centerY: bullseyeInspectorY
+                                    radiusBins: bullseyeInspectorRadiusBins
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
     }
 
     Rectangle {

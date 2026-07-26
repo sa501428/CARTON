@@ -26,6 +26,7 @@ Rectangle {
     signal hoverInfo(string text, bool active)
     signal cursorMoved(real xFraction, real yFraction)
     signal annotationRequested(real xStartFraction, real yStartFraction, real xEndFraction, real yEndFraction)
+    signal bullseyeRequested(var controller, real xFraction, real yFraction)
 
     color: Theme.surface
     border.color: selected ? Theme.accent : Theme.border
@@ -285,6 +286,12 @@ Rectangle {
                 onPressed: function(mouse) {
                     root.activated()
                     lastX = mouse.x; lastY = mouse.y; startX = mouse.x; startY = mouse.y; dragged = false
+                    if (mouse.button === Qt.RightButton) {
+                        root.bullseyeRequested(root.controller,
+                                              Math.max(0, Math.min(1, mouse.x / Math.max(1, width))),
+                                              Math.max(0, Math.min(1, mouse.y / Math.max(1, height))))
+                        return
+                    }
                     if (root.controller) root.controller.beginInteraction()
                 }
                 onPositionChanged: function(mouse) {

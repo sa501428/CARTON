@@ -12,6 +12,7 @@
 #include "DatasetRegistry.h"
 #include "RegionSetModel.h"
 #include "TabSession.h"
+#include "MatrixAnalysis.h"
 
 namespace {
 bool require(bool condition, const char* message) {
@@ -196,6 +197,20 @@ int main(int argc, char** argv) {
     if (!require(pooledTrackA.data && pooledTrackA.data == pooledTrackB.data,
                  "track resources are pooled by canonical source")) return 1;
 
+    QVector<GenomicTrackFeature> derivedFeatures;
+    derivedFeatures.push_back({QStringLiteral("chr1"), 0, 100, QStringLiteral("v4c"), 3.5, QColor("#3478f6")});
+    const PooledTrackResult derivedTrack = DatasetRegistry::instance()->createDerivedTrack(
+        QStringLiteral("Synthetic virtual 4C"), derivedFeatures,
+        {{QStringLiteral("kind"), QStringLiteral("virtual-4c")}});
+    if (!require(derivedTrack.data && derivedTrack.data->derived &&
+                 DatasetRegistry::instance()->trackById(derivedTrack.id).data == derivedTrack.data,
+                 "derived tracks are pooled in memory")) return 1;
+    HicDataController derivedConsumer;
+    derivedConsumer.loadTrackResource(derivedTrack.id);
+    if (!require(derivedConsumer.trackCount() == 1 &&
+                 derivedConsumer.trackSummaries().front().toMap().value("resourceId").toString() == derivedTrack.id,
+                 "derived pooled tracks load without a backing file")) return 1;
+
     prefixController.addAnnotationFromFractions(0.1, 0.1, 0.2, 0.2);
     const QVariantMap customLayer = prefixController.annotationLayerSummaries().front().toMap();
     const QString customResource = customLayer.value("resourceId").toString();
@@ -343,5 +358,76 @@ int main(int argc, char** argv) {
     if (!require(restored.restoreState(pairwiseState) && restored.type() == QStringLiteral("pairwise") &&
                  restored.cellCount() == 4 && restored.diagonalMode() == QStringLiteral("blank"),
                  "versioned tab state round-trips")) return 1;
+
+    const std::vector<contactRecord> syntheticRecords = {
+        {0, 0, 1.0f}, {0, 100, 2.0f}, {100, 100, 4.0f}, {100, 200, 6.0f}
+    };
+    const MatrixAnalysis::DenseMatrix dense = MatrixAnalysis::makeDense(
+        syntheticRecords, 100, 0, 300, 0, 300, true, 512);
+    if (!require(dense.valid() && dense.width == 3 && dense.height == 3 &&
+                 dense.values[1] == 2.0f && dense.values[3] == 2.0f,
+                 "dense matrix construction reflects intrachromosomal contacts")) return 1;
+    const std::vector<MatrixAnalysis::PolarPixel> polar = MatrixAnalysis::bullseye(
+        syntheticRecords, 100, 0, 0, 1, true);
+    bool foundIndependentPolarPixel = false;
+    for (const auto& pixel : polar) {
+        if (pixel.dx == 1 && pixel.dy == 0 && pixel.present && pixel.value == 2.0f)
+            foundIndependentPolarPixel = true;
+    }
+    if (!require(polar.size() == 5 && foundIndependentPolarPixel,
+                 "bullseye preserves one source pixel per polar glyph without aggregation")) return 1;
+    const std::vector<float> virtualValues = MatrixAnalysis::virtual4C(
+        syntheticRecords, 100, 0, 0, 300, true);
+    const std::vector<float> virtualRowValues = MatrixAnalysis::virtual4C(
+        syntheticRecords, 100, 100, 0, 300, false, false);
+    if (!require(virtualValues.size() == 3 && virtualValues[0] == 1.0f &&
+                 virtualValues[1] == 2.0f && virtualValues[2] == 0.0f &&
+                 virtualRowValues[0] == 2.0f && virtualRowValues[1] == 4.0f,
+                 "virtual 4C extracts exact row and column anchor bins")) return 1;
+
+    MatrixAnalysis::DenseMatrix ramp;
+    ramp.width = 3;
+    ramp.height = 3;
+    ramp.resolution = 1;
+    ramp.values = {0, 1, 2, 0, 1, 2, 0, 1, 2};
+    ramp.present.assign(9, true);
+    ramp.minimum = 0;
+    ramp.maximum = 2;
+    const MatrixAnalysis::DenseMatrix gradient = MatrixAnalysis::process(ramp, QStringLiteral("gradient-x"));
+    if (!require(gradient.valid() && gradient.values[4] == 1.0f,
+                 "dependency-free gradient operator")) return 1;
+    MatrixAnalysis::DenseMatrix twoByTwo;
+    twoByTwo.width = twoByTwo.height = 2;
+    twoByTwo.resolution = 1;
+    twoByTwo.values = {1, 2, 3, 4};
+    twoByTwo.present.assign(4, true);
+    twoByTwo.minimum = 1;
+    twoByTwo.maximum = 4;
+    const MatrixAnalysis::DenseMatrix squared = MatrixAnalysis::process(twoByTwo, QStringLiteral("matrix-square"));
+    const MatrixAnalysis::DenseMatrix diffused = MatrixAnalysis::process(
+        twoByTwo, QStringLiteral("graph-diffusion"), 2, 0.25);
+    const MatrixAnalysis::DenseMatrix polarTransform = MatrixAnalysis::process(ramp, QStringLiteral("polar"));
+    if (!require(squared.valid() && squared.values == std::vector<float>({7, 10, 15, 22}) &&
+                 diffused.valid() && polarTransform.valid(),
+                 "bounded matrix square, graph diffusion, and polar operators")) return 1;
+    if (!require(!MatrixAnalysis::supportedOperations().join(QLatin1Char(' ')).contains(QStringLiteral("FFT"), Qt::CaseInsensitive) &&
+                 !MatrixAnalysis::supportedOperations().join(QLatin1Char(' ')).contains(QStringLiteral("wavelet"), Qt::CaseInsensitive),
+                 "deferred FFT and wavelet operators are not exposed")) return 1;
+
+    for (const QString& type : {QStringLiteral("rotated-45"), QStringLiteral("bullseye"),
+                                QStringLiteral("virtual-4c"), QStringLiteral("processing")}) {
+        TabSession analysisTab;
+        analysisTab.initialize(type);
+        if (!require(analysisTab.type() == type && analysisTab.mapCount() == 2 && analysisTab.cellCount() == 2,
+                     "analysis tabs create synchronized multi-map cells")) return 1;
+        analysisTab.addMap();
+        if (!require(analysisTab.mapCount() == 3 && analysisTab.cellCount() == 3,
+                     "analysis tabs can add maps")) return 1;
+        const QVariantMap analysisState = analysisTab.state();
+        TabSession restoredAnalysis;
+        if (!require(restoredAnalysis.restoreState(analysisState) && restoredAnalysis.type() == type &&
+                     restoredAnalysis.mapCount() == 3,
+                     "analysis tab state round-trips")) return 1;
+    }
     return 0;
 }

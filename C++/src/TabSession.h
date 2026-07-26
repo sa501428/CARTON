@@ -33,6 +33,19 @@ class TabSession : public QObject {
     Q_PROPERTY(HicDataController* activeController READ activeController NOTIFY activeCellChanged)
     Q_PROPERTY(RegionSetModel* regionSet READ regionSet CONSTANT)
     Q_PROPERTY(qint64 windowSize READ windowSize WRITE setWindowSize NOTIFY cellsChanged)
+    Q_PROPERTY(int analysisPaneHeight READ analysisPaneHeight WRITE setAnalysisPaneHeight NOTIFY analysisSettingsChanged)
+    Q_PROPERTY(qint64 diagonalMaxDistance READ diagonalMaxDistance WRITE setDiagonalMaxDistance NOTIFY analysisSettingsChanged)
+    Q_PROPERTY(qint64 bullseyeCenterX READ bullseyeCenterX WRITE setBullseyeCenterX NOTIFY analysisSettingsChanged)
+    Q_PROPERTY(qint64 bullseyeCenterY READ bullseyeCenterY WRITE setBullseyeCenterY NOTIFY analysisSettingsChanged)
+    Q_PROPERTY(int bullseyeRadiusBins READ bullseyeRadiusBins WRITE setBullseyeRadiusBins NOTIFY analysisSettingsChanged)
+    Q_PROPERTY(qint64 bullseyeRadiusBp READ bullseyeRadiusBp WRITE setBullseyeRadiusBp NOTIFY analysisSettingsChanged)
+    Q_PROPERTY(bool bullseyePinned READ bullseyePinned WRITE setBullseyePinned NOTIFY analysisSettingsChanged)
+    Q_PROPERTY(qint64 virtual4CAnchor READ virtual4CAnchor WRITE setVirtual4CAnchor NOTIFY analysisSettingsChanged)
+    Q_PROPERTY(QString virtual4CAxis READ virtual4CAxis WRITE setVirtual4CAxis NOTIFY analysisSettingsChanged)
+    Q_PROPERTY(QString processingOperator READ processingOperator WRITE setProcessingOperator NOTIFY analysisSettingsChanged)
+    Q_PROPERTY(double processingParameter READ processingParameter WRITE setProcessingParameter NOTIFY analysisSettingsChanged)
+    Q_PROPERTY(double processingThreshold READ processingThreshold WRITE setProcessingThreshold NOTIFY analysisSettingsChanged)
+    Q_PROPERTY(int processingMaximumBins READ processingMaximumBins WRITE setProcessingMaximumBins NOTIFY analysisSettingsChanged)
 
 public:
     explicit TabSession(QObject* parent = nullptr);
@@ -59,6 +72,19 @@ public:
     HicDataController* activeController() const;
     RegionSetModel* regionSet() const;
     qint64 windowSize() const;
+    int analysisPaneHeight() const;
+    qint64 diagonalMaxDistance() const;
+    qint64 bullseyeCenterX() const;
+    qint64 bullseyeCenterY() const;
+    int bullseyeRadiusBins() const;
+    qint64 bullseyeRadiusBp() const;
+    bool bullseyePinned() const;
+    qint64 virtual4CAnchor() const;
+    QString virtual4CAxis() const;
+    QString processingOperator() const;
+    double processingParameter() const;
+    double processingThreshold() const;
+    int processingMaximumBins() const;
 
     void setTitle(const QString& value);
     void setLayoutColumns(int value);
@@ -70,6 +96,19 @@ public:
     void setLinkColorScale(bool value);
     void setActiveCellIndex(int value);
     void setWindowSize(qint64 value);
+    void setAnalysisPaneHeight(int value);
+    void setDiagonalMaxDistance(qint64 value);
+    void setBullseyeCenterX(qint64 value);
+    void setBullseyeCenterY(qint64 value);
+    void setBullseyeRadiusBins(int value);
+    void setBullseyeRadiusBp(qint64 value);
+    void setBullseyePinned(bool value);
+    void setVirtual4CAnchor(qint64 value);
+    void setVirtual4CAxis(const QString& value);
+    void setProcessingOperator(const QString& value);
+    void setProcessingParameter(double value);
+    void setProcessingThreshold(double value);
+    void setProcessingMaximumBins(int value);
 
     Q_INVOKABLE void initialize(const QString& type);
     Q_INVOKABLE void addMap();
@@ -79,9 +118,14 @@ public:
     Q_INVOKABLE bool loadRegions(const QUrl& url, const QString& format = QString());
     Q_INVOKABLE void loadTrack(const QUrl& url, const QString& scope = QString());
     Q_INVOKABLE void loadTrackFromPath(const QString& pathOrUrl, const QString& scope = QString());
+    Q_INVOKABLE void loadTrackResource(const QString& resourceId, const QString& scope = QString());
     Q_INVOKABLE void loadAnnotations(const QUrl& url, const QString& scope = QString());
     Q_INVOKABLE void loadAnnotationResource(const QString& resourceId, const QString& scope = QString());
     Q_INVOKABLE void notifyViewportInteracted(int cellIndex);
+    Q_INVOKABLE void setMapFlipped(int mapIndex, bool flipped);
+    Q_INVOKABLE void updateBullseyeFromFractions(int cellIndex, double xFraction, double yFraction);
+    Q_INVOKABLE QString createVirtual4CTrack(int cellIndex, const QString& name = QString(),
+                                             const QString& scope = QStringLiteral("cell"));
     Q_INVOKABLE void addScopedAnnotation(int cellIndex, double xStartFraction, double yStartFraction,
                                          double xEndFraction, double yEndFraction,
                                          const QString& scope = QString());
@@ -97,15 +141,17 @@ signals:
     void titleChanged();
     void layerScopeChanged();
     void linkingChanged();
+    void analysisSettingsChanged();
     void errorOccurred(const QString& message);
 
 private:
-    enum class Type { Single, MultiMap, MultiRegion, MapRegion, Pairwise };
+    enum class Type { Single, MultiMap, MultiRegion, MapRegion, Pairwise, Rotated45, Bullseye, Virtual4C, Processing };
     struct MapSpec {
         QString id;
         QString primaryPath;
         QString controlPath;
         QString label;
+        bool flipped = false;
     };
     struct CellSpec {
         QString key;
@@ -138,6 +184,7 @@ private:
     QString resolvedScope(const QString& requestedScope) const;
     bool cellsShareNavigation(const CellSpec& source, const CellSpec& target) const;
     void propagateColor(HicDataController* source);
+    bool isMultiSourceType() const;
 
     Type m_type = Type::Single;
     QString m_title = QStringLiteral("Map");
@@ -155,6 +202,18 @@ private:
     bool m_linkColorScale = false;
     bool m_initializing = false;
     QHash<QString, QVariantMap> m_pendingCellStates;
+    int m_analysisPaneHeight = 260;
+    qint64 m_diagonalMaxDistance = 2000000;
+    qint64 m_bullseyeCenterX = 0;
+    qint64 m_bullseyeCenterY = 0;
+    int m_bullseyeRadiusBins = 12;
+    bool m_bullseyePinned = false;
+    qint64 m_virtual4CAnchor = 0;
+    QString m_virtual4CAxis = QStringLiteral("row");
+    QString m_processingOperator = QStringLiteral("gradient-magnitude");
+    double m_processingParameter = 1.0;
+    double m_processingThreshold = 0.0;
+    int m_processingMaximumBins = 512;
 };
 
 #endif

@@ -222,6 +222,7 @@ public:
     Q_INVOKABLE void setTrackVisible(int index, bool visible);
     Q_INVOKABLE void setTrackCollapsed(int index, bool collapsed);
     Q_INVOKABLE void setTrackHeight(int index, int height);
+    Q_INVOKABLE void setTrackPlacement(int index, const QString& placement);
     Q_INVOKABLE void setTrackAutoscale(int index, bool autoscale);
     Q_INVOKABLE void moveTrack(int from, int to);
     Q_INVOKABLE void removeTrack(int index);
@@ -278,9 +279,11 @@ public:
     void setZeroTransparent(bool value);
     void setMinimapEnabled(bool value);
     void setWorkspaceSearch(const QString& value);
+    Q_INVOKABLE void setAnalysisPaddingBins(int value);
 
     std::vector<contactRecord> recordsSnapshot() const;
     std::vector<contactRecord> controlRecordsSnapshot() const;
+    std::vector<contactRecord> analysisRecordsSnapshot() const;
     void renderRecordsSnapshot(std::vector<contactRecord>& records,
                                std::vector<contactRecord>& controlRecords,
                                int& dataResolution,
@@ -413,6 +416,7 @@ private:
         bool autoscale = true;
         qint64 binSize = 0; // 0 follows the active Hi-C map resolution.
         int height = 100;
+        QString placement = QStringLiteral("above");
     };
 
     using Annotation2D = PooledAnnotation;
@@ -520,6 +524,7 @@ private:
     bool m_restoringView = false;
     bool m_interactionActive = false;
     double m_viewportAspectRatio = 1.0;
+    int m_analysisPaddingBins = 0;
 };
 
 #endif

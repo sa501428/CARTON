@@ -265,6 +265,80 @@ PooledTrackResult DatasetRegistry::loadTrack(const QString& pathOrUrl) {
     return result;
 }
 
+PooledTrackResult DatasetRegistry::trackById(const QString& id) const {
+    PooledTrackResult result;
+    result.id = id;
+    QMutexLocker locker(&m_mutex);
+    result.data = m_tracks.value(id);
+    if (!result.data) result.error = QStringLiteral("Unknown track resource: %1").arg(id);
+    return result;
+}
+
+PooledTrackResult DatasetRegistry::createDerivedTrack(const QString& name,
+                                                      const QVector<GenomicTrackFeature>& features,
+                                                      const QVariantMap& provenance) {
+    return restoreDerivedTrack(QString(), name, features, provenance);
+}
+
+PooledTrackResult DatasetRegistry::restoreDerivedTrack(const QString& resourceId, const QString& name,
+                                                       const QVector<GenomicTrackFeature>& features,
+                                                       const QVariantMap& provenance) {
+    PooledTrackResult result;
+    if (features.isEmpty()) {
+        result.error = QStringLiteral("Cannot create an empty derived track.");
+        return result;
+    }
+    result.id = resourceId.startsWith(QStringLiteral("track:derived:"))
+        ? resourceId
+        : QStringLiteral("track:derived:%1").arg(QUuid::createUuid().toString(QUuid::WithoutBraces));
+    {
+        QMutexLocker locker(&m_mutex);
+        const auto existing = m_tracks.constFind(result.id);
+        if (existing != m_tracks.cend()) {
+            result.data = existing.value();
+            return result;
+        }
+    }
+    auto data = std::make_shared<PooledTrackData>();
+    data->id = result.id;
+    data->source = result.id;
+    data->name = name.trimmed().isEmpty() ? QStringLiteral("Derived track") : name.trimmed();
+    data->format = QStringLiteral("virtual4c");
+    data->derived = true;
+    data->provenance = provenance;
+    data->features = features;
+    for (GenomicTrackFeature& feature : data->features) feature.chr = chromosomeKey(feature.chr);
+    std::sort(data->features.begin(), data->features.end(), [](const auto& a, const auto& b) {
+        if (a.chr != b.chr) return a.chr < b.chr;
+        if (a.start != b.start) return a.start < b.start;
+        return a.end < b.end;
+    });
+    data->minimum = std::numeric_limits<double>::infinity();
+    data->maximum = -std::numeric_limits<double>::infinity();
+    for (qsizetype index = 0; index < data->features.size(); ++index) {
+        const GenomicTrackFeature& feature = data->features[index];
+        data->minimum = std::min(data->minimum, feature.value);
+        data->maximum = std::max(data->maximum, feature.value);
+        auto range = data->chromosomeRanges.find(feature.chr);
+        if (range == data->chromosomeRanges.end()) {
+            data->chromosomeRanges.insert(feature.chr, {index, index + 1, feature.end - feature.start});
+        } else {
+            range->end = index + 1;
+            range->maximumSpan = std::max(range->maximumSpan, feature.end - feature.start);
+        }
+    }
+    if (!std::isfinite(data->minimum)) data->minimum = 0.0;
+    if (!std::isfinite(data->maximum) || data->maximum <= data->minimum) data->maximum = data->minimum + 1.0;
+    {
+        QMutexLocker locker(&m_mutex);
+        m_tracks.insert(result.id, data);
+        recordResourceLocked({result.id, QStringLiteral("track"), data->name, data->source,
+                              data->features.size(), true});
+    }
+    result.data = data;
+    return result;
+}
+
 PooledAnnotationResult DatasetRegistry::loadAnnotations(const QString& pathOrUrl) {
     PooledAnnotationResult result;
     const QString source = canonicalSource(pathOrUrl);
@@ -468,7 +542,7 @@ bool DatasetRegistry::exportWorkspace(const QUrl& url, const QVariantList& tabSt
     QSaveFile file(path);
     if (!file.open(QIODevice::WriteOnly | QIODevice::Text)) return false;
     QVariantMap workspace;
-    workspace[QStringLiteral("schemaVersion")] = 2;
+    workspace[QStringLiteral("schemaVersion")] = 3;
     workspace[QStringLiteral("kind")] = QStringLiteral("carton-workspace");
     workspace[QStringLiteral("tabs")] = tabStates;
     file.write(QJsonDocument::fromVariant(workspace).toJson(QJsonDocument::Indented));

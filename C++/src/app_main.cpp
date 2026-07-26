@@ -10,6 +10,7 @@
 #include "DatasetRegistry.h"
 #include "RegionSetModel.h"
 #include "TabSession.h"
+#include "AnalysisItems.h"
 
 int main(int argc, char* argv[]) {
     QGuiApplication app(argc, argv);
@@ -25,6 +26,10 @@ int main(int argc, char* argv[]) {
 
     qmlRegisterType<HicDataController>("Carton", 1, 0, "HicDataController");
     qmlRegisterType<HicHeatmapItem>("Carton", 1, 0, "HicHeatmapItem");
+    qmlRegisterType<RotatedHeatmapItem>("Carton", 1, 0, "RotatedHeatmapItem");
+    qmlRegisterType<BullseyeItem>("Carton", 1, 0, "BullseyeItem");
+    qmlRegisterType<Virtual4CItem>("Carton", 1, 0, "Virtual4CItem");
+    qmlRegisterType<ProcessedHeatmapItem>("Carton", 1, 0, "ProcessedHeatmapItem");
     qmlRegisterType<RegionSetModel>("Carton", 1, 0, "RegionSetModel");
     qmlRegisterType<TabSession>("Carton", 1, 0, "TabSession");
     qmlRegisterSingletonInstance("Carton", 1, 0, "DatasetRegistry", DatasetRegistry::instance());

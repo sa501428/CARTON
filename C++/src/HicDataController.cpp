@@ -407,12 +407,12 @@ void HicDataController::loadTrackFromPath(const QString& path) {
 }
 
 void HicDataController::loadTrackResource(const QString& resourceId) {
-    const QString path = m_registry->resourcePath(resourceId);
-    if (path.isEmpty() || m_registry->resourceKind(resourceId) != QStringLiteral("track")) {
-        setStatus(QStringLiteral("Unknown track resource: %1").arg(resourceId));
+    const PooledTrackResult pooled = m_registry->trackById(resourceId);
+    if (!pooled.data) {
+        setStatus(pooled.error);
         return;
     }
-    loadTrackFromPath(path);
+    appendTrackLayer(pooled.data);
 }
 
 void HicDataController::appendTrackLayer(const std::shared_ptr<const PooledTrackData>& data) {
@@ -688,6 +688,7 @@ QVariantList HicDataController::trackSummaries() const {
         item["collapsed"] = track.collapsed;
         item["autoscale"] = track.autoscale;
         item["height"] = track.height;
+        item["placement"] = track.placement;
         values.push_back(item);
     }
     return values;
@@ -1495,6 +1496,24 @@ QVariantMap HicDataController::sessionState() const {
         item[QStringLiteral("collapsed")] = track.collapsed;
         item[QStringLiteral("autoscale")] = track.autoscale;
         item[QStringLiteral("height")] = track.height;
+        item[QStringLiteral("placement")] = track.placement;
+        item[QStringLiteral("derived")] = track.data && track.data->derived;
+        if (track.data && track.data->derived) {
+            item[QStringLiteral("provenance")] = track.data->provenance;
+            QVariantList features;
+            features.reserve(track.data->features.size());
+            for (const GenomicTrackFeature& sourceFeature : track.data->features) {
+                QVariantMap feature;
+                feature[QStringLiteral("chr")] = sourceFeature.chr;
+                feature[QStringLiteral("start")] = sourceFeature.start;
+                feature[QStringLiteral("end")] = sourceFeature.end;
+                feature[QStringLiteral("name")] = sourceFeature.name;
+                feature[QStringLiteral("value")] = sourceFeature.value;
+                feature[QStringLiteral("color")] = sourceFeature.color.name(QColor::HexArgb);
+                features.push_back(feature);
+            }
+            item[QStringLiteral("features")] = features;
+        }
         tracks.push_back(item);
     }
     state[QStringLiteral("tracks")] = tracks;
@@ -1547,8 +1566,27 @@ void HicDataController::restoreSessionState(const QVariantMap& state, bool inclu
     const QVariantList tracks = state.value(QStringLiteral("tracks")).toList();
     for (const QVariant& value : tracks) {
         const QVariantMap item = value.toMap();
+        const QString resourceId = item.value(QStringLiteral("resourceId")).toString();
         const QString source = item.value(QStringLiteral("source")).toString();
-        const PooledTrackResult pooled = m_registry->loadTrack(source);
+        PooledTrackResult pooled = m_registry->trackById(resourceId);
+        if (!pooled.data && item.value(QStringLiteral("derived")).toBool()) {
+            QVector<GenomicTrackFeature> features;
+            for (const QVariant& featureValue : item.value(QStringLiteral("features")).toList()) {
+                const QVariantMap value = featureValue.toMap();
+                GenomicTrackFeature feature;
+                feature.chr = value.value(QStringLiteral("chr")).toString();
+                feature.start = value.value(QStringLiteral("start")).toLongLong();
+                feature.end = value.value(QStringLiteral("end")).toLongLong();
+                feature.name = value.value(QStringLiteral("name")).toString();
+                feature.value = value.value(QStringLiteral("value")).toDouble();
+                feature.color = QColor(value.value(QStringLiteral("color"), QStringLiteral("#3478f6")).toString());
+                features.push_back(feature);
+            }
+            pooled = m_registry->restoreDerivedTrack(resourceId, item.value(QStringLiteral("name")).toString(),
+                                                      features, item.value(QStringLiteral("provenance")).toMap());
+        }
+        if (!pooled.data && !source.startsWith(QStringLiteral("track:derived:")))
+            pooled = m_registry->loadTrack(source);
         if (!pooled.data) continue;
         appendTrackLayer(pooled.data);
         TrackLayer& track = m_tracks.back();
@@ -1564,6 +1602,8 @@ void HicDataController::restoreSessionState(const QVariantMap& state, bool inclu
         track.collapsed = item.value(QStringLiteral("collapsed"), false).toBool();
         track.autoscale = item.value(QStringLiteral("autoscale"), true).toBool();
         track.height = item.value(QStringLiteral("height"), 100).toInt();
+        track.placement = item.value(QStringLiteral("placement"), QStringLiteral("above")).toString() == QStringLiteral("below")
+            ? QStringLiteral("below") : QStringLiteral("above");
     }
 
     m_annotationLayers.clear();
@@ -2199,6 +2239,14 @@ void HicDataController::setWorkspaceSearch(const QString& value) {
     emit workspaceSearchChanged();
 }
 
+void HicDataController::setAnalysisPaddingBins(int value) {
+    value = std::clamp(value, 0, 2000);
+    if (m_analysisPaddingBins == value) return;
+    m_analysisPaddingBins = value;
+    clearLoadedRegion();
+    scheduleRequest();
+}
+
 void HicDataController::setTrackName(int index, const QString& name) {
     if (index < 0 || index >= static_cast<int>(m_tracks.size())) return;
     m_tracks[static_cast<std::size_t>(index)].name = name;
@@ -2258,6 +2306,16 @@ void HicDataController::setTrackHeight(int index, int height) {
     const int nextHeight = std::max(20, height);
     if (track.height == nextHeight) return;
     track.height = nextHeight;
+    emit tracksChanged();
+}
+
+void HicDataController::setTrackPlacement(int index, const QString& placement) {
+    if (index < 0 || index >= static_cast<int>(m_tracks.size())) return;
+    TrackLayer& track = m_tracks[static_cast<std::size_t>(index)];
+    const QString next = placement.trimmed().toLower() == QStringLiteral("below")
+        ? QStringLiteral("below") : QStringLiteral("above");
+    if (track.placement == next) return;
+    track.placement = next;
     emit tracksChanged();
 }
 
@@ -2558,6 +2616,11 @@ std::vector<contactRecord> HicDataController::recordsSnapshot() const {
 std::vector<contactRecord> HicDataController::controlRecordsSnapshot() const {
     QMutexLocker locker(&m_mutex);
     return m_controlRecords;
+}
+
+std::vector<contactRecord> HicDataController::analysisRecordsSnapshot() const {
+    QMutexLocker locker(&m_mutex);
+    return transformRecordsForDisplay(m_matrixType, m_records, m_controlRecords);
 }
 
 void HicDataController::renderRecordsSnapshot(std::vector<contactRecord>& records,
@@ -3314,8 +3377,13 @@ HicTileKey HicDataController::paddedRequestKey(const HicTileKey& visibleKey) con
     const qint64 resolution = std::max<qint64>(1, key.resolution);
     const qint64 xSpan = std::max<qint64>(resolution, visibleKey.x1 - visibleKey.x0);
     const qint64 ySpan = std::max<qint64>(resolution, visibleKey.y1 - visibleKey.y0);
-    const qint64 xPad = std::min<qint64>(resolution * 20LL, std::max<qint64>(resolution * 2LL, xSpan / 10));
-    const qint64 yPad = std::min<qint64>(resolution * 20LL, std::max<qint64>(resolution * 2LL, ySpan / 10));
+    qint64 xPad = std::min<qint64>(resolution * 20LL, std::max<qint64>(resolution * 2LL, xSpan / 10));
+    qint64 yPad = std::min<qint64>(resolution * 20LL, std::max<qint64>(resolution * 2LL, ySpan / 10));
+    if (m_analysisPaddingBins > 0) {
+        const qint64 analysisPad = resolution * static_cast<qint64>(m_analysisPaddingBins);
+        xPad = std::max(xPad, analysisPad);
+        yPad = std::max(yPad, analysisPad);
+    }
     const qint64 maxX = chromosomeLength(QString::fromStdString(key.chrX));
     const qint64 maxY = chromosomeLength(QString::fromStdString(key.chrY));
     auto alignDown = [resolution](qint64 value) {

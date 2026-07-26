@@ -6,6 +6,7 @@ Canvas {
     property var controller: null
     property bool horizontal: true
     property color backgroundColor: Theme.surfaceSunken
+    property string placementFilter: ""
 
     Connections {
         target: root.controller
@@ -31,7 +32,8 @@ Canvas {
         var summaries = controller.trackSummaries()
         var active = []
         for (var i = 0; i < summaries.length; ++i)
-            if (summaries[i].visible && !summaries[i].collapsed) active.push(i)
+            if (summaries[i].visible && !summaries[i].collapsed &&
+                    (placementFilter.length === 0 || summaries[i].placement === placementFilter)) active.push(i)
         var laneSize = thickness / Math.max(1, active.length)
         for (var j = 0; j < segments.length; ++j) {
             var segment = segments[j]

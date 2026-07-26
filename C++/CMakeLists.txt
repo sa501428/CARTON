@@ -52,6 +52,8 @@ add_library(carton_core STATIC
     src/HicTileCache.h
     src/WorkspaceListModel.cpp
     src/WorkspaceListModel.h
+    src/MatrixAnalysis.cpp
+    src/MatrixAnalysis.h
 )
 target_include_directories(carton_core PUBLIC ${CMAKE_CURRENT_SOURCE_DIR} ${CMAKE_CURRENT_SOURCE_DIR}/src)
 target_link_libraries(carton_core
@@ -66,6 +68,8 @@ qt_add_executable(carton
     src/app_main.cpp
     src/HicHeatmapItem.cpp
     src/HicHeatmapItem.h
+    src/AnalysisItems.cpp
+    src/AnalysisItems.h
     "${APP_ICON}"
 )
 
@@ -93,6 +97,10 @@ qt_add_qml_module(carton
         qml/MapViewport.qml
         qml/TabWorkspaceView.qml
         qml/TrackAxisStrip.qml
+        qml/Rotated45View.qml
+        qml/BullseyeView.qml
+        qml/Virtual4CView.qml
+        qml/ProcessingView.qml
     RESOURCES
         qml/icons/navigation.svg
         qml/icons/inspector.svg

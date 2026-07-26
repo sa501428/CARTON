@@ -11,6 +11,8 @@ Rectangle {
     signal loadRegionsRequested(string format)
     signal hoverInfo(string text, bool active)
     signal toastRequested(string text, string kind)
+    signal bullseyeRequested(var controller, real xFraction, real yFraction)
+    signal bullseyeHover(var controller, real xFraction, real yFraction)
     property real sharedCursorX: 0.5
     property real sharedCursorY: 0.5
     property bool sharedCursorActive: false
@@ -52,13 +54,18 @@ Rectangle {
                     font.pixelSize: Theme.textXs
                 }
                 AppButton {
-                    visible: root.tabSession && (root.tabSession.type === "multi-map" || root.tabSession.type === "map-region")
+                    visible: root.tabSession && (root.tabSession.type === "multi-map" || root.tabSession.type === "map-region" ||
+                             root.tabSession.type === "rotated-45" || root.tabSession.type === "bullseye" ||
+                             root.tabSession.type === "virtual-4c" || root.tabSession.type === "processing")
                     text: "+ Map"
                     tonal: true
                     onClicked: root.tabSession.addMap()
                 }
                 AppButton {
-                    visible: root.tabSession && (root.tabSession.type === "multi-map" || root.tabSession.type === "map-region") && root.tabSession.mapCount > 1
+                    visible: root.tabSession && (root.tabSession.type === "multi-map" || root.tabSession.type === "map-region" ||
+                             root.tabSession.type === "rotated-45" || root.tabSession.type === "bullseye" ||
+                             root.tabSession.type === "virtual-4c" || root.tabSession.type === "processing") &&
+                             root.tabSession.mapCount > 1
                     text: "− Map"
                     tonal: true
                     onClicked: {
@@ -116,7 +123,9 @@ Rectangle {
                 }
                 Item { Layout.fillWidth: true }
                 AppCheckBox {
-                    visible: root.tabSession && (root.tabSession.type === "multi-map" || root.tabSession.type === "map-region")
+                    visible: root.tabSession && (root.tabSession.type === "multi-map" || root.tabSession.type === "map-region" ||
+                             root.tabSession.type === "rotated-45" || root.tabSession.type === "bullseye" ||
+                             root.tabSession.type === "virtual-4c" || root.tabSession.type === "processing")
                     text: "Link loci"
                     checked: root.tabSession && root.tabSession.linkNavigation
                     onToggled: if (root.tabSession) root.tabSession.linkNavigation = checked
@@ -159,7 +168,48 @@ Rectangle {
         Loader {
             Layout.fillWidth: true
             Layout.fillHeight: true
-            sourceComponent: root.tabSession && root.tabSession.type === "pairwise" ? pairwiseComponent : galleryComponent
+            sourceComponent: {
+                if (!root.tabSession) return galleryComponent
+                if (root.tabSession.type === "pairwise") return pairwiseComponent
+                if (root.tabSession.type === "rotated-45") return rotatedComponent
+                if (root.tabSession.type === "bullseye") return bullseyeComponent
+                if (root.tabSession.type === "virtual-4c") return virtual4CComponent
+                if (root.tabSession.type === "processing") return processingComponent
+                return galleryComponent
+            }
+        }
+    }
+
+    Component {
+        id: rotatedComponent
+        Rotated45View {
+            tabSession: root.tabSession
+            onHoverInfo: function(text, active) { root.hoverInfo(text, active) }
+        }
+    }
+
+    Component {
+        id: bullseyeComponent
+        BullseyeView {
+            tabSession: root.tabSession
+            onHoverInfo: function(text, active) { root.hoverInfo(text, active) }
+        }
+    }
+
+    Component {
+        id: virtual4CComponent
+        Virtual4CView {
+            tabSession: root.tabSession
+            onHoverInfo: function(text, active) { root.hoverInfo(text, active) }
+            onToastRequested: function(text, kind) { root.toastRequested(text, kind) }
+        }
+    }
+
+    Component {
+        id: processingComponent
+        ProcessingView {
+            tabSession: root.tabSession
+            onHoverInfo: function(text, active) { root.hoverInfo(text, active) }
         }
     }
 
@@ -199,10 +249,14 @@ Rectangle {
                             onActivated: root.tabSession.activeCellIndex = modelData.index
                             onCursorMoved: function(xFraction, yFraction) {
                                 root.sharedCursorX = xFraction; root.sharedCursorY = yFraction; root.sharedCursorActive = true
+                                root.bullseyeHover(modelData.controller, xFraction, yFraction)
                             }
                             onViewportInteracted: root.tabSession.notifyViewportInteracted(modelData.index)
                             onAnnotationRequested: function(x0, y0, x1, y1) {
                                 root.tabSession.addScopedAnnotation(modelData.index, x0, y0, x1, y1, root.tabSession.layerScope)
+                            }
+                            onBullseyeRequested: function(controller, xFraction, yFraction) {
+                                root.bullseyeRequested(controller, xFraction, yFraction)
                             }
                             onHoverInfo: function(text, active) {
                                 if (!active) root.sharedCursorActive = false
@@ -306,9 +360,13 @@ Rectangle {
                         onActivated: root.tabSession.activeCellIndex = modelData.index
                         onCursorMoved: function(xFraction, yFraction) {
                             root.sharedCursorX = xFraction; root.sharedCursorY = yFraction; root.sharedCursorActive = true
+                            root.bullseyeHover(modelData.controller, xFraction, yFraction)
                         }
                         onAnnotationRequested: function(x0, y0, x1, y1) {
                             root.tabSession.addScopedAnnotation(modelData.index, x0, y0, x1, y1, root.tabSession.layerScope)
+                        }
+                        onBullseyeRequested: function(controller, xFraction, yFraction) {
+                            root.bullseyeRequested(controller, xFraction, yFraction)
                         }
                         onHoverInfo: function(text, active) {
                             if (!active) root.sharedCursorActive = false

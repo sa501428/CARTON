@@ -34,6 +34,8 @@ struct PooledTrackData {
     QHash<QString, PooledTrackRange> chromosomeRanges;
     double minimum = 0.0;
     double maximum = 1.0;
+    bool derived = false;
+    QVariantMap provenance;
 };
 
 struct PooledAnnotation {
@@ -99,6 +101,12 @@ public:
 
     PooledHicMetadataResult loadHicMetadata(const QString& pathOrUrl);
     PooledTrackResult loadTrack(const QString& pathOrUrl);
+    PooledTrackResult trackById(const QString& id) const;
+    PooledTrackResult createDerivedTrack(const QString& name, const QVector<GenomicTrackFeature>& features,
+                                         const QVariantMap& provenance = {});
+    PooledTrackResult restoreDerivedTrack(const QString& resourceId, const QString& name,
+                                          const QVector<GenomicTrackFeature>& features,
+                                          const QVariantMap& provenance = {});
     PooledAnnotationResult loadAnnotations(const QString& pathOrUrl);
     PooledAnnotationResult annotationById(const QString& id) const;
     PooledAnnotationResult createCustomAnnotations(const QString& name,
