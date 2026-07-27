@@ -30,7 +30,7 @@ struct DenseMatrix {
 
     bool valid() const {
         return error.isEmpty() && width > 0 && height > 0 &&
-               values.size() == static_cast<std::size_t>(width * height);
+               values.size() == static_cast<std::size_t>(width) * static_cast<std::size_t>(height);
     }
 };
 
@@ -54,6 +54,15 @@ std::vector<PolarPixel> bullseye(const std::vector<contactRecord>& records, int 
 std::vector<float> virtual4C(const std::vector<contactRecord>& records, int resolution,
                             qint64 anchor, qint64 targetStart, qint64 targetEnd,
                             bool reflectIntra, bool anchorOnX = true);
+
+// Filters a diagonal strip and, when necessary, collapses contacts into a
+// screen-shaped bucket grid. The result never exceeds maxRecords.
+std::vector<contactRecord> boundedRotatedRecords(const std::vector<contactRecord>& records,
+                                                 int resolution,
+                                                 qint64 viewStart, qint64 viewEnd,
+                                                 qint64 maxDistance,
+                                                 int pixelWidth, int pixelHeight,
+                                                 int maxRecords);
 
 // Calculates a symmetric row-by-row similarity matrix over a bounded local
 // context. Pearson follows Juicebox semantics: the supplied values are O/E and

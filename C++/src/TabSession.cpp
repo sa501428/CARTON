@@ -7,6 +7,7 @@
 #include <QUuid>
 
 #include <algorithm>
+#include <cmath>
 
 #include "MatrixAnalysis.h"
 
@@ -284,17 +285,20 @@ void TabSession::setProcessingOperator(const QString& value) {
     else if (next == QStringLiteral("polar-transform")) next = QStringLiteral("polar");
     if (next.isEmpty() || m_processingOperator == next) return;
     m_processingOperator = next;
+    if (next == QStringLiteral("gabor") && m_processingParameter > 12.0)
+        m_processingParameter = 12.0;
     emit analysisSettingsChanged();
 }
 
 void TabSession::setProcessingParameter(double value) {
-    value = std::clamp(value, 0.1, 100.0);
+    value = std::isfinite(value) ? std::clamp(value, 0.1, 100.0) : 1.0;
     if (qFuzzyCompare(m_processingParameter, value)) return;
     m_processingParameter = value;
     emit analysisSettingsChanged();
 }
 
 void TabSession::setProcessingThreshold(double value) {
+    if (!std::isfinite(value)) value = 0.0;
     if (qFuzzyCompare(m_processingThreshold, value)) return;
     m_processingThreshold = value;
     emit analysisSettingsChanged();
@@ -890,8 +894,16 @@ bool TabSession::restoreState(const QVariantMap& value) {
     m_virtual4CAxis = analysis.value(QStringLiteral("virtual4CAxis"), QStringLiteral("row")).toString() ==
             QStringLiteral("column") ? QStringLiteral("column") : QStringLiteral("row");
     m_processingOperator = analysis.value(QStringLiteral("processingOperator"), QStringLiteral("gradient-magnitude")).toString();
-    m_processingParameter = analysis.value(QStringLiteral("processingParameter"), 1.0).toDouble();
-    m_processingThreshold = analysis.value(QStringLiteral("processingThreshold"), 0.0).toDouble();
+    const double restoredProcessingParameter =
+        analysis.value(QStringLiteral("processingParameter"), 1.0).toDouble();
+    m_processingParameter = std::isfinite(restoredProcessingParameter)
+        ? std::clamp(restoredProcessingParameter, 0.1, 100.0) : 1.0;
+    if (m_processingOperator == QStringLiteral("gabor"))
+        m_processingParameter = std::min(12.0, m_processingParameter);
+    const double restoredProcessingThreshold =
+        analysis.value(QStringLiteral("processingThreshold"), 0.0).toDouble();
+    m_processingThreshold = std::isfinite(restoredProcessingThreshold)
+        ? restoredProcessingThreshold : 0.0;
     m_processingMaximumBins = analysis.value(QStringLiteral("processingMaximumBins"), 512).toInt() > 512 ? 1024 : 512;
     rebuildCells();
     emit titleChanged();

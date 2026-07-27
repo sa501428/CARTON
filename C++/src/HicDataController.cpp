@@ -2719,7 +2719,25 @@ std::vector<contactRecord> HicDataController::controlRecordsSnapshot() const {
 
 std::vector<contactRecord> HicDataController::analysisRecordsSnapshot() const {
     QMutexLocker locker(&m_mutex);
-    return transformRecordsForDisplay(m_matrixType, m_records, m_controlRecords);
+    // Tile completion stores the data-level display transform in m_records.
+    // Reapplying it here would correlate similarity matrices again, merge
+    // ratios with an empty control layer, and double-transform log(O/E).
+    return m_records;
+}
+
+void HicDataController::rotatedRecordsSnapshot(std::vector<contactRecord>& records,
+                                               int& dataResolution,
+                                               qint64 maxDistance,
+                                               int pixelWidth, int pixelHeight,
+                                               int maxRecords) const {
+    QMutexLocker locker(&m_mutex);
+    dataResolution = m_hasLoadedKey && m_loadedKey.resolution > 0
+        ? m_loadedKey.resolution : std::max(1, m_resolution);
+    const qint64 viewStart = std::min(m_x0, m_y0);
+    const qint64 viewEnd = std::max(m_x1, m_y1);
+    records = MatrixAnalysis::boundedRotatedRecords(
+        m_records, dataResolution, viewStart, viewEnd, maxDistance,
+        pixelWidth, pixelHeight, maxRecords);
 }
 
 void HicDataController::renderRecordsSnapshot(std::vector<contactRecord>& records,

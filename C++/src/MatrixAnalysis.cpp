@@ -4,6 +4,7 @@
 #include <cmath>
 #include <limits>
 #include <queue>
+#include <unordered_map>
 
 namespace {
 constexpr double kPi = 3.14159265358979323846;
@@ -100,6 +101,62 @@ MatrixAnalysis::DenseMatrix morphology(const MatrixAnalysis::DenseMatrix& input,
     updateRange(output);
     return output;
 }
+
+MatrixAnalysis::DenseMatrix gaborFilter(const MatrixAnalysis::DenseMatrix& input,
+                                        double sigma, double angle) {
+    MatrixAnalysis::DenseMatrix horizontalCos = outputLike(input);
+    MatrixAnalysis::DenseMatrix horizontalSin = outputLike(input);
+    MatrixAnalysis::DenseMatrix output = outputLike(input);
+    const int radius = std::max(2, static_cast<int>(std::ceil(sigma * 3.0)));
+    const int kernelSize = radius * 2 + 1;
+    const double wavelength = std::max(2.0, sigma * 4.0);
+    const double frequency = 2.0 * kPi / wavelength;
+    std::vector<double> gaussian(static_cast<std::size_t>(kernelSize));
+    std::vector<double> xCos(static_cast<std::size_t>(kernelSize));
+    std::vector<double> xSin(static_cast<std::size_t>(kernelSize));
+    std::vector<double> yCos(static_cast<std::size_t>(kernelSize));
+    std::vector<double> ySin(static_cast<std::size_t>(kernelSize));
+    for (int offset = -radius; offset <= radius; ++offset) {
+        const std::size_t index = static_cast<std::size_t>(offset + radius);
+        gaussian[index] = std::exp(-(offset * offset) / (2.0 * sigma * sigma));
+        xCos[index] = std::cos(frequency * std::cos(angle) * offset);
+        xSin[index] = std::sin(frequency * std::cos(angle) * offset);
+        yCos[index] = std::cos(frequency * std::sin(angle) * offset);
+        ySin[index] = std::sin(frequency * std::sin(angle) * offset);
+    }
+
+    // An isotropic rotated Gabor kernel is the sum of two separable kernels:
+    // GxGy(cosX cosY - sinX sinY). This reduces work from O(radius²) to O(radius).
+    for (int y = 0; y < input.height; ++y) {
+        for (int x = 0; x < input.width; ++x) {
+            double cosine = 0.0;
+            double sine = 0.0;
+            for (int offset = -radius; offset <= radius; ++offset) {
+                const std::size_t index = static_cast<std::size_t>(offset + radius);
+                const double sample = sampleClamped(input, x + offset, y) * gaussian[index];
+                cosine += sample * xCos[index];
+                sine += sample * xSin[index];
+            }
+            horizontalCos.values[matrixIndex(x, y, input.width)] = static_cast<float>(cosine);
+            horizontalSin.values[matrixIndex(x, y, input.width)] = static_cast<float>(sine);
+        }
+    }
+    for (int y = 0; y < input.height; ++y) {
+        for (int x = 0; x < input.width; ++x) {
+            double value = 0.0;
+            for (int offset = -radius; offset <= radius; ++offset) {
+                const std::size_t index = static_cast<std::size_t>(offset + radius);
+                const double envelope = gaussian[index];
+                value += envelope *
+                         (sampleClamped(horizontalCos, x, y + offset) * yCos[index] -
+                          sampleClamped(horizontalSin, x, y + offset) * ySin[index]);
+            }
+            output.values[matrixIndex(x, y, input.width)] = static_cast<float>(value);
+        }
+    }
+    updateRange(output);
+    return output;
+}
 }
 
 namespace MatrixAnalysis {
@@ -111,17 +168,21 @@ DenseMatrix makeDense(const std::vector<contactRecord>& records, int resolution,
     matrix.resolution = std::max(1, resolution);
     matrix.x0 = (x0 / matrix.resolution) * matrix.resolution;
     matrix.y0 = (y0 / matrix.resolution) * matrix.resolution;
-    matrix.width = static_cast<int>((std::max<qint64>(matrix.x0 + 1, x1) - matrix.x0 +
-                                     matrix.resolution - 1) / matrix.resolution);
-    matrix.height = static_cast<int>((std::max<qint64>(matrix.y0 + 1, y1) - matrix.y0 +
-                                      matrix.resolution - 1) / matrix.resolution);
+    const qint64 width = (std::max<qint64>(matrix.x0 + 1, x1) - matrix.x0 +
+                          matrix.resolution - 1) / matrix.resolution;
+    const qint64 height = (std::max<qint64>(matrix.y0 + 1, y1) - matrix.y0 +
+                           matrix.resolution - 1) / matrix.resolution;
     maximumBins = std::clamp(maximumBins, 1, 1024);
-    if (matrix.width > maximumBins || matrix.height > maximumBins) {
+    if (width <= 0 || height <= 0 || width > maximumBins || height > maximumBins) {
         matrix.error = QStringLiteral("Region is %1 × %2 bins; the processing limit is %3 × %3.")
-                           .arg(matrix.width).arg(matrix.height).arg(maximumBins);
+                           .arg(width).arg(height).arg(maximumBins);
         return matrix;
     }
-    matrix.values.assign(static_cast<std::size_t>(matrix.width * matrix.height), 0.0f);
+    matrix.width = static_cast<int>(width);
+    matrix.height = static_cast<int>(height);
+    matrix.values.assign(static_cast<std::size_t>(matrix.width) *
+                             static_cast<std::size_t>(matrix.height),
+                         0.0f);
     matrix.present.assign(matrix.values.size(), false);
     auto assign = [&](qint64 genomeX, qint64 genomeY, float value) {
         const int x = static_cast<int>((genomeX - matrix.x0) / matrix.resolution);
@@ -192,6 +253,88 @@ std::vector<float> virtual4C(const std::vector<contactRecord>& records, int reso
         }
     }
     return values;
+}
+
+std::vector<contactRecord> boundedRotatedRecords(const std::vector<contactRecord>& records,
+                                                 int resolution,
+                                                 qint64 viewStart, qint64 viewEnd,
+                                                 qint64 maxDistance,
+                                                 int pixelWidth, int pixelHeight,
+                                                 int maxRecords) {
+    resolution = std::max(1, resolution);
+    viewEnd = std::max(viewStart + 1, viewEnd);
+    maxDistance = std::max<qint64>(1, maxDistance);
+    pixelWidth = std::max(1, pixelWidth);
+    pixelHeight = std::max(1, pixelHeight);
+    maxRecords = std::clamp(maxRecords, 1, 1000000);
+
+    const auto isVisible = [=](const contactRecord& record) {
+        const qint64 x = record.binX;
+        const qint64 y = record.binY;
+        const qint64 distance = std::abs(y - x);
+        const qint64 midpoint = (x + y) / 2;
+        return distance <= maxDistance + resolution &&
+               midpoint + resolution >= viewStart && midpoint < viewEnd;
+    };
+
+    std::vector<contactRecord> output;
+    output.reserve(std::min<std::size_t>(records.size(), static_cast<std::size_t>(maxRecords)));
+    bool requiresAggregation = false;
+    for (const contactRecord& record : records) {
+        if (!isVisible(record)) continue;
+        if (output.size() >= static_cast<std::size_t>(maxRecords)) {
+            requiresAggregation = true;
+            break;
+        }
+        output.push_back(record);
+    }
+    if (!requiresAggregation) return output;
+
+    output.clear();
+    int columns = pixelWidth;
+    int rows = pixelHeight;
+    const qint64 requestedBuckets = static_cast<qint64>(columns) * rows;
+    if (requestedBuckets > maxRecords) {
+        const double aspect = std::max(0.01, pixelWidth / static_cast<double>(pixelHeight));
+        columns = std::clamp(static_cast<int>(std::floor(std::sqrt(maxRecords * aspect))),
+                             1, std::min(pixelWidth, maxRecords));
+        rows = std::clamp(maxRecords / columns, 1, pixelHeight);
+    }
+    while (static_cast<qint64>(columns) * rows > maxRecords) {
+        if (columns >= rows && columns > 1) --columns;
+        else if (rows > 1) --rows;
+        else break;
+    }
+
+    std::unordered_map<quint64, contactRecord> buckets;
+    buckets.reserve(static_cast<std::size_t>(columns) * static_cast<std::size_t>(rows));
+    const double span = static_cast<double>(viewEnd - viewStart);
+    for (const contactRecord& record : records) {
+        if (!isVisible(record)) continue;
+        const qint64 x = record.binX;
+        const qint64 y = record.binY;
+        const double midpoint = (static_cast<double>(x) + y) * 0.5;
+        const double distance = std::abs(static_cast<double>(y) - x);
+        const double normalizedX = std::clamp((midpoint - viewStart) / span, 0.0, 1.0);
+        const double normalizedY = std::clamp(distance / static_cast<double>(maxDistance), 0.0, 1.0);
+        const int column = std::min(columns - 1, static_cast<int>(normalizedX * columns));
+        const int row = std::min(rows - 1, static_cast<int>(normalizedY * rows));
+        const quint64 key = (static_cast<quint64>(static_cast<quint32>(row)) << 32U) |
+                            static_cast<quint32>(column);
+        const auto found = buckets.find(key);
+        if (found == buckets.end()) {
+            buckets.emplace(key, record);
+        } else if (std::abs(record.counts) > std::abs(found->second.counts)) {
+            found->second = record;
+        }
+    }
+
+    output.reserve(buckets.size());
+    for (const auto& [key, record] : buckets) {
+        Q_UNUSED(key);
+        output.push_back(record);
+    }
+    return output;
 }
 
 std::vector<contactRecord> similarity(const std::vector<contactRecord>& records,
@@ -336,6 +479,11 @@ std::vector<contactRecord> similarity(const std::vector<contactRecord>& records,
 DenseMatrix process(const DenseMatrix& input, const QString& requestedOperation,
                     double parameter, double threshold) {
     if (!input.valid()) return input;
+    if (!std::isfinite(parameter) || !std::isfinite(threshold)) {
+        DenseMatrix output = input;
+        output.error = QStringLiteral("Processing parameters must be finite numbers.");
+        return output;
+    }
     const QString operation = requestedOperation.trimmed().toLower();
     if (operation == QStringLiteral("identity") || operation == QStringLiteral("input")) return input;
     if (operation == QStringLiteral("gaussian")) return gaussianBlur(input, parameter);
@@ -426,6 +574,13 @@ DenseMatrix process(const DenseMatrix& input, const QString& requestedOperation,
         operation == QStringLiteral("hessian-determinant") || operation == QStringLiteral("hessian-ridge") ||
         operation == QStringLiteral("structure-anisotropy") || operation == QStringLiteral("structure-orientation") ||
         operation == QStringLiteral("steerable") || operation == QStringLiteral("gabor")) {
+        if (operation == QStringLiteral("gabor")) {
+            if (parameter > 12.0) {
+                output.error = QStringLiteral("Gabor sigma is limited to 12 bins. Choose a smaller parameter.");
+                return output;
+            }
+            return gaborFilter(input, std::max(0.5, parameter), threshold * kPi / 180.0);
+        }
         const DenseMatrix source = operation == QStringLiteral("log")
             ? gaussianBlur(input, std::max(0.25, parameter)) : input;
         const double angle = threshold * kPi / 180.0;
@@ -462,19 +617,6 @@ DenseMatrix process(const DenseMatrix& input, const QString& requestedOperation,
                     value = 0.5f * std::atan2(2.0f * gx * gy, gx * gx - gy * gy);
                 } else if (operation == QStringLiteral("steerable")) {
                     value = static_cast<float>(gx * std::cos(angle) + gy * std::sin(angle));
-                } else {
-                    const double sigma = std::max(0.5, parameter);
-                    const double wavelength = std::max(2.0, threshold == 0.0 ? sigma * 4.0 : threshold);
-                    double sum = 0.0;
-                    const int radius = std::max(2, static_cast<int>(std::ceil(sigma * 3.0)));
-                    for (int ky = -radius; ky <= radius; ++ky) for (int kx = -radius; kx <= radius; ++kx) {
-                        const double xr = kx * std::cos(angle) + ky * std::sin(angle);
-                        const double yr = -kx * std::sin(angle) + ky * std::cos(angle);
-                        const double weight = std::exp(-(xr * xr + yr * yr) / (2.0 * sigma * sigma)) *
-                                              std::cos(2.0 * kPi * xr / wavelength);
-                        sum += sampleClamped(source, x + kx, y + ky) * weight;
-                    }
-                    value = static_cast<float>(sum);
                 }
                 output.values[matrixIndex(x, y, input.width)] = value;
             }

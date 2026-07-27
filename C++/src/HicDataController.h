@@ -286,6 +286,11 @@ public:
     std::vector<contactRecord> recordsSnapshot() const;
     std::vector<contactRecord> controlRecordsSnapshot() const;
     std::vector<contactRecord> analysisRecordsSnapshot() const;
+    void rotatedRecordsSnapshot(std::vector<contactRecord>& records,
+                                int& dataResolution,
+                                qint64 maxDistance,
+                                int pixelWidth, int pixelHeight,
+                                int maxRecords) const;
     void renderRecordsSnapshot(std::vector<contactRecord>& records,
                                std::vector<contactRecord>& controlRecords,
                                int& dataResolution,

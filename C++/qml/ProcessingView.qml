@@ -46,11 +46,24 @@ Rectangle {
                     onActivated: if (root.tabSession) root.tabSession.processingOperator = root.operatorKeys[currentIndex]
                     Layout.preferredWidth: 205
                 }
-                Label { text: "Parameter"; color: Theme.textSecondary; font.pixelSize: Theme.textXs }
+                Label {
+                    text: root.tabSession && root.tabSession.processingOperator === "gabor"
+                          ? "Sigma (≤ 12)" : "Parameter"
+                    color: Theme.textSecondary
+                    font.pixelSize: Theme.textXs
+                }
                 AppTextField {
                     text: root.tabSession ? String(root.tabSession.processingParameter) : "1"
-                    validator: DoubleValidator { bottom: 0.1; top: 100 }
-                    onEditingFinished: if (root.tabSession) root.tabSession.processingParameter = Number(text)
+                    validator: DoubleValidator {
+                        bottom: 0.1
+                        top: root.tabSession && root.tabSession.processingOperator === "gabor" ? 12 : 100
+                    }
+                    onEditingFinished: {
+                        if (!root.tabSession) return
+                        var value = Number(text)
+                        if (root.tabSession.processingOperator === "gabor") value = Math.min(12, value)
+                        root.tabSession.processingParameter = value
+                    }
                     Layout.preferredWidth: 76
                 }
                 Label { text: "Threshold / angle"; color: Theme.textSecondary; font.pixelSize: Theme.textXs }

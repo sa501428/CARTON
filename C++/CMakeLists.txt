@@ -122,6 +122,24 @@ if(BUILD_TESTING)
     target_link_libraries(carton_core_smoke PRIVATE carton_core Qt6::Gui)
     add_test(NAME carton_core_smoke COMMAND carton_core_smoke)
     set_tests_properties(carton_core_smoke PROPERTIES ENVIRONMENT "QT_QPA_PLATFORM=offscreen")
+
+    add_executable(carton_render_smoke
+        tests/render_smoke.cpp
+        src/AnalysisItems.cpp
+        src/AnalysisItems.h
+    )
+    target_include_directories(carton_render_smoke PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/src)
+    target_link_libraries(carton_render_smoke
+        PRIVATE carton_core Qt6::Quick Qt6::Concurrent
+    )
+    target_compile_definitions(carton_render_smoke PRIVATE
+        CARTON_TEST_HIC_PATH="${CMAKE_CURRENT_SOURCE_DIR}/../igv-main/test/data/hic/test_chr22.hic"
+    )
+    add_test(NAME carton_render_smoke COMMAND carton_render_smoke)
+    set_tests_properties(carton_render_smoke PROPERTIES
+        ENVIRONMENT "QT_QPA_PLATFORM=offscreen;QSG_RHI_BACKEND=software"
+        TIMEOUT 20
+    )
 endif()
 
 set_target_properties(carton PROPERTIES

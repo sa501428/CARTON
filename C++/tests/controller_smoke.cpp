@@ -454,9 +454,25 @@ int main(int argc, char** argv) {
     const MatrixAnalysis::DenseMatrix diffused = MatrixAnalysis::process(
         twoByTwo, QStringLiteral("graph-diffusion"), 2, 0.25);
     const MatrixAnalysis::DenseMatrix polarTransform = MatrixAnalysis::process(ramp, QStringLiteral("polar"));
+    const MatrixAnalysis::DenseMatrix gabor = MatrixAnalysis::process(ramp, QStringLiteral("gabor"), 2.0, 45.0);
+    const MatrixAnalysis::DenseMatrix rejectedGabor =
+        MatrixAnalysis::process(ramp, QStringLiteral("gabor"), 100.0, 0.0);
     if (!require(squared.valid() && squared.values == std::vector<float>({7, 10, 15, 22}) &&
-                 diffused.valid() && polarTransform.valid(),
-                 "bounded matrix square, graph diffusion, and polar operators")) return 1;
+                 diffused.valid() && polarTransform.valid() && gabor.valid() &&
+                 !rejectedGabor.valid() && rejectedGabor.error.contains(QStringLiteral("limited")),
+                 "bounded matrix square, graph diffusion, polar, and Gabor operators")) return 1;
+
+    std::vector<contactRecord> denseDiagonal;
+    for (int x = 0; x < 100; ++x) {
+        for (int distance = 0; distance < 100; ++distance) {
+            denseDiagonal.push_back(
+                {x * 100, (x + distance) * 100, static_cast<float>(x + distance + 1)});
+        }
+    }
+    const std::vector<contactRecord> boundedDiagonal = MatrixAnalysis::boundedRotatedRecords(
+        denseDiagonal, 100, 0, 20000, 10000, 20, 20, 100);
+    if (!require(!boundedDiagonal.empty() && boundedDiagonal.size() <= 100,
+                 "rotated heatmaps aggregate dense strips to their rendering budget")) return 1;
     if (!require(!MatrixAnalysis::supportedOperations().join(QLatin1Char(' ')).contains(QStringLiteral("FFT"), Qt::CaseInsensitive) &&
                  !MatrixAnalysis::supportedOperations().join(QLatin1Char(' ')).contains(QStringLiteral("wavelet"), Qt::CaseInsensitive),
                  "deferred FFT and wavelet operators are not exposed")) return 1;
@@ -476,5 +492,11 @@ int main(int argc, char** argv) {
                      restoredAnalysis.mapCount() == 3,
                      "analysis tab state round-trips")) return 1;
     }
+    TabSession boundedProcessing;
+    boundedProcessing.initialize(QStringLiteral("processing"));
+    boundedProcessing.setProcessingParameter(100.0);
+    boundedProcessing.setProcessingOperator(QStringLiteral("gabor"));
+    if (!require(boundedProcessing.processingParameter() == 12.0,
+                 "processing tabs clamp Gabor sigma before scheduling work")) return 1;
     return 0;
 }
