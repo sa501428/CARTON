@@ -7,6 +7,7 @@ Rectangle {
     id: root
     property var tabSession: null
     signal hoverInfo(string text, bool active)
+    signal contextMenuRequested(var controller, real xFraction, real yFraction)
     color: Theme.appBg
 
     ColumnLayout {
@@ -83,6 +84,9 @@ Rectangle {
                     }
                     onViewportInteracted: if (sourceCell) root.tabSession.notifyViewportInteracted(sourceCell.index)
                     onHoverInfo: function(text, active) { root.hoverInfo(text, active) }
+                    onContextMenuRequested: function(controller, xFraction, yFraction) {
+                        root.contextMenuRequested(controller, xFraction, yFraction)
+                    }
                 }
             }
             ScrollView {

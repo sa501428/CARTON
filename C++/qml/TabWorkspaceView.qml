@@ -11,7 +11,7 @@ Rectangle {
     signal loadRegionsRequested(string format)
     signal hoverInfo(string text, bool active)
     signal toastRequested(string text, string kind)
-    signal bullseyeRequested(var controller, real xFraction, real yFraction)
+    signal contextMenuRequested(var controller, real xFraction, real yFraction)
     signal bullseyeHover(var controller, real xFraction, real yFraction)
     property real sharedCursorX: 0.5
     property real sharedCursorY: 0.5
@@ -185,6 +185,9 @@ Rectangle {
         Rotated45View {
             tabSession: root.tabSession
             onHoverInfo: function(text, active) { root.hoverInfo(text, active) }
+            onContextMenuRequested: function(controller, xFraction, yFraction) {
+                root.contextMenuRequested(controller, xFraction, yFraction)
+            }
         }
     }
 
@@ -193,6 +196,9 @@ Rectangle {
         BullseyeView {
             tabSession: root.tabSession
             onHoverInfo: function(text, active) { root.hoverInfo(text, active) }
+            onContextMenuRequested: function(controller, xFraction, yFraction) {
+                root.contextMenuRequested(controller, xFraction, yFraction)
+            }
         }
     }
 
@@ -202,6 +208,9 @@ Rectangle {
             tabSession: root.tabSession
             onHoverInfo: function(text, active) { root.hoverInfo(text, active) }
             onToastRequested: function(text, kind) { root.toastRequested(text, kind) }
+            onContextMenuRequested: function(controller, xFraction, yFraction) {
+                root.contextMenuRequested(controller, xFraction, yFraction)
+            }
         }
     }
 
@@ -210,6 +219,9 @@ Rectangle {
         ProcessingView {
             tabSession: root.tabSession
             onHoverInfo: function(text, active) { root.hoverInfo(text, active) }
+            onContextMenuRequested: function(controller, xFraction, yFraction) {
+                root.contextMenuRequested(controller, xFraction, yFraction)
+            }
         }
     }
 
@@ -255,8 +267,8 @@ Rectangle {
                             onAnnotationRequested: function(x0, y0, x1, y1) {
                                 root.tabSession.addScopedAnnotation(modelData.index, x0, y0, x1, y1, root.tabSession.layerScope)
                             }
-                            onBullseyeRequested: function(controller, xFraction, yFraction) {
-                                root.bullseyeRequested(controller, xFraction, yFraction)
+                            onContextMenuRequested: function(controller, xFraction, yFraction) {
+                                root.contextMenuRequested(controller, xFraction, yFraction)
                             }
                             onHoverInfo: function(text, active) {
                                 if (!active) root.sharedCursorActive = false
@@ -365,8 +377,8 @@ Rectangle {
                         onAnnotationRequested: function(x0, y0, x1, y1) {
                             root.tabSession.addScopedAnnotation(modelData.index, x0, y0, x1, y1, root.tabSession.layerScope)
                         }
-                        onBullseyeRequested: function(controller, xFraction, yFraction) {
-                            root.bullseyeRequested(controller, xFraction, yFraction)
+                        onContextMenuRequested: function(controller, xFraction, yFraction) {
+                            root.contextMenuRequested(controller, xFraction, yFraction)
                         }
                         onHoverInfo: function(text, active) {
                             if (!active) root.sharedCursorActive = false

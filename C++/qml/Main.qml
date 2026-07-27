@@ -2148,8 +2148,11 @@ ApplicationWindow {
                             hoverActive = active
                         }
                         onToastRequested: function(text, kind) { showToast(text, kind) }
-                        onBullseyeRequested: function(controller, xFraction, yFraction) {
-                            showBullseyeInspector(controller, xFraction, yFraction)
+                        onContextMenuRequested: function(controller, xFraction, yFraction) {
+                            activeController = controller
+                            contextFx = xFraction
+                            contextFy = yFraction
+                            heatmapMenu.popup()
                         }
                         onBullseyeHover: function(controller, xFraction, yFraction) {
                             updateBullseyeInspector(controller, xFraction, yFraction)

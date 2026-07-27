@@ -7,6 +7,7 @@ Rectangle {
     id: root
     property var tabSession: null
     signal hoverInfo(string text, bool active)
+    signal contextMenuRequested(var controller, real xFraction, real yFraction)
     color: Theme.appBg
 
     function formatBp(value) {
@@ -195,10 +196,16 @@ Rectangle {
                                 MouseArea {
                                     anchors.fill: parent
                                     hoverEnabled: true
+                                    acceptedButtons: Qt.LeftButton | Qt.RightButton
                                     property real lastX: 0
                                     onPressed: function(mouse) {
                                         root.tabSession.activeCellIndex = pane.modelData.index
                                         lastX = mouse.x
+                                        if (mouse.button === Qt.RightButton) {
+                                            var fraction = Math.max(0, Math.min(1, mouse.x / Math.max(1, width)))
+                                            root.contextMenuRequested(pane.modelData.controller, fraction, fraction)
+                                            return
+                                        }
                                         if (pane.modelData.controller) pane.modelData.controller.beginInteraction()
                                     }
                                     onPositionChanged: function(mouse) {
