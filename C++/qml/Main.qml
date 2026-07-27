@@ -65,7 +65,6 @@ ApplicationWindow {
     property real bullseyeInspectorX: 0
     property real bullseyeInspectorY: 0
     property int bullseyeInspectorRadiusBins: 12
-
     function showToast(message, kind) {
         toastText = message
         toastKind = kind || "info"
@@ -572,6 +571,62 @@ ApplicationWindow {
             wrapMode: Text.WordWrap
             color: Theme.textPrimary
             text: "CARTON is a Qt/C++ desktop viewer for Hi-C contact maps, inspired by Juicebox core viewer workflows. It supports .hic maps, control maps, normalization, derived display modes, annotations, tracks, saved states, and GPU-backed rendering.\n\nIf using Juicebox-derived workflows in research, cite the original Juicebox publication: Durand, Robinson et al., Cell Systems 2016."
+        }
+    }
+
+    Dialog {
+        id: similarityWarningDialog
+        property var targetController: null
+        property string requestedMode: ""
+        property string requestedLabel: ""
+        property int requestedResolution: 0
+        property int visibleBins: 0
+        title: "Use a local similarity window?"
+        modal: true
+        standardButtons: Dialog.Ok | Dialog.Cancel
+        width: 520
+        background: DialogFrame {}
+        ColumnLayout {
+            anchors.fill: parent
+            spacing: 12
+            Label {
+                Layout.fillWidth: true
+                wrapMode: Text.WordWrap
+                color: Theme.textPrimary
+                text: similarityWarningDialog.requestedLabel + " at " +
+                      similarityWarningDialog.requestedResolution.toLocaleString() +
+                      " bp is finer than 10 kb and can be expensive chromosome-wide. " +
+                      "Continue using only the visible window plus the context below?"
+            }
+            RowLayout {
+                Layout.fillWidth: true
+                Label {
+                    text: "Context on each side"
+                    color: Theme.textSecondary
+                    Layout.fillWidth: true
+                }
+                SpinBox {
+                    id: similarityPaddingBins
+                    from: 0
+                    to: 512
+                    value: 64
+                    editable: true
+                }
+                Label { text: "bins"; color: Theme.textSecondary }
+            }
+            Label {
+                Layout.fillWidth: true
+                wrapMode: Text.WordWrap
+                color: Theme.textMuted
+                font.pixelSize: Theme.textXs
+                text: "The calculation remains intrachromosomal and reuses matrix symmetry. " +
+                      "The current visible span is about " +
+                      similarityWarningDialog.visibleBins.toLocaleString() + " bins before context."
+            }
+        }
+        onAccepted: {
+            if (targetController)
+                targetController.confirmLocalSimilarityMode(requestedMode, similarityPaddingBins.value)
         }
     }
 
@@ -1082,6 +1137,14 @@ ApplicationWindow {
 
                     Connections {
                         target: activeController
+                        function onSimilarityCalculationWarning(matrixType, label, resolution, visibleBins) {
+                            similarityWarningDialog.targetController = activeController
+                            similarityWarningDialog.requestedMode = matrixType
+                            similarityWarningDialog.requestedLabel = label
+                            similarityWarningDialog.requestedResolution = resolution
+                            similarityWarningDialog.visibleBins = visibleBins
+                            similarityWarningDialog.open()
+                        }
                         function onViewChanged() {
                             topTrackCanvas.requestPaint()
                             leftTrackCanvas.requestPaint()

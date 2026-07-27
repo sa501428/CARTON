@@ -194,6 +194,145 @@ std::vector<float> virtual4C(const std::vector<contactRecord>& records, int reso
     return values;
 }
 
+std::vector<contactRecord> similarity(const std::vector<contactRecord>& records,
+                                      SimilarityMetric metric, int resolution,
+                                      qint64 contextStart, qint64 contextEnd,
+                                      qint64 outputX0, qint64 outputX1,
+                                      qint64 outputY0, qint64 outputY1,
+                                      int maximumBins) {
+    resolution = std::max(1, resolution);
+    contextStart = std::max<qint64>(0, (contextStart / resolution) * resolution);
+    contextEnd = ((std::max(contextStart + 1, contextEnd) + resolution - 1) / resolution) * resolution;
+    const int bins = static_cast<int>((contextEnd - contextStart) / resolution);
+    if (bins <= 0 || bins > std::max(1, maximumBins)) return {};
+
+    auto indexFor = [contextStart, resolution](qint64 position) {
+        return static_cast<int>((position - contextStart) / resolution);
+    };
+
+    // Input .hic blocks are sparse and may contain either triangle. Restore
+    // symmetry into sparse rows, then sort/deduplicate in-place to avoid a
+    // dense bins² input allocation and hash-table overhead per row.
+    using SparseEntry = std::pair<int, double>;
+    std::vector<std::vector<SparseEntry>> rows(static_cast<std::size_t>(bins));
+    for (const contactRecord& record : records) {
+        if (!std::isfinite(record.counts)) continue;
+        const int x = indexFor(record.binX);
+        const int y = indexFor(record.binY);
+        if (x < 0 || x >= bins || y < 0 || y >= bins) continue;
+        rows[static_cast<std::size_t>(y)].emplace_back(x, record.counts);
+        if (x != y) rows[static_cast<std::size_t>(x)].emplace_back(y, record.counts);
+    }
+
+    std::vector<double> sums(static_cast<std::size_t>(bins), 0.0);
+    std::vector<double> sumsOfSquares(static_cast<std::size_t>(bins), 0.0);
+    for (int row = 0; row < bins; ++row) {
+        auto& sparseRow = rows[static_cast<std::size_t>(row)];
+        std::sort(sparseRow.begin(), sparseRow.end(),
+                  [](const SparseEntry& a, const SparseEntry& b) { return a.first < b.first; });
+        std::size_t write = 0;
+        for (const SparseEntry& entry : sparseRow) {
+            if (write > 0 && sparseRow[write - 1].first == entry.first) {
+                sparseRow[write - 1].second = entry.second;
+            } else {
+                sparseRow[write++] = entry;
+            }
+        }
+        sparseRow.resize(write);
+        for (const auto& [column, value] : sparseRow) {
+            Q_UNUSED(column);
+            sums[static_cast<std::size_t>(row)] += value;
+            sumsOfSquares[static_cast<std::size_t>(row)] += value * value;
+        }
+    }
+
+    const int xStart = std::clamp(indexFor(outputX0), 0, bins);
+    const int xEnd = std::clamp(
+        static_cast<int>((outputX1 - contextStart + resolution - 1) / resolution), 0, bins);
+    const int yStart = std::clamp(indexFor(outputY0), 0, bins);
+    const int yEnd = std::clamp(
+        static_cast<int>((outputY1 - contextStart + resolution - 1) / resolution), 0, bins);
+    if (xEnd <= xStart || yEnd <= yStart) return {};
+
+    // Canonicalize the requested rectangle into unique upper-triangle pairs.
+    // The second pass only adds reflected pairs not already covered by the
+    // first, avoiding both a hash set and duplicate similarity calculations.
+    std::vector<quint64> pairs;
+    pairs.reserve(static_cast<std::size_t>(xEnd - xStart) * static_cast<std::size_t>(yEnd - yStart));
+    for (int y = yStart; y < yEnd; ++y) {
+        for (int x = xStart; x < xEnd; ++x) {
+            if (x < y) continue;
+            pairs.push_back((static_cast<quint64>(static_cast<quint32>(x)) << 32U) |
+                            static_cast<quint32>(y));
+        }
+    }
+    for (int y = yStart; y < yEnd; ++y) {
+        for (int x = xStart; x < xEnd; ++x) {
+            if (y <= x) continue;
+            const bool reflectedAlreadyPresent =
+                y >= xStart && y < xEnd && x >= yStart && x < yEnd;
+            if (reflectedAlreadyPresent) continue;
+            pairs.push_back((static_cast<quint64>(static_cast<quint32>(y)) << 32U) |
+                            static_cast<quint32>(x));
+        }
+    }
+
+    auto sparseDot = [&rows](int a, int b) {
+        const auto& left = rows[static_cast<std::size_t>(a)];
+        const auto& right = rows[static_cast<std::size_t>(b)];
+        std::size_t i = 0;
+        std::size_t j = 0;
+        double dot = 0.0;
+        while (i < left.size() && j < right.size()) {
+            if (left[i].first < right[j].first) {
+                ++i;
+            } else if (right[j].first < left[i].first) {
+                ++j;
+            } else {
+                dot += left[i].second * right[j].second;
+                ++i;
+                ++j;
+            }
+        }
+        return dot;
+    };
+
+    std::vector<contactRecord> output;
+    output.reserve(pairs.size());
+    for (const quint64 key : pairs) {
+        const int a = static_cast<int>(key >> 32U);
+        const int b = static_cast<int>(key & 0xffffffffU);
+        const double dot = sparseDot(a, b);
+        double value = 0.0;
+        if (metric == SimilarityMetric::Pearson) {
+            const double count = static_cast<double>(bins);
+            const double numerator = dot - sums[static_cast<std::size_t>(a)] *
+                                               sums[static_cast<std::size_t>(b)] / count;
+            const double varianceA = sumsOfSquares[static_cast<std::size_t>(a)] -
+                                     sums[static_cast<std::size_t>(a)] *
+                                         sums[static_cast<std::size_t>(a)] / count;
+            const double varianceB = sumsOfSquares[static_cast<std::size_t>(b)] -
+                                     sums[static_cast<std::size_t>(b)] *
+                                         sums[static_cast<std::size_t>(b)] / count;
+            const double denominator = std::sqrt(std::max(0.0, varianceA) * std::max(0.0, varianceB));
+            if (denominator <= 0.0) continue;
+            value = std::clamp(numerator / denominator, -1.0, 1.0);
+        } else {
+            const double denominator =
+                std::sqrt(sumsOfSquares[static_cast<std::size_t>(a)] *
+                          sumsOfSquares[static_cast<std::size_t>(b)]);
+            if (denominator <= 0.0) continue;
+            value = std::clamp(dot / denominator, -1.0, 1.0);
+        }
+        contactRecord record;
+        record.binX = static_cast<int32_t>(contextStart + static_cast<qint64>(a) * resolution);
+        record.binY = static_cast<int32_t>(contextStart + static_cast<qint64>(b) * resolution);
+        record.counts = static_cast<float>(value);
+        output.push_back(record);
+    }
+    return output;
+}
+
 DenseMatrix process(const DenseMatrix& input, const QString& requestedOperation,
                     double parameter, double threshold) {
     if (!input.valid()) return input;

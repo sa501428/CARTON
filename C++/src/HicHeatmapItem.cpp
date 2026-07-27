@@ -295,21 +295,16 @@ QColor HicHeatmapItem::colorForValue(float value) const {
         const double midpoint = low < 0.0 && high > 0.0 ? 0.0 : (low + high) * 0.5;
         const double positiveRange = std::max(0.000001, high - midpoint);
         const double negativeRange = std::max(0.000001, midpoint - low);
-        int r = 255;
-        int g = 255;
-        int b = 255;
+        QColor mapped = QColor("#ffffff");
         if (scaled >= midpoint) {
             const double t = std::clamp((scaled - midpoint) / positiveRange, 0.0, 1.0);
-            r = 255;
-            g = static_cast<int>(255.0 * (1.0 - t));
-            b = static_cast<int>(255.0 * (1.0 - t));
+            mapped = interpolateColor(QColor("#ffffff"), QColor("#b2182b"), t);
         } else {
             const double t = std::clamp((midpoint - scaled) / negativeRange, 0.0, 1.0);
-            b = 255;
-            r = static_cast<int>(255.0 * (1.0 - t));
-            g = static_cast<int>(255.0 * (1.0 - t));
+            mapped = interpolateColor(QColor("#ffffff"), QColor("#2166ac"), t);
         }
-        return QColor(std::clamp(r, 0, 255), std::clamp(g, 0, 255), std::clamp(b, 0, 255), 245);
+        mapped.setAlpha(245);
+        return mapped;
     }
 
     double scaledValue = static_cast<double>(std::max(0.0f, value));

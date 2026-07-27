@@ -66,7 +66,14 @@ Rectangle {
         chromosomeX.currentIndex = Math.max(0, chromosomeX.find(root.controller.chrX))
         chromosomeY.currentIndex = Math.max(0, chromosomeY.find(root.controller.chrY))
         resolutionBox.currentIndex = Math.max(0, resolutionBox.find(String(root.controller.resolution)))
-        matrixBox.currentIndex = Math.max(0, matrixBox.find(root.controller.matrixType))
+        var matrixIndex = 0
+        for (var i = 0; i < matrixBox.model.length; ++i) {
+            if (matrixBox.model[i].id === root.controller.matrixType) {
+                matrixIndex = i
+                break
+            }
+        }
+        matrixBox.currentIndex = matrixIndex
         normBox.currentIndex = Math.max(0, normBox.find(root.controller.norm))
         colorMapBox.currentIndex = Math.max(0, colorMapBox.find(root.controller.colorMap))
     }
@@ -83,7 +90,7 @@ Rectangle {
         chromosomeX.model = root.controller.chromosomeNames()
         chromosomeY.model = root.controller.chromosomeNames()
         resolutionBox.model = root.controller.resolutions()
-        matrixBox.model = root.controller.matrixTypes()
+        matrixBox.model = root.controller.matrixTypeOptions()
         normBox.model = root.controller.normalizations()
         syncControllerSelections()
     }
@@ -94,6 +101,7 @@ Rectangle {
     Connections {
         target: root.controller
         function onMetadataChanged() { root.syncControllerModels() }
+        function onControlReadyChanged() { root.syncControllerModels() }
         function onViewChanged() { root.syncControllerSelections() }
         function onColorMapChanged() { root.syncControllerSelections() }
     }
@@ -333,7 +341,14 @@ Rectangle {
                         }
                     }
                     Label { text: "Matrix display"; color: Theme.textSecondary; font.pixelSize: Theme.textXs }
-                    AppComboBox { id: matrixBox; Layout.fillWidth: true; enabled: !!root.controller; onActivated: root.controller.matrixType = currentText }
+                    AppComboBox {
+                        id: matrixBox
+                        Layout.fillWidth: true
+                        enabled: !!root.controller
+                        textRole: "label"
+                        valueRole: "id"
+                        onActivated: root.controller.matrixType = currentValue
+                    }
                     Label { text: "Normalization"; color: Theme.textSecondary; font.pixelSize: Theme.textXs }
                     AppComboBox { id: normBox; Layout.fillWidth: true; enabled: root.controller && model.length > 0; onActivated: root.controller.norm = currentText }
                     AppTextField { id: topLocationField; Layout.fillWidth: true; placeholderText: "Horizontal chr:start-end"; enabled: root.controller && root.controller.filePath.length > 0; onAccepted: root.controller.goTo(text, leftLocationField.text.length > 0 ? leftLocationField.text : text) }

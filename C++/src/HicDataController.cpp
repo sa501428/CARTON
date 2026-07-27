@@ -1,5 +1,6 @@
 #include "HicDataController.h"
 #include "GenomicTrackReader.h"
+#include "MatrixAnalysis.h"
 #include "WorkspaceListModel.h"
 
 #include <QtConcurrent>
@@ -33,8 +34,8 @@
 
 namespace {
 constexpr int kRecentLimit = 10;
-constexpr int kMinPearsonResolution = 50000;
-constexpr int kMaxPearsonBins = 1200;
+constexpr int kSimilarityPromptResolution = 10000;
+constexpr int kMaxSimilarityBins = 1800;
 
 size_t appendCurlText(void* contents, size_t size, size_t nmemb, void* userp) {
     const size_t total = size * nmemb;
@@ -127,7 +128,12 @@ HicDataController::HicDataController(QObject* parent)
             setStatus(QStringLiteral("Failed to open control map: %1").arg(result.error));
         }
         emit controlReadyChanged();
-        if (m_controlReady && matrixNeedsControl(m_matrixType)) {
+        if (!m_controlReady && matrixNeedsControl(m_matrixType)) {
+            m_matrixType = QStringLiteral("observed");
+            clearLoadedRegion();
+            emit viewChanged();
+            scheduleRequest();
+        } else if (m_controlReady && matrixNeedsControl(m_matrixType)) {
             clearLoadedRegion();
             scheduleRequest();
         }
@@ -162,8 +168,8 @@ HicDataController::HicDataController(QObject* parent)
                                                                                result.hasControl ? result.controlTile.records : std::vector<contactRecord>());
         std::vector<contactRecord> displayControlRecords;
         if (result.hasControl && matrixIsVs(m_matrixType)) {
-            if (m_matrixType == QStringLiteral("pearsonvs")) {
-                displayControlRecords = transformPearsonLike(result.controlTile.records);
+            if (matrixIsSimilarity(m_matrixType)) {
+                displayControlRecords = transformSimilarityLike(result.controlTile.records, m_matrixType);
             } else if (m_matrixType == QStringLiteral("logvs")) {
                 displayControlRecords = result.controlTile.records;
             } else if (m_matrixType == QStringLiteral("logeovs")) {
@@ -651,15 +657,56 @@ QVariantList HicDataController::normalizations() const {
 }
 
 QVariantList HicDataController::matrixTypes() const {
-    return {
-        QStringLiteral("observed"), QStringLiteral("log"), QStringLiteral("expected"), QStringLiteral("oe"),
-        QStringLiteral("logoe"), QStringLiteral("explogoe"), QStringLiteral("control"),
-        QStringLiteral("logcontrol"), QStringLiteral("controloe"), QStringLiteral("pearson"),
-        QStringLiteral("controlpearson"), QStringLiteral("pearsonvs"), QStringLiteral("vs"),
-        QStringLiteral("logvs"), QStringLiteral("oevs"), QStringLiteral("logeovs"),
-        QStringLiteral("ratio"), QStringLiteral("ratio1"), QStringLiteral("logratio"),
-        QStringLiteral("diff"), QStringLiteral("oeratio")
+    QVariantList values;
+    for (const QVariant& option : matrixTypeOptions()) {
+        values.push_back(option.toMap().value(QStringLiteral("id")));
+    }
+    return values;
+}
+
+QVariantList HicDataController::matrixTypeOptions() const {
+    QVariantList values;
+    auto add = [&values](const QString& id, const QString& label, const QString& group) {
+        QVariantMap option;
+        option[QStringLiteral("id")] = id;
+        option[QStringLiteral("label")] = label;
+        option[QStringLiteral("group")] = group;
+        values.push_back(option);
     };
+
+    add(QStringLiteral("observed"), QStringLiteral("Contacts · Observed"), QStringLiteral("Contacts"));
+    add(QStringLiteral("log"), QStringLiteral("Contacts · Log observed"), QStringLiteral("Contacts"));
+    add(QStringLiteral("expected"), QStringLiteral("Contacts · Expected"), QStringLiteral("Contacts"));
+    add(QStringLiteral("oe"), QStringLiteral("Contacts · O/E"), QStringLiteral("Contacts"));
+    add(QStringLiteral("logoe"), QStringLiteral("Contacts · Log(O/E)"), QStringLiteral("Contacts"));
+    add(QStringLiteral("explogoe"), QStringLiteral("Contacts · exp(Log(O/E))"), QStringLiteral("Contacts"));
+    add(QStringLiteral("pearson"), QStringLiteral("Similarity · Pearson (O/E)"), QStringLiteral("Similarity"));
+    add(QStringLiteral("cosineobserved"), QStringLiteral("Similarity · Cosine (observed)"), QStringLiteral("Similarity"));
+    add(QStringLiteral("cosineoe"), QStringLiteral("Similarity · Cosine (O/E)"), QStringLiteral("Similarity"));
+
+    if (!m_controlReady) return values;
+
+    add(QStringLiteral("control"), QStringLiteral("Control · Observed"), QStringLiteral("Control"));
+    add(QStringLiteral("logcontrol"), QStringLiteral("Control · Log observed"), QStringLiteral("Control"));
+    add(QStringLiteral("controloe"), QStringLiteral("Control · O/E"), QStringLiteral("Control"));
+    add(QStringLiteral("controlpearson"), QStringLiteral("Control · Pearson (O/E)"), QStringLiteral("Control"));
+    add(QStringLiteral("controlcosineobserved"), QStringLiteral("Control · Cosine (observed)"), QStringLiteral("Control"));
+    add(QStringLiteral("controlcosineoe"), QStringLiteral("Control · Cosine (O/E)"), QStringLiteral("Control"));
+
+    add(QStringLiteral("vs"), QStringLiteral("Split A/B · Observed"), QStringLiteral("A/B comparison"));
+    add(QStringLiteral("logvs"), QStringLiteral("Split A/B · Log observed"), QStringLiteral("A/B comparison"));
+    add(QStringLiteral("oevs"), QStringLiteral("Split A/B · O/E"), QStringLiteral("A/B comparison"));
+    add(QStringLiteral("logeovs"), QStringLiteral("Split A/B · Log(O/E)"), QStringLiteral("A/B comparison"));
+    add(QStringLiteral("pearsonvs"), QStringLiteral("Split A/B · Pearson (O/E)"), QStringLiteral("A/B comparison"));
+    add(QStringLiteral("cosineobservedvs"), QStringLiteral("Split A/B · Cosine (observed)"), QStringLiteral("A/B comparison"));
+    add(QStringLiteral("cosineoevs"), QStringLiteral("Split A/B · Cosine (O/E)"), QStringLiteral("A/B comparison"));
+
+    add(QStringLiteral("ratio"), QStringLiteral("Compare · A/B ratio"), QStringLiteral("A/B comparison"));
+    add(QStringLiteral("ratio1"), QStringLiteral("Compare · A/(B+1)"), QStringLiteral("A/B comparison"));
+    add(QStringLiteral("logratio"), QStringLiteral("Compare · log2(A/B)"), QStringLiteral("A/B comparison"));
+    add(QStringLiteral("diff"), QStringLiteral("Compare · A−B"), QStringLiteral("A/B comparison"));
+    add(QStringLiteral("oeratio"), QStringLiteral("Compare · O/E ratio"), QStringLiteral("A/B comparison"));
+    return values;
 }
 
 QVariantList HicDataController::trackSummaries() const {
@@ -2032,12 +2079,31 @@ void HicDataController::setMatrixType(const QString& value) {
         emit viewChanged();
         return;
     }
+    if (similarityNeedsConfirmation(value)) {
+        requestSimilarityConfirmation(value);
+        emit viewChanged();
+        return;
+    }
     m_matrixType = value;
     clearLoadedRegion();
     m_colorMaxAuto = true;
-    if (matrixIsDivergent(m_matrixType)) {
-        m_colorMin = matrixIsPearson(m_matrixType) ? -1.0 : -5.0;
-        m_colorMax = matrixIsPearson(m_matrixType) ? 1.0 : 5.0;
+    if (matrixIsPearson(m_matrixType)) {
+        m_colorMin = -1.0;
+        m_colorMax = 1.0;
+        if (m_colorMap != QStringLiteral("Blue-White-Red")) {
+            m_colorMap = QStringLiteral("Blue-White-Red");
+            emit colorMapChanged();
+        }
+    } else if (matrixIsCosine(m_matrixType)) {
+        m_colorMin = 0.0;
+        m_colorMax = 1.0;
+        if (m_colorMap != QStringLiteral("Viridis")) {
+            m_colorMap = QStringLiteral("Viridis");
+            emit colorMapChanged();
+        }
+    } else if (matrixIsDivergent(m_matrixType)) {
+        m_colorMin = -5.0;
+        m_colorMax = 5.0;
     } else {
         m_colorMin = 0.0;
         m_colorMax = 50.0;
@@ -2066,6 +2132,10 @@ void HicDataController::setResolution(int value) {
     clampRegion();
     applyViewportAspectRatio();
     emit viewChanged();
+    if (similarityNeedsConfirmation(m_matrixType)) {
+        requestSimilarityConfirmation(m_matrixType);
+        return;
+    }
     scheduleRequest();
 }
 
@@ -2096,15 +2166,44 @@ void HicDataController::setColorMin(double value) {
 
 void HicDataController::resetColorScale() {
     m_colorMaxAuto = true;
-    if (matrixIsDivergent(m_matrixType)) {
-        m_colorMin = matrixIsPearson(m_matrixType) ? -1.0 : -5.0;
-        m_colorMax = matrixIsPearson(m_matrixType) ? 1.0 : 5.0;
+    if (matrixIsPearson(m_matrixType)) {
+        m_colorMin = -1.0;
+        m_colorMax = 1.0;
+    } else if (matrixIsCosine(m_matrixType)) {
+        m_colorMin = 0.0;
+        m_colorMax = 1.0;
+    } else if (matrixIsDivergent(m_matrixType)) {
+        m_colorMin = -5.0;
+        m_colorMax = 5.0;
     } else {
         m_colorMin = 0.0;
         m_colorMax = 50.0;
     }
     emit colorMaxChanged();
     scheduleRequest();
+}
+
+void HicDataController::confirmLocalSimilarityMode(const QString& matrixType, int paddingBins) {
+    if (!matrixIsSimilarity(matrixType)) return;
+    const qint64 resolution = std::max<qint64>(1, m_resolution);
+    const qint64 visibleSpan = std::max(m_x1, m_y1) - std::min(m_x0, m_y0);
+    const int visibleBins =
+        static_cast<int>((std::max<qint64>(0, visibleSpan) + resolution - 1) / resolution);
+    const int maximumPadding = std::max(0, (kMaxSimilarityBins - visibleBins) / 2);
+    const int requestedPadding = std::clamp(paddingBins, 0, 512);
+    m_approvedLocalSimilarityMode = matrixType;
+    m_approvedLocalSimilarityResolution = m_resolution;
+    m_similarityPaddingBins = std::min(requestedPadding, maximumPadding);
+    if (m_similarityPaddingBins != requestedPadding) {
+        setStatus(QStringLiteral("Similarity context was capped at %1 bins per side to stay within the %2-bin compute limit.")
+                      .arg(m_similarityPaddingBins).arg(kMaxSimilarityBins));
+    }
+    if (m_matrixType == matrixType) {
+        clearLoadedRegion();
+        scheduleRequest();
+    } else {
+        setMatrixType(matrixType);
+    }
 }
 
 void HicDataController::setColorMap(const QString& value) {
@@ -2839,7 +2938,9 @@ bool HicDataController::matrixNeedsControl(const QString& matrixType) const {
 
 bool HicDataController::matrixNeedsPrimary(const QString& matrixType) const {
     return !(matrixType == QStringLiteral("control") || matrixType == QStringLiteral("logcontrol") ||
-             matrixType == QStringLiteral("controloe") || matrixType == QStringLiteral("controlpearson"));
+             matrixType == QStringLiteral("controloe") || matrixType == QStringLiteral("controlpearson") ||
+             matrixType == QStringLiteral("controlcosineobserved") ||
+             matrixType == QStringLiteral("controlcosineoe"));
 }
 
 bool HicDataController::controlSupportsCurrentView(QString* reason) const {
@@ -2889,6 +2990,14 @@ bool HicDataController::matrixIsPearson(const QString& matrixType) const {
     return matrixType.contains(QStringLiteral("pearson"));
 }
 
+bool HicDataController::matrixIsCosine(const QString& matrixType) const {
+    return matrixType.contains(QStringLiteral("cosine"));
+}
+
+bool HicDataController::matrixIsSimilarity(const QString& matrixType) const {
+    return matrixIsPearson(matrixType) || matrixIsCosine(matrixType);
+}
+
 bool HicDataController::matrixIsDivergent(const QString& matrixType) const {
     return matrixType == QStringLiteral("oe") || matrixType == QStringLiteral("controloe") ||
            matrixType == QStringLiteral("logoe") || matrixType == QStringLiteral("explogoe") ||
@@ -2897,11 +3006,39 @@ bool HicDataController::matrixIsDivergent(const QString& matrixType) const {
            matrixType == QStringLiteral("oevs") || matrixType == QStringLiteral("logeovs");
 }
 
+QString HicDataController::matrixTypeLabel(const QString& matrixType) const {
+    const QVariantList options = matrixTypeOptions();
+    for (const QVariant& value : options) {
+        const QVariantMap option = value.toMap();
+        if (option.value(QStringLiteral("id")).toString() == matrixType)
+            return option.value(QStringLiteral("label")).toString();
+    }
+    return matrixType;
+}
+
+bool HicDataController::similarityNeedsConfirmation(const QString& matrixType) const {
+    return matrixIsSimilarity(matrixType) && m_resolution > 0 &&
+           m_resolution < kSimilarityPromptResolution &&
+           (m_approvedLocalSimilarityMode != matrixType ||
+            m_approvedLocalSimilarityResolution != m_resolution);
+}
+
+void HicDataController::requestSimilarityConfirmation(const QString& matrixType) {
+    const qint64 resolution = std::max<qint64>(1, m_resolution);
+    const qint64 origin = std::min(m_x0, m_y0);
+    const qint64 end = std::max(m_x1, m_y1);
+    const int bins = static_cast<int>((std::max<qint64>(0, end - origin) + resolution - 1) / resolution);
+    setStatus(QStringLiteral("%1 bp similarity can be expensive; choose a bounded local calculation to continue.")
+                  .arg(m_resolution));
+    emit similarityCalculationWarning(matrixType, matrixTypeLabel(matrixType), m_resolution, bins);
+}
+
 QString HicDataController::primaryDataMatrixType(const QString& matrixType) const {
     if (matrixType == QStringLiteral("oe") || matrixType == QStringLiteral("logoe") ||
         matrixType == QStringLiteral("explogoe") || matrixType == QStringLiteral("oeratio") ||
         matrixType == QStringLiteral("oevs") || matrixType == QStringLiteral("logeovs") ||
-        matrixType == QStringLiteral("pearson") || matrixType == QStringLiteral("pearsonvs")) {
+        matrixType == QStringLiteral("pearson") || matrixType == QStringLiteral("pearsonvs") ||
+        matrixType == QStringLiteral("cosineoe") || matrixType == QStringLiteral("cosineoevs")) {
         return QStringLiteral("oe");
     }
     if (matrixType == QStringLiteral("expected")) {
@@ -2913,7 +3050,8 @@ QString HicDataController::primaryDataMatrixType(const QString& matrixType) cons
 QString HicDataController::controlDataMatrixType(const QString& matrixType) const {
     if (matrixType == QStringLiteral("controloe") || matrixType == QStringLiteral("oeratio") ||
         matrixType == QStringLiteral("oevs") || matrixType == QStringLiteral("logeovs") ||
-        matrixType == QStringLiteral("controlpearson") || matrixType == QStringLiteral("pearsonvs")) {
+        matrixType == QStringLiteral("controlpearson") || matrixType == QStringLiteral("pearsonvs") ||
+        matrixType == QStringLiteral("controlcosineoe") || matrixType == QStringLiteral("cosineoevs")) {
         return QStringLiteral("oe");
     }
     return QStringLiteral("observed");
@@ -2925,19 +3063,16 @@ bool HicDataController::validateMatrixMode(const QString& matrixType) {
         setStatus(QStringLiteral("%1 is not available for whole-genome view.").arg(matrixType));
         return false;
     }
-    if ((matrixIsPearson(matrixType) || matrixIsVs(matrixType)) && m_chrX != m_chrY) {
+    if ((matrixIsSimilarity(matrixType) || matrixIsVs(matrixType)) && m_chrX != m_chrY) {
         setStatus(QStringLiteral("%1 is only available for intrachromosomal views.").arg(matrixType));
         return false;
     }
-    if (matrixIsPearson(matrixType)) {
-        if (m_resolution > 0 && m_resolution < kMinPearsonResolution) {
-            setStatus(QStringLiteral("Pearson modes are available at %1 bp resolution or coarser.").arg(kMinPearsonResolution));
-            return false;
-        }
-        const qint64 span = std::max<qint64>(m_x1 - m_x0, m_y1 - m_y0);
+    if (matrixIsSimilarity(matrixType)) {
+        const qint64 span = std::max(m_x1, m_y1) - std::min(m_x0, m_y0);
         const qint64 bins = (span + std::max(1, m_resolution) - 1) / std::max(1, m_resolution);
-        if (bins > kMaxPearsonBins) {
-            setStatus(QStringLiteral("Pearson view is too large (%1 bins); zoom in before enabling Pearson.").arg(bins));
+        if (bins > kMaxSimilarityBins) {
+            setStatus(QStringLiteral("%1 context is too large (%2 bins); zoom in before enabling it.")
+                          .arg(matrixTypeLabel(matrixType)).arg(bins));
             return false;
         }
     }
@@ -3006,11 +3141,9 @@ std::vector<contactRecord> HicDataController::transformRecordsForDisplay(const Q
     if (matrixType == QStringLiteral("log") || matrixType == QStringLiteral("logvs")) {
         return primary;
     }
-    if (matrixType == QStringLiteral("pearson")) {
-        return transformPearsonLike(primary);
-    }
-    if (matrixType == QStringLiteral("controlpearson")) {
-        return transformPearsonLike(control);
+    if (matrixIsSimilarity(matrixType)) {
+        const bool controlOnly = matrixType.startsWith(QStringLiteral("control"));
+        return transformSimilarityLike(controlOnly ? control : primary, matrixType);
     }
     if (matrixType == QStringLiteral("ratio") || matrixType == QStringLiteral("ratio1") ||
         matrixType == QStringLiteral("logratio") || matrixType == QStringLiteral("diff") ||
@@ -3024,80 +3157,32 @@ std::vector<contactRecord> HicDataController::transformRecordsForDisplay(const Q
         }
         return out;
     }
-    if (matrixType == QStringLiteral("pearsonvs")) {
-        return transformPearsonLike(primary);
-    }
     return primary;
 }
 
-std::vector<contactRecord> HicDataController::transformPearsonLike(const std::vector<contactRecord>& records) const {
+std::vector<contactRecord> HicDataController::transformSimilarityLike(
+    const std::vector<contactRecord>& records, const QString& matrixType) const {
     const qint64 resolution = std::max<qint64>(1, m_resolution);
-    const qint64 origin = (std::min(m_x0, m_y0) / resolution) * resolution;
-    const qint64 end = ((std::max(m_x1, m_y1) + resolution - 1) / resolution) * resolution;
-    const int bins = static_cast<int>((end - origin) / resolution);
-    if (bins <= 0 || bins > kMaxPearsonBins) {
-        return {};
-    }
-
-    std::vector<double> matrix(static_cast<std::size_t>(bins) * static_cast<std::size_t>(bins), 0.0);
-    auto indexFor = [&](qint64 genomePosition) -> int {
-        return static_cast<int>((genomePosition - origin) / resolution);
-    };
-    auto setValue = [&](int row, int col, double value) {
-        if (row >= 0 && row < bins && col >= 0 && col < bins) {
-            matrix[static_cast<std::size_t>(row) * bins + col] = value;
-        }
-    };
-
-    for (const contactRecord& record : records) {
-        const int x = indexFor(record.binX);
-        const int y = indexFor(record.binY);
-        setValue(y, x, record.counts);
-        if (x != y) {
-            setValue(x, y, record.counts);
-        }
-    }
-
-    std::vector<double> means(bins, 0.0);
-    std::vector<double> sumsOfSquares(bins, 0.0);
-    for (int row = 0; row < bins; ++row) {
-        double sum = 0.0;
-        for (int col = 0; col < bins; ++col) {
-            sum += matrix[static_cast<std::size_t>(row) * bins + col];
-        }
-        means[row] = sum / bins;
-        double ss = 0.0;
-        for (int col = 0; col < bins; ++col) {
-            const double centered = matrix[static_cast<std::size_t>(row) * bins + col] - means[row];
-            ss += centered * centered;
-        }
-        sumsOfSquares[row] = ss;
-    }
-
-    const int xStart = std::max(0, indexFor(m_x0));
-    const int xEnd = std::min(bins, static_cast<int>((m_x1 - origin + resolution - 1) / resolution));
-    const int yStart = std::max(0, indexFor(m_y0));
-    const int yEnd = std::min(bins, static_cast<int>((m_y1 - origin + resolution - 1) / resolution));
-    std::vector<contactRecord> out;
-    out.reserve(static_cast<std::size_t>(std::max(0, xEnd - xStart)) * static_cast<std::size_t>(std::max(0, yEnd - yStart)));
-    for (int y = yStart; y < yEnd; ++y) {
-        for (int x = xStart; x < xEnd; ++x) {
-            double dot = 0.0;
-            for (int k = 0; k < bins; ++k) {
-                const double a = matrix[static_cast<std::size_t>(y) * bins + k] - means[y];
-                const double b = matrix[static_cast<std::size_t>(x) * bins + k] - means[x];
-                dot += a * b;
-            }
-            const double denom = std::sqrt(sumsOfSquares[y] * sumsOfSquares[x]);
-            const double corr = denom > 0.0 ? std::clamp(dot / denom, -1.0, 1.0) : (x == y ? 1.0 : 0.0);
-            contactRecord record;
-            record.binX = static_cast<int32_t>(origin + static_cast<qint64>(x) * resolution);
-            record.binY = static_cast<int32_t>(origin + static_cast<qint64>(y) * resolution);
-            record.counts = static_cast<float>(corr);
-            out.push_back(record);
-        }
-    }
-    return out;
+    const int paddingBins =
+        (m_resolution < kSimilarityPromptResolution &&
+         m_approvedLocalSimilarityMode == matrixType &&
+         m_approvedLocalSimilarityResolution == m_resolution)
+            ? m_similarityPaddingBins
+            : 20;
+    const qint64 padding = static_cast<qint64>(paddingBins) * resolution;
+    const qint64 chromosomeEnd = std::max<qint64>(resolution, chromosomeLength(m_chrX));
+    const qint64 contextStart =
+        std::max<qint64>(0, ((std::min(m_x0, m_y0) - padding) / resolution) * resolution);
+    const qint64 contextEnd = std::min<qint64>(
+        chromosomeEnd,
+        ((std::max(m_x1, m_y1) + padding + resolution - 1) / resolution) * resolution);
+    const MatrixAnalysis::SimilarityMetric metric =
+        matrixIsPearson(matrixType) ? MatrixAnalysis::SimilarityMetric::Pearson
+                                    : MatrixAnalysis::SimilarityMetric::Cosine;
+    return MatrixAnalysis::similarity(records, metric, static_cast<int>(resolution),
+                                      contextStart, contextEnd,
+                                      m_x0, m_x1, m_y0, m_y1,
+                                      kMaxSimilarityBins);
 }
 
 std::vector<contactRecord> HicDataController::mergeRecordPairs(const std::vector<contactRecord>& primary,
@@ -3288,6 +3373,9 @@ void HicDataController::updateAutoColorScale(const std::vector<contactRecord>& r
     if (matrixIsPearson(m_matrixType)) {
         m_colorMin = -1.0;
         m_colorMax = 1.0;
+    } else if (matrixIsCosine(m_matrixType)) {
+        m_colorMin = 0.0;
+        m_colorMax = 1.0;
     } else if (matrixIsDivergent(m_matrixType)) {
         m_colorMin = -5.0;
         m_colorMax = 5.0;
@@ -3375,6 +3463,32 @@ void HicDataController::orientTileForRequestedAxes(HicTile& tile) const {
 HicTileKey HicDataController::paddedRequestKey(const HicTileKey& visibleKey) const {
     HicTileKey key = visibleKey;
     const qint64 resolution = std::max<qint64>(1, key.resolution);
+    if (matrixIsSimilarity(m_matrixType)) {
+        const int paddingBins =
+            (m_resolution < kSimilarityPromptResolution &&
+             m_approvedLocalSimilarityMode == m_matrixType &&
+             m_approvedLocalSimilarityResolution == m_resolution)
+                ? m_similarityPaddingBins
+                : 20;
+        const qint64 padding = resolution * static_cast<qint64>(paddingBins);
+        const qint64 chromosomeEnd =
+            std::max<qint64>(resolution, chromosomeLength(QString::fromStdString(key.chrX)));
+        auto alignDown = [resolution](qint64 value) {
+            return (value / resolution) * resolution;
+        };
+        auto alignUp = [resolution](qint64 value) {
+            return ((value + resolution - 1) / resolution) * resolution;
+        };
+        const qint64 contextStart = alignDown(std::max<qint64>(
+            0, std::min(visibleKey.x0, visibleKey.y0) - padding));
+        const qint64 contextEnd = std::min<qint64>(
+            chromosomeEnd, alignUp(std::max(visibleKey.x1, visibleKey.y1) + padding));
+        // Similarity compares contact-profile rows over one common reference
+        // interval, so request a square context even for an off-diagonal view.
+        key.x0 = key.y0 = contextStart;
+        key.x1 = key.y1 = std::max(contextStart + resolution, contextEnd);
+        return key;
+    }
     const qint64 xSpan = std::max<qint64>(resolution, visibleKey.x1 - visibleKey.x0);
     const qint64 ySpan = std::max<qint64>(resolution, visibleKey.y1 - visibleKey.y0);
     qint64 xPad = std::min<qint64>(resolution * 20LL, std::max<qint64>(resolution * 2LL, xSpan / 10));

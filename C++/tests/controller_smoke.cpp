@@ -6,6 +6,7 @@
 #include <QUrl>
 
 #include <limits>
+#include <cmath>
 
 #include "HicDataController.h"
 #include "HicTileCache.h"
@@ -49,6 +50,52 @@ int main(int argc, char** argv) {
     if (!require(cache.tileCount() <= 1 && cache.recordCount() <= 1, "cache trims after limit change")) return 1;
 
     HicDataController controller;
+    const QVariantList matrixOptions = controller.matrixTypeOptions();
+    bool hasCosineObserved = false;
+    bool hasCosineOe = false;
+    bool exposedControlModeWithoutControl = false;
+    for (const QVariant& value : matrixOptions) {
+        const QString id = value.toMap().value(QStringLiteral("id")).toString();
+        hasCosineObserved |= id == QStringLiteral("cosineobserved");
+        hasCosineOe |= id == QStringLiteral("cosineoe");
+        exposedControlModeWithoutControl |= id.contains(QStringLiteral("control")) ||
+                                            id.endsWith(QStringLiteral("vs"));
+    }
+    if (!require(hasCosineObserved && hasCosineOe && !exposedControlModeWithoutControl,
+                 "matrix options organize cosine modes and hide A/B modes until control is ready")) return 1;
+
+    std::vector<contactRecord> similarityInput;
+    auto addSimilarityValue = [&similarityInput](int x, int y, float value) {
+        contactRecord record;
+        record.binX = x * 100;
+        record.binY = y * 100;
+        record.counts = value;
+        similarityInput.push_back(record);
+    };
+    addSimilarityValue(0, 0, 1.0f);
+    addSimilarityValue(1, 0, 2.0f);
+    addSimilarityValue(2, 0, 3.0f);
+    addSimilarityValue(1, 1, 4.0f);
+    addSimilarityValue(2, 2, 1.0f);
+    const std::vector<contactRecord> pearson = MatrixAnalysis::similarity(
+        similarityInput, MatrixAnalysis::SimilarityMetric::Pearson, 100,
+        0, 300, 0, 300, 0, 300);
+    const std::vector<contactRecord> cosine = MatrixAnalysis::similarity(
+        similarityInput, MatrixAnalysis::SimilarityMetric::Cosine, 100,
+        0, 300, 0, 300, 0, 300);
+    auto similarityAt = [](const std::vector<contactRecord>& records, int x, int y) {
+        for (const contactRecord& record : records)
+            if (record.binX == x && record.binY == y) return record.counts;
+        return std::numeric_limits<float>::quiet_NaN();
+    };
+    if (!require(pearson.size() == 6 && cosine.size() == 6,
+                 "similarity computes one symmetric triangle without redundant cells")) return 1;
+    if (!require(std::abs(similarityAt(pearson, 100, 0) + 0.5f) < 0.0001f,
+                 "Pearson mean-centers O/E-style row vectors")) return 1;
+    if (!require(std::abs(similarityAt(cosine, 100, 0) -
+                          static_cast<float>(10.0 / std::sqrt(280.0))) < 0.0001f,
+                 "cosine uses uncentered row vectors")) return 1;
+
     const QString cytobands = temporary.filePath(QStringLiteral("cytoBand.txt"));
     if (!require(writeFile(cytobands,
             "chr1\t0\t100\tp11\tgneg\nchr1\t100\t180\tp12\tgpos50\nchr1\t180\t220\tacen\tacen\n"),

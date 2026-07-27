@@ -170,6 +170,7 @@ public:
     Q_INVOKABLE QVariantList resolutions() const;
     Q_INVOKABLE QVariantList normalizations() const;
     Q_INVOKABLE QVariantList matrixTypes() const;
+    Q_INVOKABLE QVariantList matrixTypeOptions() const;
     Q_INVOKABLE QVariantList trackSummaries() const;
     Q_INVOKABLE QVariantList annotationLayerSummaries() const;
     Q_INVOKABLE QVariantList visibleTrackSegments(bool xAxis) const;
@@ -204,6 +205,7 @@ public:
     Q_INVOKABLE void beginInteraction();
     Q_INVOKABLE void endInteraction();
     Q_INVOKABLE void resetColorScale();
+    Q_INVOKABLE void confirmLocalSimilarityMode(const QString& matrixType, int paddingBins = 64);
     Q_INVOKABLE void zoomToFractions(double xStartFraction, double yStartFraction,
                                      double xEndFraction, double yEndFraction);
     Q_INVOKABLE void requestVisibleRegion();
@@ -311,6 +313,8 @@ signals:
     void cacheStatsChanged();
     void minimapChanged();
     void workspaceSearchChanged();
+    void similarityCalculationWarning(const QString& matrixType, const QString& label,
+                                      int resolution, int visibleBins);
 
 private:
     struct TileResult {
@@ -354,7 +358,12 @@ private:
     bool controlSupportsCurrentView(QString* reason = nullptr) const;
     bool matrixIsVs(const QString& matrixType) const;
     bool matrixIsPearson(const QString& matrixType) const;
+    bool matrixIsCosine(const QString& matrixType) const;
+    bool matrixIsSimilarity(const QString& matrixType) const;
     bool matrixIsDivergent(const QString& matrixType) const;
+    QString matrixTypeLabel(const QString& matrixType) const;
+    bool similarityNeedsConfirmation(const QString& matrixType) const;
+    void requestSimilarityConfirmation(const QString& matrixType);
     QString primaryDataMatrixType(const QString& matrixType) const;
     QString controlDataMatrixType(const QString& matrixType) const;
     bool validateMatrixMode(const QString& matrixType);
@@ -374,7 +383,8 @@ private:
     std::vector<contactRecord> transformRecordsForDisplay(const QString& matrixType,
                                                           const std::vector<contactRecord>& primary,
                                                           const std::vector<contactRecord>& control) const;
-    std::vector<contactRecord> transformPearsonLike(const std::vector<contactRecord>& records) const;
+    std::vector<contactRecord> transformSimilarityLike(const std::vector<contactRecord>& records,
+                                                       const QString& matrixType) const;
     std::vector<contactRecord> mergeRecordPairs(const std::vector<contactRecord>& primary,
                                                 const std::vector<contactRecord>& control,
                                                 const QString& matrixType) const;
@@ -525,6 +535,9 @@ private:
     bool m_interactionActive = false;
     double m_viewportAspectRatio = 1.0;
     int m_analysisPaddingBins = 0;
+    QString m_approvedLocalSimilarityMode;
+    int m_approvedLocalSimilarityResolution = 0;
+    int m_similarityPaddingBins = 64;
 };
 
 #endif

@@ -11,6 +11,11 @@
 
 namespace MatrixAnalysis {
 
+enum class SimilarityMetric {
+    Pearson,
+    Cosine
+};
+
 struct DenseMatrix {
     int width = 0;
     int height = 0;
@@ -49,6 +54,17 @@ std::vector<PolarPixel> bullseye(const std::vector<contactRecord>& records, int 
 std::vector<float> virtual4C(const std::vector<contactRecord>& records, int resolution,
                             qint64 anchor, qint64 targetStart, qint64 targetEnd,
                             bool reflectIntra, bool anchorOnX = true);
+
+// Calculates a symmetric row-by-row similarity matrix over a bounded local
+// context. Pearson follows Juicebox semantics: the supplied values are O/E and
+// each row is mean-centered before correlation. Only one triangle is returned;
+// intrachromosomal rendering reflects it when appropriate.
+std::vector<contactRecord> similarity(const std::vector<contactRecord>& records,
+                                      SimilarityMetric metric, int resolution,
+                                      qint64 contextStart, qint64 contextEnd,
+                                      qint64 outputX0, qint64 outputX1,
+                                      qint64 outputY0, qint64 outputY1,
+                                      int maximumBins = 1800);
 
 DenseMatrix process(const DenseMatrix& input, const QString& operation,
                     double parameter = 1.0, double threshold = 0.0);
