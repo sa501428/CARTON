@@ -1,4 +1,4 @@
-cmake_minimum_required(VERSION 3.21)
+cmake_minimum_required(VERSION 3.24)
 
 project(CARTON VERSION 0.1.0 LANGUAGES C CXX)
 
@@ -18,6 +18,18 @@ find_package(Threads REQUIRED)
 find_package(Qt6 REQUIRED COMPONENTS Core Gui Quick QuickControls2 Concurrent)
 find_library(ZSTD_LIBRARY zstd REQUIRED)
 find_path(ZSTD_INCLUDE_DIR zstd.h REQUIRED)
+
+set(IGVCPP_SOURCE_DIR "${CMAKE_CURRENT_SOURCE_DIR}/../../igv-cpp" CACHE PATH
+    "Path to an igv-cpp source checkout; leave invalid to use an installed package")
+if(NOT TARGET igv::igv)
+    if(EXISTS "${IGVCPP_SOURCE_DIR}/CMakeLists.txt")
+        set(IGVCPP_BUILD_TESTS OFF CACHE BOOL "Build igv-cpp tests" FORCE)
+        set(IGVCPP_BUILD_BENCHMARKS OFF CACHE BOOL "Build igv-cpp benchmarks" FORCE)
+        add_subdirectory("${IGVCPP_SOURCE_DIR}" "${CMAKE_CURRENT_BINARY_DIR}/igv-cpp" EXCLUDE_FROM_ALL)
+    else()
+        find_package(igv-cpp CONFIG REQUIRED)
+    endif()
+endif()
 
 qt_standard_project_setup(REQUIRES 6.5)
 qt_policy(SET QTP0004 NEW)
@@ -62,6 +74,8 @@ target_link_libraries(carton_core
         Qt6::Core
         Qt6::Gui
         Qt6::Concurrent
+    PRIVATE
+        igv::igv
 )
 
 qt_add_executable(carton

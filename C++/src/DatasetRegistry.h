@@ -56,6 +56,7 @@ struct PooledAnnotationData {
     QString id;
     QString source;
     QString name;
+    QString warning;
     bool custom = false;
     QVector<PooledAnnotation> annotations;
 };

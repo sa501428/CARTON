@@ -17,12 +17,10 @@
 #include <QPainter>
 #include <QPageSize>
 #include <QPdfWriter>
-#include <QRegularExpression>
 #include <QSaveFile>
 #include <QSettings>
 #include <QStandardPaths>
 #include <QTextStream>
-#include <curl/curl.h>
 
 #include <algorithm>
 #include <cmath>
@@ -36,13 +34,6 @@ namespace {
 constexpr int kRecentLimit = 10;
 constexpr int kSimilarityPromptResolution = 10000;
 constexpr int kMaxSimilarityBins = 1800;
-
-size_t appendCurlText(void* contents, size_t size, size_t nmemb, void* userp) {
-    const size_t total = size * nmemb;
-    auto* output = static_cast<QByteArray*>(userp);
-    output->append(static_cast<const char*>(contents), static_cast<qsizetype>(total));
-    return total;
-}
 
 quint64 recordKey(qint64 x, qint64 y) {
     const quint64 hx = static_cast<quint64>(std::hash<qint64>{}(x));
@@ -480,7 +471,9 @@ void HicDataController::appendAnnotationLayer(const std::shared_ptr<PooledAnnota
     m_annotationLayers.push_back(std::move(layer));
     m_activeAnnotationLayer = m_annotationLayers.size() - 1;
     const int loaded = data->annotations.size();
-    setStatus(QStringLiteral("Loaded %1 2D annotations.").arg(loaded));
+    setStatus(QStringLiteral("Loaded %1 2D annotations%2.")
+                  .arg(loaded)
+                  .arg(data->warning.isEmpty() ? QString() : QStringLiteral(" (%1)").arg(data->warning)));
     emit annotationsChanged();
 }
 
@@ -508,25 +501,16 @@ QVector<HicDataController::Annotation2D>& HicDataController::editableAnnotations
 
 void HicDataController::loadCytobands(const QUrl& url) {
     const QString path = localPathFromUrl(url);
-    const QString text = readTextResource(path);
-    if (text.isEmpty()) {
-        setStatus(QStringLiteral("Could not open cytobands: %1").arg(path));
-        return;
-    }
-
+    const GenomicCytobandReadResult result = readGenomicCytobands(path);
     QVector<Cytoband> parsed;
-    QTextStream in(const_cast<QString*>(&text), QIODevice::ReadOnly);
-    while (!in.atEnd()) {
-        const QString line = in.readLine().trimmed();
-        if (line.isEmpty() || line.startsWith('#') || line.startsWith(QStringLiteral("track"))) continue;
-        const QStringList parts = line.split(QRegularExpression("\\s+"), Qt::SkipEmptyParts);
-        if (parts.size() < 3) continue;
+    parsed.reserve(result.cytobands.size());
+    for (const GenomicCytoband& record : result.cytobands) {
         Cytoband band;
-        band.chr = parts[0];
-        band.start = parts[1].toLongLong();
-        band.end = parts[2].toLongLong();
-        band.name = parts.size() > 3 ? parts[3] : QString();
-        band.stain = parts.size() > 4 ? parts[4].toLower() : QStringLiteral("gneg");
+        band.chr = record.chr;
+        band.start = record.start;
+        band.end = record.end;
+        band.name = record.name;
+        band.stain = record.stain.toLower();
         if (band.stain == QStringLiteral("acen")) band.color = QColor("#dc5a67");
         else if (band.stain == QStringLiteral("stalk")) band.color = QColor("#6baed6");
         else if (band.stain == QStringLiteral("gvar")) band.color = QColor("#94a3b8");
@@ -536,14 +520,18 @@ void HicDataController::loadCytobands(const QUrl& url) {
             const int shade = ok ? std::clamp(238 - darkness * 2, 38, 220) : 105;
             band.color = QColor(shade, shade, shade);
         } else band.color = QColor("#e5e7eb");
-        if (band.end > band.start) parsed.push_back(band);
+        parsed.push_back(std::move(band));
     }
     if (parsed.isEmpty()) {
-        setStatus(QStringLiteral("No valid cytobands found in %1.").arg(path));
+        setStatus(result.warning.isEmpty()
+                      ? QStringLiteral("No valid cytobands found in %1.").arg(path)
+                      : result.warning);
         return;
     }
     m_cytobands = std::move(parsed);
-    setStatus(QStringLiteral("Loaded %1 cytobands.").arg(m_cytobands.size()));
+    setStatus(QStringLiteral("Loaded %1 cytobands%2.")
+                  .arg(m_cytobands.size())
+                  .arg(result.warning.isEmpty() ? QString() : QStringLiteral(" (%1)").arg(result.warning)));
     emit cytobandsChanged();
 }
 
@@ -3356,27 +3344,6 @@ bool HicDataController::applyViewState(const QVariantMap& state) {
     applyViewportAspectRatio();
     emit viewChanged();
     return true;
-}
-
-QString HicDataController::readTextResource(const QString& pathOrUrl) const {
-    if (pathOrUrl.startsWith(QStringLiteral("http://")) || pathOrUrl.startsWith(QStringLiteral("https://"))) {
-        QByteArray bytes;
-        CURL* curl = curl_easy_init();
-        if (!curl) return {};
-        curl_easy_setopt(curl, CURLOPT_URL, pathOrUrl.toUtf8().constData());
-        curl_easy_setopt(curl, CURLOPT_WRITEFUNCTION, appendCurlText);
-        curl_easy_setopt(curl, CURLOPT_WRITEDATA, &bytes);
-        curl_easy_setopt(curl, CURLOPT_FOLLOWLOCATION, 1L);
-        const CURLcode res = curl_easy_perform(curl);
-        curl_easy_cleanup(curl);
-        if (res != CURLE_OK) return {};
-        return QString::fromUtf8(bytes);
-    }
-    QFile file(pathOrUrl);
-    if (!file.open(QIODevice::ReadOnly | QIODevice::Text)) {
-        return {};
-    }
-    return QString::fromUtf8(file.readAll());
 }
 
 void HicDataController::updateAutoColorScale(const std::vector<contactRecord>& records) {

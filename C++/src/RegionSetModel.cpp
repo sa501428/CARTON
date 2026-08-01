@@ -1,9 +1,6 @@
 #include "RegionSetModel.h"
 
-#include <QFile>
-#include <QFileInfo>
-#include <QRegularExpression>
-#include <QTextStream>
+#include "GenomicTrackReader.h"
 
 #include <algorithm>
 
@@ -78,36 +75,27 @@ bool RegionSetModel::loadBedpeAsBed(const QUrl& url) { return parseBed(localPath
 bool RegionSetModel::loadBedpe(const QUrl& url) { return parseBedpe(localPath(url)); }
 
 bool RegionSetModel::parseBed(const QString& path, bool fromBedpe) {
-    QFile file(path);
-    if (!file.open(QIODevice::ReadOnly | QIODevice::Text)) {
-        setError(QStringLiteral("Could not open region file: %1").arg(path));
-        return false;
-    }
     QVector<AxisRegion> parsed;
-    QTextStream input(&file);
-    int lineNumber = 0;
-    while (!input.atEnd()) {
-        ++lineNumber;
-        const QString line = input.readLine().trimmed();
-        if (line.isEmpty() || line.startsWith(QLatin1Char('#')) || line.startsWith(QStringLiteral("track"))) continue;
-        const QStringList parts = line.split(QRegularExpression(QStringLiteral("\\s+")), Qt::SkipEmptyParts);
-        if (parts.size() < (fromBedpe ? 6 : 3)) continue;
-        auto appendAxis = [&](int offset, const QString& suffix) {
-            bool okStart = false, okEnd = false;
-            AxisRegion region;
-            region.chr = parts[offset];
-            region.start = parts[offset + 1].toLongLong(&okStart);
-            region.end = parts[offset + 2].toLongLong(&okEnd);
-            const QString baseLabel = parts.size() > 6 ? parts[6] : QFileInfo(path).baseName();
-            region.label = baseLabel + suffix;
-            if (okStart && okEnd && region.end > region.start) parsed.push_back(std::move(region));
-        };
-        appendAxis(0, fromBedpe ? QStringLiteral(" A") : QString());
-        if (fromBedpe) appendAxis(3, QStringLiteral(" B"));
+    QString warning;
+    if (fromBedpe) {
+        const GenomicInteractionReadResult result = readGenomicInteractions(path);
+        warning = result.warning;
+        for (const GenomicInteraction& interaction : result.interactions) {
+            parsed.push_back({interaction.chr1, interaction.start1, interaction.end1,
+                              interaction.name + QStringLiteral(" A")});
+            parsed.push_back({interaction.chr2, interaction.start2, interaction.end2,
+                              interaction.name + QStringLiteral(" B")});
+        }
+    } else {
+        const GenomicTrackReadResult result = readGenomicTrack(path);
+        warning = result.warning;
+        for (const GenomicTrackFeature& feature : result.features) {
+            parsed.push_back({feature.chr, feature.start, feature.end, feature.name});
+        }
     }
     parsed = mergeRegions(std::move(parsed));
     if (parsed.isEmpty()) {
-        setError(QStringLiteral("No valid regions found in %1").arg(path));
+        setError(warning.isEmpty() ? QStringLiteral("No valid regions found in %1").arg(path) : warning);
         return false;
     }
     m_kind = fromBedpe ? Kind::Projected : Kind::Single;
@@ -120,34 +108,27 @@ bool RegionSetModel::parseBed(const QString& path, bool fromBedpe) {
 }
 
 bool RegionSetModel::parseBedpe(const QString& path) {
-    QFile file(path);
-    if (!file.open(QIODevice::ReadOnly | QIODevice::Text)) {
-        setError(QStringLiteral("Could not open BEDPE file: %1").arg(path));
-        return false;
-    }
+    const GenomicInteractionReadResult result = readGenomicInteractions(path);
     QVector<PairedRegion> parsed;
-    QTextStream input(&file);
-    while (!input.atEnd()) {
-        const QString line = input.readLine().trimmed();
-        if (line.isEmpty() || line.startsWith(QLatin1Char('#')) || line.startsWith(QStringLiteral("track"))) continue;
-        const QStringList parts = line.split(QRegularExpression(QStringLiteral("\\s+")), Qt::SkipEmptyParts);
-        if (parts.size() < 6) continue;
-        bool ok1 = false, ok2 = false, ok3 = false, ok4 = false;
+    for (const GenomicInteraction& interaction : result.interactions) {
         PairedRegion region;
-        region.x.chr = parts[0];
-        region.x.start = parts[1].toLongLong(&ok1);
-        region.x.end = parts[2].toLongLong(&ok2);
-        region.y.chr = parts[3];
-        region.y.start = parts[4].toLongLong(&ok3);
-        region.y.end = parts[5].toLongLong(&ok4);
-        region.label = parts.size() > 6 ? parts[6] : QStringLiteral("Region %1").arg(parsed.size() + 1);
+        region.x.chr = interaction.chr1;
+        region.x.start = interaction.start1;
+        region.x.end = interaction.end1;
+        region.y.chr = interaction.chr2;
+        region.y.start = interaction.start2;
+        region.y.end = interaction.end2;
+        region.label = interaction.name.isEmpty()
+            ? QStringLiteral("Region %1").arg(parsed.size() + 1)
+            : interaction.name;
         region.x.label = region.label;
         region.y.label = region.label;
-        if (ok1 && ok2 && ok3 && ok4 && region.x.end > region.x.start && region.y.end > region.y.start)
-            parsed.push_back(std::move(region));
+        parsed.push_back(std::move(region));
     }
     if (parsed.isEmpty()) {
-        setError(QStringLiteral("No valid BEDPE regions found in %1").arg(path));
+        setError(result.warning.isEmpty()
+                     ? QStringLiteral("No valid BEDPE regions found in %1").arg(path)
+                     : result.warning);
         return false;
     }
     m_kind = Kind::Paired;

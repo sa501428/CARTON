@@ -6,14 +6,10 @@
 #include <QJsonDocument>
 #include <QJsonObject>
 #include <QMetaObject>
-#include <QRegularExpression>
 #include <QSettings>
 #include <QSaveFile>
-#include <QTextStream>
 #include <QUrl>
 #include <QUuid>
-
-#include <curl/curl.h>
 
 #include <algorithm>
 #include <cmath>
@@ -26,32 +22,6 @@ QString stripChrPrefix(QString name) {
     return name;
 }
 
-QByteArray readTextBytes(const QString& pathOrUrl) {
-    if (pathOrUrl.startsWith(QStringLiteral("http://")) || pathOrUrl.startsWith(QStringLiteral("https://"))) {
-        QByteArray bytes;
-        CURL* curl = curl_easy_init();
-        if (!curl) return {};
-        const QByteArray encoded = pathOrUrl.toUtf8();
-        curl_easy_setopt(curl, CURLOPT_URL, encoded.constData());
-        curl_easy_setopt(curl, CURLOPT_FOLLOWLOCATION, 1L);
-        curl_easy_setopt(curl, CURLOPT_WRITEFUNCTION,
-                         +[](void* contents, size_t size, size_t count, void* target) -> size_t {
-                             const size_t total = size * count;
-                             static_cast<QByteArray*>(target)->append(static_cast<const char*>(contents),
-                                                                     static_cast<qsizetype>(total));
-                             return total;
-                         });
-        curl_easy_setopt(curl, CURLOPT_WRITEDATA, &bytes);
-        const CURLcode result = curl_easy_perform(curl);
-        curl_easy_cleanup(curl);
-        return result == CURLE_OK ? bytes : QByteArray();
-    }
-    const QUrl url(pathOrUrl);
-    const QString path = url.isLocalFile() ? url.toLocalFile() : pathOrUrl;
-    QFile file(path);
-    if (!file.open(QIODevice::ReadOnly)) return {};
-    return file.readAll();
-}
 }
 
 DatasetRegistry* DatasetRegistry::instance() {
@@ -351,43 +321,32 @@ PooledAnnotationResult DatasetRegistry::loadAnnotations(const QString& pathOrUrl
         }
     }
 
-    const QByteArray bytes = readTextBytes(source);
-    if (bytes.isEmpty()) {
-        result.error = QStringLiteral("Could not open 2D annotations: %1").arg(source);
+    const GenomicInteractionReadResult parsed = readGenomicInteractions(source);
+    if (parsed.interactions.isEmpty()) {
+        result.error = parsed.warning.isEmpty()
+            ? QStringLiteral("No valid BEDPE annotations found in %1").arg(source)
+            : parsed.warning;
         return result;
     }
     auto data = std::make_shared<PooledAnnotationData>();
     data->id = result.id;
     data->source = source;
     data->name = QFileInfo(source).baseName();
-    QString text = QString::fromUtf8(bytes);
-    QTextStream input(&text, QIODevice::ReadOnly);
+    data->warning = parsed.warning;
     int serial = 0;
-    while (!input.atEnd()) {
-        const QString line = input.readLine().trimmed();
-        if (line.isEmpty() || line.startsWith(QLatin1Char('#')) || line.startsWith(QStringLiteral("track"))) continue;
-        const QStringList parts = line.split(QRegularExpression(QStringLiteral("\\s+")), Qt::SkipEmptyParts);
-        if (parts.size() < 6) continue;
-        bool ok1 = false, ok2 = false, ok3 = false, ok4 = false;
+    for (const GenomicInteraction& record : parsed.interactions) {
         PooledAnnotation annotation;
         annotation.id = result.id + QStringLiteral("#%1").arg(serial++);
-        annotation.chr1 = parts[0];
-        annotation.start1 = parts[1].toLongLong(&ok1);
-        annotation.end1 = parts[2].toLongLong(&ok2);
-        annotation.chr2 = parts[3];
-        annotation.start2 = parts[4].toLongLong(&ok3);
-        annotation.end2 = parts[5].toLongLong(&ok4);
-        annotation.name = parts.size() > 6 ? parts[6] : data->name;
-        if (parts.size() > 8) {
-            const QColor parsedColor(parts[8]);
-            if (parsedColor.isValid()) annotation.color = parsedColor;
-        }
-        if (ok1 && ok2 && ok3 && ok4 && annotation.end1 > annotation.start1 && annotation.end2 > annotation.start2)
-            data->annotations.push_back(std::move(annotation));
-    }
-    if (data->annotations.isEmpty()) {
-        result.error = QStringLiteral("No valid BEDPE annotations found in %1").arg(source);
-        return result;
+        annotation.chr1 = record.chr1;
+        annotation.start1 = record.start1;
+        annotation.end1 = record.end1;
+        annotation.chr2 = record.chr2;
+        annotation.start2 = record.start2;
+        annotation.end2 = record.end2;
+        annotation.name = record.name.isEmpty() ? data->name : record.name;
+        annotation.color = record.color;
+        annotation.attributes = record.attributes;
+        data->annotations.push_back(std::move(annotation));
     }
     {
         QMutexLocker locker(&m_mutex);

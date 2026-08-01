@@ -397,7 +397,6 @@ private:
     QVariantList recentList(const QString& group) const;
     QVariantMap currentViewState(const QString& name = QString()) const;
     bool applyViewState(const QVariantMap& state);
-    QString readTextResource(const QString& pathOrUrl) const;
     void scheduleRequest();
     void startTileLoad(const HicTileKey& key, quint64 requestId);
     void requestMinimap();

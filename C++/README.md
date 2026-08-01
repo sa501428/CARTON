@@ -5,12 +5,12 @@ This directory contains the CARTON desktop application and the reusable C++ `.hi
 ## Description:
 `carton` is a Qt 6 / Qt Quick desktop viewer for Hi-C contact matrices. The app keeps the UI shell in QML and renders the matrix through a custom C++ scene-graph item, so large heatmap content is batched into GPU geometry instead of being represented as QML objects.
 
-The `carton_hic` library provides local/HTTP `.hic` metadata inspection, sparse range reads, normalization support, and block decompression. It is linked directly into the CARTON application.
+The `carton_hic` library provides local/HTTP `.hic` metadata inspection, sparse range reads, normalization support, and block decompression. Genomics annotation, signal, and interaction files are read through the separately reusable `igv-cpp` library.
 
 ## Installation:
-1. Requires CMake 3.13 or higher
-2. Requires Qt 6, libcurl, zlib, and zstd development libraries
-3. Clone the repository
+1. Requires CMake 3.24 or higher
+2. Requires Qt 6, libcurl, zlib, zstd, HTSlib 1.17+, and pkg-config
+3. Clone CARTON and `igv-cpp` as sibling repositories (or install igv-cpp so CMake can find it)
 4. Configure: `cmake -S . -B build-carton`
 5. Build: `cmake --build build-carton --target carton -j4`
 6. Run the desktop app: `open build-carton/carton.app`
