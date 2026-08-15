@@ -7,13 +7,53 @@ This directory contains the CARTON desktop application and the reusable C++ `.hi
 
 The `carton_hic` library provides local/HTTP `.hic` metadata inspection, sparse range reads, normalization support, and block decompression. Genomics annotation, signal, and interaction files are read through the separately reusable `igv-cpp` library.
 
-## Installation:
-1. Requires CMake 3.24 or higher
-2. Requires Qt 6, libcurl, zlib, zstd, HTSlib 1.17+, and pkg-config
-3. Clone CARTON and `igv-cpp` as sibling repositories (or install igv-cpp so CMake can find it)
-4. Configure: `cmake -S . -B build-carton`
-5. Build: `cmake --build build-carton --target carton -j4`
-6. Run the desktop app: `open build-carton/carton.app`
+## Building
+
+The build requires CMake 3.24 or newer; Qt 6.5 or newer with Core, Gui, Quick,
+Quick Controls 2, Concurrent, and SVG; libcurl; zlib; zstd; HTSlib 1.17+; and
+pkg-config. Clone CARTON and `igv-cpp` as sibling repositories, or install
+`igv-cpp` so CMake can find its package configuration.
+
+The app icon is generated from `logo.svg` during the build. macOS receives an
+`.icns` bundle icon, while Windows receives a multi-resolution `.ico` embedded
+in both the executable and installer.
+
+### macOS
+
+```sh
+cmake -S . -B build-carton -DCMAKE_BUILD_TYPE=Release
+cmake --build build-carton --target carton --parallel
+open build-carton/carton.app
+```
+
+To build the deployable, smoke-tested, ad-hoc-signed disk image:
+
+```sh
+./package_dmg.sh
+```
+
+The installer is written to `build-carton/CARTON-<version>-macOS.dmg`.
+
+### Windows
+
+Install the C++ build dependencies and Qt for the selected compiler, and install
+[NSIS 3.03+](https://nsis.sourceforge.io/) so `makensis.exe` is in `PATH`. From
+PowerShell, run:
+
+```powershell
+.\package_windows.ps1
+```
+
+The script builds in Release mode, runs Qt's Windows deployment tool, stages
+non-Qt runtime DLLs, smoke-tests the deployed app, and creates
+`build-carton-windows\CARTON-<version>-Windows.exe`. Extra CMake definitions,
+such as a vcpkg toolchain file, can be passed with `-CMakeArgs`:
+
+```powershell
+.\package_windows.ps1 -CMakeArgs @(
+  "-DCMAKE_TOOLCHAIN_FILE=C:\src\vcpkg\scripts\buildsystems\vcpkg.cmake"
+)
+```
 
 ## Usage:
 The desktop app supports:

@@ -15,7 +15,7 @@ set(CMAKE_AUTOUIC ON)
 find_package(CURL REQUIRED)
 find_package(ZLIB REQUIRED)
 find_package(Threads REQUIRED)
-find_package(Qt6 REQUIRED COMPONENTS Core Gui Quick QuickControls2 Concurrent)
+find_package(Qt6 6.5 REQUIRED COMPONENTS Core Gui Quick QuickControls2 Concurrent Svg)
 find_library(ZSTD_LIBRARY zstd REQUIRED)
 find_path(ZSTD_INCLUDE_DIR zstd.h REQUIRED)
 
@@ -47,8 +47,62 @@ target_link_libraries(carton_hic
         ${ZSTD_LIBRARY}
 )
 
-set(APP_ICON "${CMAKE_CURRENT_SOURCE_DIR}/carton.icns")
-set_source_files_properties("${APP_ICON}" PROPERTIES MACOSX_PACKAGE_LOCATION Resources)
+set(CARTON_LOGO_SVG "${CMAKE_CURRENT_SOURCE_DIR}/logo.svg")
+if(NOT EXISTS "${CARTON_LOGO_SVG}")
+    message(FATAL_ERROR "CARTON logo source is missing: ${CARTON_LOGO_SVG}")
+endif()
+
+# Keep logo.svg as the single source of truth while still providing the native
+# icon formats required by macOS app bundles and Windows executables/installers.
+add_executable(carton_icon_renderer EXCLUDE_FROM_ALL cmake/IconRenderer.cpp)
+set_target_properties(carton_icon_renderer PROPERTIES
+    AUTOMOC OFF
+    AUTORCC OFF
+    AUTOUIC OFF
+)
+target_link_libraries(carton_icon_renderer PRIVATE Qt6::Core Qt6::Gui Qt6::Svg)
+
+set(CARTON_ICON_OUTPUT_DIR "${CMAKE_CURRENT_BINARY_DIR}/generated-icons")
+set(CARTON_PLATFORM_ICON_SOURCES)
+if(APPLE)
+    set(CARTON_APP_ICON "${CARTON_ICON_OUTPUT_DIR}/carton.icns")
+    add_custom_command(
+        OUTPUT "${CARTON_APP_ICON}"
+        COMMAND "${CMAKE_COMMAND}" -E make_directory "${CARTON_ICON_OUTPUT_DIR}"
+        COMMAND "$<TARGET_FILE:carton_icon_renderer>"
+            --icns "${CARTON_APP_ICON}" "${CARTON_LOGO_SVG}"
+        DEPENDS carton_icon_renderer "${CARTON_LOGO_SVG}"
+        COMMENT "Generating macOS icon from logo.svg"
+        VERBATIM
+    )
+    set_source_files_properties("${CARTON_APP_ICON}" PROPERTIES
+        GENERATED TRUE
+        MACOSX_PACKAGE_LOCATION Resources
+    )
+    list(APPEND CARTON_PLATFORM_ICON_SOURCES "${CARTON_APP_ICON}")
+elseif(WIN32)
+    set(CARTON_APP_ICON "${CARTON_ICON_OUTPUT_DIR}/carton.ico")
+    add_custom_command(
+        OUTPUT "${CARTON_APP_ICON}"
+        COMMAND "${CMAKE_COMMAND}" -E make_directory "${CARTON_ICON_OUTPUT_DIR}"
+        COMMAND "$<TARGET_FILE:carton_icon_renderer>"
+            --ico "${CARTON_APP_ICON}" "${CARTON_LOGO_SVG}"
+        DEPENDS carton_icon_renderer "${CARTON_LOGO_SVG}"
+        COMMENT "Generating Windows icon from logo.svg"
+        VERBATIM
+    )
+    set(CARTON_WINDOWS_ICON_RC "${CARTON_APP_ICON}")
+    set(CARTON_WINDOWS_RC "${CMAKE_CURRENT_BINARY_DIR}/carton.rc")
+    configure_file(cmake/carton.rc.in "${CARTON_WINDOWS_RC}" @ONLY)
+    set_source_files_properties("${CARTON_WINDOWS_RC}" PROPERTIES
+        OBJECT_DEPENDS "${CARTON_APP_ICON}"
+    )
+    list(APPEND CARTON_PLATFORM_ICON_SOURCES "${CARTON_WINDOWS_RC}")
+endif()
+
+if(DEFINED CARTON_APP_ICON)
+    add_custom_target(carton_app_icon DEPENDS "${CARTON_APP_ICON}")
+endif()
 
 add_library(carton_core STATIC
     src/DatasetRegistry.cpp
@@ -85,8 +139,11 @@ qt_add_executable(carton
     src/HicHeatmapItem.h
     src/AnalysisItems.cpp
     src/AnalysisItems.h
-    "${APP_ICON}"
+    ${CARTON_PLATFORM_ICON_SOURCES}
 )
+if(TARGET carton_app_icon)
+    add_dependencies(carton carton_app_icon)
+endif()
 
 # Singleton metadata must be present before qt_add_qml_module generates the
 # qmldir; setting this afterwards leaves Theme unresolved at runtime.
@@ -95,6 +152,8 @@ set_source_files_properties(qml/Theme.qml PROPERTIES QT_QML_SINGLETON_TYPE true)
 qt_add_qml_module(carton
     URI Carton
     VERSION 1.0
+    # Packaging performs its own source scan on Windows and curated deployment
+    # on macOS, avoiding a slow configure-time scan of the host Qt QML tree.
     NO_IMPORT_SCAN
     QML_FILES
         qml/Main.qml
@@ -160,15 +219,20 @@ if(BUILD_TESTING)
     )
 endif()
 
-set_target_properties(carton PROPERTIES
-    MACOSX_BUNDLE TRUE
-    MACOSX_BUNDLE_GUI_IDENTIFIER org.carton.viewer
-    MACOSX_BUNDLE_BUNDLE_NAME CARTON
-    MACOSX_BUNDLE_ICON_FILE carton.icns
-    MACOSX_BUNDLE_SHORT_VERSION_STRING ${PROJECT_VERSION}
-    MACOSX_BUNDLE_BUNDLE_VERSION ${PROJECT_VERSION}
-    MACOSX_BUNDLE_COPYRIGHT "Copyright © 2024 CARTON"
-)
+set_target_properties(carton PROPERTIES WIN32_EXECUTABLE TRUE)
+if(APPLE)
+    set_target_properties(carton PROPERTIES
+        MACOSX_BUNDLE TRUE
+        MACOSX_BUNDLE_GUI_IDENTIFIER org.carton.viewer
+        MACOSX_BUNDLE_BUNDLE_NAME CARTON
+        MACOSX_BUNDLE_ICON_FILE carton.icns
+        MACOSX_BUNDLE_SHORT_VERSION_STRING ${PROJECT_VERSION}
+        MACOSX_BUNDLE_BUNDLE_VERSION ${PROJECT_VERSION}
+        MACOSX_BUNDLE_COPYRIGHT "Copyright © 2024 CARTON"
+    )
+elseif(WIN32)
+    set_target_properties(carton PROPERTIES OUTPUT_NAME CARTON)
+endif()
 
 # macdeployqt copies frameworks, plugins, QML modules, and a bundle signature
 # into carton.app. Those files are not CMake outputs, so a later incremental
@@ -190,10 +254,22 @@ if(APPLE)
 endif()
 
 # ── Install ────────────────────────────────────────────────────────────────────
-install(TARGETS carton
-    BUNDLE  DESTINATION .
-    RUNTIME DESTINATION bin
-)
+if(WIN32)
+    get_target_property(_qt_qmake Qt6::qmake IMPORTED_LOCATION)
+    get_filename_component(_qt_bin_dir "${_qt_qmake}" DIRECTORY)
+    install(TARGETS carton
+        RUNTIME_DEPENDENCIES
+            DIRECTORIES "${_qt_bin_dir}"
+            PRE_EXCLUDE_REGEXES "api-ms-.*" "ext-ms-.*"
+            POST_EXCLUDE_REGEXES ".*[\\\\/][Ww]indows[\\\\/][Ss]ystem32[\\\\/].*\\.dll"
+        RUNTIME DESTINATION .
+    )
+else()
+    install(TARGETS carton
+        BUNDLE  DESTINATION .
+        RUNTIME DESTINATION bin
+    )
+endif()
 # ── macOS Qt deployment (runs during `cmake --install`) ──────────────────────
 if(APPLE)
     get_target_property(_qt_qmake Qt6::qmake IMPORTED_LOCATION)
@@ -211,16 +287,45 @@ if(APPLE)
     set(DEPLOY_SCRIPT "${CMAKE_CURRENT_BINARY_DIR}/deploy_macos.cmake")
     configure_file(cmake/DeployMacOS.cmake.in "${DEPLOY_SCRIPT}" @ONLY)
     install(SCRIPT "${DEPLOY_SCRIPT}")
+elseif(WIN32)
+    # windeployqt copies the Qt runtime, platform/image/TLS plugins, and the QML
+    # modules into the staging tree used by CPack. CMake's RUNTIME_DEPENDENCIES
+    # clause above covers non-Qt DLLs such as curl, zlib, zstd, and HTSlib.
+    find_program(CARTON_WINDEPLOYQT NAMES windeployqt HINTS "${_qt_bin_dir}" REQUIRED)
+    set(DEPLOY_SCRIPT "${CMAKE_CURRENT_BINARY_DIR}/deploy_windows.cmake")
+    configure_file(cmake/DeployWindows.cmake.in "${DEPLOY_SCRIPT}" @ONLY)
+    install(SCRIPT "${DEPLOY_SCRIPT}")
 endif()
 
-# ── CPack DragNDrop DMG ────────────────────────────────────────────────────────
-set(CPACK_GENERATOR "DragNDrop")
+# ── Native installers ──────────────────────────────────────────────────────────
 set(CPACK_PACKAGE_NAME "CARTON")
 set(CPACK_PACKAGE_VENDOR "CARTON")
 set(CPACK_PACKAGE_DESCRIPTION_SUMMARY "CARTON Hi-C desktop viewer")
 set(CPACK_PACKAGE_VERSION ${PROJECT_VERSION})
-set(CPACK_PACKAGE_FILE_NAME "CARTON-${PROJECT_VERSION}-macOS")
-set(CPACK_DMG_VOLUME_NAME "CARTON")
-set(CPACK_DMG_FORMAT "UDZO")
-set(CPACK_STRIP_FILES TRUE)
+set(CPACK_PACKAGE_INSTALL_DIRECTORY "CARTON")
+
+if(APPLE)
+    set(CPACK_GENERATOR "DragNDrop")
+    set(CPACK_PACKAGE_FILE_NAME "CARTON-${PROJECT_VERSION}-macOS")
+    set(CPACK_DMG_VOLUME_NAME "CARTON")
+    set(CPACK_DMG_FORMAT "UDZO")
+    set(CPACK_STRIP_FILES TRUE)
+elseif(WIN32)
+    # CPack's NSIS generator creates a normal Windows installer .exe. NSIS must
+    # be installed on the packaging machine (package_windows.ps1 checks this).
+    set(CPACK_GENERATOR "NSIS")
+    set(CPACK_PACKAGE_FILE_NAME "CARTON-${PROJECT_VERSION}-Windows")
+    set(CPACK_PACKAGE_EXECUTABLES "CARTON" "CARTON")
+    set(CPACK_CREATE_DESKTOP_LINKS "CARTON")
+    set(CPACK_NSIS_DISPLAY_NAME "CARTON")
+    set(CPACK_NSIS_PACKAGE_NAME "CARTON")
+    set(CPACK_NSIS_EXECUTABLES_DIRECTORY ".")
+    set(CPACK_NSIS_INSTALLED_ICON_NAME "CARTON.exe")
+    set(CPACK_NSIS_MUI_ICON "${CARTON_APP_ICON}")
+    set(CPACK_NSIS_MUI_UNIICON "${CARTON_APP_ICON}")
+    set(CPACK_NSIS_ENABLE_UNINSTALL_BEFORE_INSTALL ON)
+else()
+    set(CPACK_GENERATOR "TGZ")
+    set(CPACK_PACKAGE_FILE_NAME "CARTON-${PROJECT_VERSION}-${CMAKE_SYSTEM_NAME}")
+endif()
 include(CPack)

@@ -1,12 +1,12 @@
 #!/usr/bin/env bash
-# Build CARTON, generate .icns from logo.png, and produce a macOS DMG installer.
+# Build CARTON, derive the native icon from logo.svg, and produce a macOS DMG.
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 BUILD_DIR="${1:-"${SCRIPT_DIR}/build-carton"}"
 VERSION="${CARTON_VERSION:-0.2.0}"
-LOGO="${SCRIPT_DIR}/logo.png"
-ICNS_DST="${SCRIPT_DIR}/carton.icns"
+LOGO="${SCRIPT_DIR}/logo.svg"
+ICNS_DST="${BUILD_DIR}/generated-icons/carton.icns"
 DMG_OUTPUT="${BUILD_DIR}/CARTON-${VERSION}-macOS.dmg"
 CONFIGURE_LOG="${BUILD_DIR}/configure.log"
 DEPLOY_LOG="${BUILD_DIR}/macdeployqt.log"
@@ -22,7 +22,7 @@ require_tool() {
     fi
 }
 
-for tool in cmake sips iconutil codesign hdiutil; do
+for tool in cmake codesign hdiutil; do
     require_tool "${tool}"
 done
 
@@ -41,37 +41,13 @@ if [[ ! ${JOBS} =~ ^[1-9][0-9]*$ ]]; then
     JOBS=4
 fi
 
-# ── 1. Generate carton.icns from logo.png ─────────────────────────────────────
-if [[ -f ${ICNS_DST} && ${ICNS_DST} -nt ${LOGO} && ${CARTON_REGENERATE_ICON:-0} != 1 ]]; then
-    echo "→ Reusing current app icon (${ICNS_DST})"
-else
-    echo "→ Generating app icon from logo.png…"
-    ICONSET="${BUILD_DIR}/carton.iconset"
-    rm -rf "${ICONSET}"
-    mkdir -p "${ICONSET}"
-
-    make_icon() {
-        local pts=$1 scale=${2:-1}
-        local px=$(( pts * scale ))
-        local suffix; [[ $scale -eq 2 ]] && suffix="@2x" || suffix=""
-        local name="icon_${pts}x${pts}${suffix}.png"
-        # Resize longest side to px (preserves aspect ratio), then pad to square
-        sips -Z "${px}" "${LOGO}" --out "${ICONSET}/${name}" >/dev/null
-        sips -p "${px}" "${px}" "${ICONSET}/${name}" --out "${ICONSET}/${name}" >/dev/null
-    }
-
-    make_icon 16;  make_icon 16  2
-    make_icon 32;  make_icon 32  2
-    make_icon 128; make_icon 128 2
-    make_icon 256; make_icon 256 2
-    make_icon 512; make_icon 512 2
-
-    iconutil -c icns "${ICONSET}" -o "${ICNS_DST}"
-    echo "  ✓ ${ICNS_DST}"
+# ── 1. Configure ───────────────────────────────────────────────────────────────
+if [[ ! -f ${LOGO} ]]; then
+    echo "error: logo source is missing: ${LOGO}" >&2
+    exit 1
 fi
-
-# ── 2. Build ───────────────────────────────────────────────────────────────────
-echo "→ Building…"
+mkdir -p "${BUILD_DIR}"
+echo "→ Configuring…"
 if ! cmake -S "${SCRIPT_DIR}" -B "${BUILD_DIR}" \
         -DCMAKE_BUILD_TYPE=Release -DBUILD_TESTING=OFF >"${CONFIGURE_LOG}" 2>&1; then
     echo "error: CMake configuration failed; complete output follows:" >&2
@@ -79,7 +55,15 @@ if ! cmake -S "${SCRIPT_DIR}" -B "${BUILD_DIR}" \
     exit 1
 fi
 echo "  ✓ Configured (details: ${CONFIGURE_LOG})"
+
+# ── 2. Build (including the .icns generated from logo.svg) ────────────────────
+echo "→ Building…"
 cmake --build "${BUILD_DIR}" --target carton --parallel "${JOBS}"
+if [[ ! -f ${ICNS_DST} ]]; then
+    echo "error: generated app icon is missing: ${ICNS_DST}" >&2
+    exit 1
+fi
+echo "  ✓ Native icon generated from logo.svg"
 
 # Deploy a staging copy. Never let macdeployqt mutate the development bundle:
 # a later incremental link would replace only its executable, producing a mixed

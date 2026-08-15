@@ -1,0 +1,44 @@
+set(_windeployqt "@CARTON_WINDEPLOYQT@")
+set(_qml_source_dir "@CMAKE_CURRENT_SOURCE_DIR@/qml")
+set(_install_root "$ENV{DESTDIR}${CMAKE_INSTALL_PREFIX}")
+set(_executable "${_install_root}/CARTON.exe")
+
+if(NOT EXISTS "${_executable}")
+    message(FATAL_ERROR "Installed CARTON executable not found: ${_executable}")
+endif()
+
+if(CMAKE_INSTALL_CONFIG_NAME MATCHES "^[Dd]ebug$")
+    set(_configuration --debug)
+else()
+    set(_configuration --release)
+endif()
+
+# The project intentionally disables Qt's configure-time import scan. Perform
+# the supported source scan here so every imported Qt Quick/QML module is copied
+# beside the installed executable before CPack builds the NSIS installer.
+execute_process(
+    COMMAND "${_windeployqt}"
+        "${_configuration}"
+        --force
+        --no-translations
+        --qmldir "${_qml_source_dir}"
+        --dir "${_install_root}"
+        "${_executable}"
+    RESULT_VARIABLE _deploy_result
+    OUTPUT_VARIABLE _deploy_stdout
+    ERROR_VARIABLE _deploy_stderr
+)
+if(NOT _deploy_result EQUAL 0)
+    message(FATAL_ERROR
+        "windeployqt failed (${_deploy_result}):\n${_deploy_stdout}\n${_deploy_stderr}")
+endif()
+
+foreach(_required_file
+        "platforms/qwindows.dll"
+        "imageformats/qsvg.dll"
+        "qml/QtQuick/qmldir"
+        "qml/QtQuick/Controls/qmldir")
+    if(NOT EXISTS "${_install_root}/${_required_file}")
+        message(FATAL_ERROR "windeployqt did not install ${_required_file}")
+    endif()
+endforeach()
