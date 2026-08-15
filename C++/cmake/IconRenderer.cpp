@@ -4,13 +4,14 @@
 #include <QFile>
 #include <QImage>
 #include <QPainter>
+#include <QPainterPath>
 #include <QSvgRenderer>
 
 #include <array>
 
 namespace {
 
-QImage renderSvg(QSvgRenderer& renderer, int size) {
+QImage renderSvg(QSvgRenderer& renderer, int size, bool macOsIcon = false) {
     QImage image(size, size, QImage::Format_ARGB32_Premultiplied);
     image.fill(Qt::transparent);
     // Native macOS icon resources use 72 DPI (2,835 dots per meter).
@@ -18,15 +19,35 @@ QImage renderSvg(QSvgRenderer& renderer, int size) {
     image.setDotsPerMeterY(2835);
 
     QPainter painter(&image);
-    renderer.render(&painter, image.rect());
+    if (macOsIcon) {
+        // Modern macOS app artwork occupies roughly 82% of its icon canvas.
+        // The surrounding transparency keeps it visually aligned with Apple's
+        // rounded-square Dock icons instead of filling the complete Dock slot.
+        constexpr qreal artworkScale = 0.82;
+        constexpr qreal cornerRadiusScale = 0.20;
+        const qreal artworkSize = static_cast<qreal>(size) * artworkScale;
+        const qreal inset = (static_cast<qreal>(size) - artworkSize) / 2.0;
+        const QRectF artworkBounds(inset, inset, artworkSize, artworkSize);
+
+        QPainterPath mask;
+        mask.addRoundedRect(artworkBounds,
+                            artworkSize * cornerRadiusScale,
+                            artworkSize * cornerRadiusScale);
+        painter.setRenderHint(QPainter::Antialiasing, true);
+        painter.setClipPath(mask);
+        renderer.render(&painter, artworkBounds);
+    } else {
+        renderer.render(&painter, image.rect());
+    }
     painter.end();
     return image;
 }
 
-QByteArray renderPng(QSvgRenderer& renderer, int size) {
+QByteArray renderPng(QSvgRenderer& renderer, int size, bool macOsIcon = false) {
     QByteArray png;
     QBuffer buffer(&png);
-    if (!buffer.open(QIODevice::WriteOnly) || !renderSvg(renderer, size).save(&buffer, "PNG")) {
+    if (!buffer.open(QIODevice::WriteOnly)
+        || !renderSvg(renderer, size, macOsIcon).save(&buffer, "PNG")) {
         return {};
     }
     return png;
@@ -48,7 +69,7 @@ bool writeIcns(QSvgRenderer& renderer, const QString& path) {
     for (qsizetype index = 0; index < static_cast<qsizetype>(icons.size()); ++index) {
         const auto& icon = icons[static_cast<std::size_t>(index)];
         auto& png = pngImages[static_cast<std::size_t>(index)];
-        png = renderPng(renderer, icon.size);
+        png = renderPng(renderer, icon.size, true);
         if (png.isEmpty()) {
             qCritical("Unable to render the %dx%d macOS icon", icon.size, icon.size);
             return false;
