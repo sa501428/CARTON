@@ -10,6 +10,7 @@
 #include <QVector>
 #include <QWaitCondition>
 #include <QSemaphore>
+#include <QSet>
 
 #include <memory>
 
@@ -141,6 +142,8 @@ private:
     struct HicEntry {
         bool loading = false;
         QString error;
+        qint64 fileSize = -1;
+        qint64 modifiedMSecs = -1;
         std::shared_ptr<const HicFileMetadata> metadata;
         QWaitCondition ready;
     };
@@ -165,6 +168,9 @@ private:
     QHash<QString, std::shared_ptr<HicEntry>> m_hicEntries;
     QHash<QString, std::shared_ptr<const PooledTrackData>> m_tracks;
     QHash<QString, std::shared_ptr<PooledAnnotationData>> m_annotations;
+    QSet<QString> m_tracksLoading;
+    QSet<QString> m_annotationsLoading;
+    QWaitCondition m_resourceReady;
     QHash<QString, ResourceSummary> m_summaries;
     std::shared_ptr<HicTileCache> m_tileCache;
     WorkspaceListModel* m_resourcesModel = nullptr;

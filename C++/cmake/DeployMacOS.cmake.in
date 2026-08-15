@@ -1,0 +1,130 @@
+set(_app "${CMAKE_INSTALL_PREFIX}/carton.app")
+set(_macdeployqt "@CARTON_MACDEPLOYQT@")
+set(_qt_lib_dir "@CARTON_QT_LIBS_DIR@")
+set(_qt_plugin_dir "@CARTON_QT_PLUGINS_DIR@")
+set(_qt_qml_dir "@CARTON_QT_QML_DIR@")
+set(_qml_dest "${_app}/Contents/Resources/qml")
+
+if(NOT EXISTS "${_app}/Contents/MacOS/carton")
+    message(FATAL_ERROR "Installed CARTON app executable is missing: ${_app}")
+endif()
+
+file(REMOVE_RECURSE
+    "${_app}/Contents/Frameworks"
+    "${_app}/Contents/PlugIns"
+    "${_qml_dest}"
+    "${_app}/Contents/_CodeSignature")
+
+function(_copy_plugin relative)
+    set(source "${_qt_plugin_dir}/${relative}")
+    if(NOT EXISTS "${source}")
+        message(FATAL_ERROR "Required Qt plugin is missing: ${source}")
+    endif()
+    get_filename_component(directory "${relative}" DIRECTORY)
+    file(MAKE_DIRECTORY "${_app}/Contents/PlugIns/${directory}")
+    file(COPY_FILE "${source}" "${_app}/Contents/PlugIns/${relative}")
+endfunction()
+
+function(_copy_qml_module relative)
+    set(source "${_qt_qml_dir}/${relative}")
+    if(NOT IS_DIRECTORY "${source}")
+        message(FATAL_ERROR "Required Qt QML module is missing: ${source}")
+    endif()
+    file(MAKE_DIRECTORY "${_qml_dest}/${relative}")
+    file(GLOB entries LIST_DIRECTORIES false "${source}/*")
+    foreach(entry IN LISTS entries)
+        get_filename_component(name "${entry}" NAME)
+        file(REAL_PATH "${entry}" resolved)
+        file(COPY_FILE "${resolved}" "${_qml_dest}/${relative}/${name}")
+    endforeach()
+endfunction()
+
+function(_copy_qml_tree source destination)
+    if(NOT IS_DIRECTORY "${source}")
+        message(FATAL_ERROR "Required Qt QML tree is missing: ${source}")
+    endif()
+    file(GLOB_RECURSE entries LIST_DIRECTORIES false RELATIVE "${source}" "${source}/*")
+    foreach(relative IN LISTS entries)
+        get_filename_component(directory "${relative}" DIRECTORY)
+        file(MAKE_DIRECTORY "${destination}/${directory}")
+        file(REAL_PATH "${source}/${relative}" resolved)
+        file(COPY_FILE "${resolved}" "${destination}/${relative}")
+    endforeach()
+endfunction()
+
+_copy_plugin(platforms/libqcocoa.dylib)
+_copy_plugin(platforms/libqoffscreen.dylib)
+_copy_plugin(imageformats/libqsvg.dylib)
+_copy_plugin(tls/libqsecuretransportbackend.dylib)
+
+foreach(module IN ITEMS
+        QtQuick QtQml QML QtQml/Models QtQml/WorkerScript
+        QtQuick/Controls QtQuick/Templates QtQuick/Controls/impl QtQuick/Window
+        QtQuick/Effects QtQuick/Layouts QtQuick/Shapes Qt/labs/qmlmodels
+        QtQuick/Dialogs Qt/labs/folderlistmodel)
+    _copy_qml_module("${module}")
+endforeach()
+_copy_qml_tree("${_qt_qml_dir}/QtQuick/Controls/Basic" "${_qml_dest}/QtQuick/Controls/Basic")
+_copy_qml_tree("${_qt_qml_dir}/QtQuick/Dialogs/quickimpl" "${_qml_dest}/QtQuick/Dialogs/quickimpl")
+
+set(_deploy_args "${_app}" -no-plugins "-libpath=${_qt_lib_dir}")
+file(GLOB_RECURSE _dylibs LIST_DIRECTORIES false
+    "${_app}/Contents/PlugIns/*.dylib"
+    "${_qml_dest}/*.dylib")
+foreach(binary IN LISTS _dylibs)
+    list(APPEND _deploy_args "-executable=${binary}")
+endforeach()
+execute_process(
+    COMMAND "${_macdeployqt}" ${_deploy_args} -verbose=1
+    RESULT_VARIABLE _deploy_result
+    OUTPUT_VARIABLE _deploy_output
+    ERROR_VARIABLE _deploy_error)
+set(_deploy_log "${_deploy_output}\n${_deploy_error}")
+if(NOT _deploy_result EQUAL 0 OR _deploy_log MATCHES "(^|\n)ERROR:")
+    message(FATAL_ERROR "macdeployqt failed or reported unresolved dependencies:\n${_deploy_log}")
+endif()
+if(NOT EXISTS "${_app}/Contents/Frameworks/QtSvg.framework/Versions/A/QtSvg")
+    message(FATAL_ERROR "Qt SVG support was not deployed")
+endif()
+
+file(GLOB_RECURSE _sign_candidates LIST_DIRECTORIES false
+    "${_app}/Contents/Frameworks/*"
+    "${_app}/Contents/PlugIns/*"
+    "${_qml_dest}/*")
+foreach(candidate IN LISTS _sign_candidates)
+    execute_process(COMMAND /usr/bin/file "${candidate}" OUTPUT_VARIABLE _file_type ERROR_QUIET)
+    if(_file_type MATCHES "Mach-O")
+        execute_process(COMMAND /usr/bin/codesign --force --sign - "${candidate}"
+                        RESULT_VARIABLE _sign_result OUTPUT_QUIET ERROR_VARIABLE _sign_error)
+        if(NOT _sign_result EQUAL 0)
+            message(FATAL_ERROR "Could not sign ${candidate}: ${_sign_error}")
+        endif()
+    endif()
+endforeach()
+execute_process(COMMAND /usr/bin/codesign --force --sign - "${_app}"
+                RESULT_VARIABLE _sign_result OUTPUT_QUIET ERROR_VARIABLE _sign_error)
+if(NOT _sign_result EQUAL 0)
+    message(FATAL_ERROR "Could not sign CARTON app: ${_sign_error}")
+endif()
+execute_process(COMMAND /usr/bin/codesign --verify --deep --strict "${_app}"
+                RESULT_VARIABLE _verify_result OUTPUT_QUIET ERROR_VARIABLE _verify_error)
+if(NOT _verify_result EQUAL 0)
+    message(FATAL_ERROR "CARTON app signature verification failed: ${_verify_error}")
+endif()
+
+set(_smoke_home "${CMAKE_INSTALL_PREFIX}/.carton-smoke-home")
+file(MAKE_DIRECTORY "${_smoke_home}")
+execute_process(
+    COMMAND "${CMAKE_COMMAND}" -E env
+        "HOME=${_smoke_home}"
+        QT_QPA_PLATFORM=offscreen
+        QSG_RHI_BACKEND=null
+        "${_app}/Contents/MacOS/carton" --smoke-test
+    RESULT_VARIABLE _smoke_result
+    OUTPUT_VARIABLE _smoke_output
+    ERROR_VARIABLE _smoke_error
+    TIMEOUT 20)
+file(REMOVE_RECURSE "${_smoke_home}")
+if(NOT _smoke_result EQUAL 0)
+    message(FATAL_ERROR "Packaged CARTON failed its startup smoke test:\n${_smoke_output}\n${_smoke_error}")
+endif()

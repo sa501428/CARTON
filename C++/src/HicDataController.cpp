@@ -1,5 +1,6 @@
 #include "HicDataController.h"
 #include "GenomicTrackReader.h"
+#include "HeatmapColorMapping.h"
 #include "MatrixAnalysis.h"
 #include "WorkspaceListModel.h"
 
@@ -57,6 +58,60 @@ bool chrNamesEqual(const QString& a, const QString& b) {
     if (a.compare(b, Qt::CaseInsensitive) == 0) return true;
     return stripChrPrefix(a).compare(stripChrPrefix(b), Qt::CaseInsensitive) == 0;
 }
+
+void paintHeatmapRecords(QPainter& painter, const QRect& plot,
+                         const std::vector<contactRecord>& records,
+                         const std::vector<contactRecord>& controlRecords,
+                         const QString& chrX, const QString& chrY, const QString& matrixType,
+                         qint64 x0, qint64 x1, qint64 y0, qint64 y1, int resolution,
+                         const HeatmapColorSettings& colors) {
+    const double spanX = std::max<qint64>(1, x1 - x0);
+    const double spanY = std::max<qint64>(1, y1 - y0);
+    const bool splitVs = chrX == chrY && !controlRecords.empty() &&
+                         (matrixType == QStringLiteral("vs") || matrixType.endsWith(QStringLiteral("vs")));
+    const bool mirror = chrX == chrY && !splitVs;
+    const std::size_t total = records.size() + controlRecords.size();
+    const std::size_t stride = std::max<std::size_t>(1, total / 400000U);
+    const int cellWidth = std::max(1, static_cast<int>(std::ceil(std::max(1, resolution) / spanX * plot.width())));
+    const int cellHeight = std::max(1, static_cast<int>(std::ceil(std::max(1, resolution) / spanY * plot.height())));
+    painter.setPen(Qt::NoPen);
+    auto drawRecords = [&](const std::vector<contactRecord>& source, bool control) {
+        for (std::size_t i = 0; i < source.size(); i += stride) {
+            const contactRecord& record = source[i];
+            if (record.binX < x0 || record.binX >= x1 || record.binY < y0 || record.binY >= y1) continue;
+            painter.setBrush(heatmapColorForValue(record.counts, colors));
+            const int drawBinX = splitVs
+                ? (control ? std::min(record.binX, record.binY) : std::max(record.binX, record.binY))
+                : record.binX;
+            const int drawBinY = splitVs
+                ? (control ? std::max(record.binX, record.binY) : std::min(record.binX, record.binY))
+                : record.binY;
+            const int x = plot.left() + static_cast<int>((drawBinX - x0) / spanX * plot.width());
+            const int y = plot.top() + static_cast<int>((drawBinY - y0) / spanY * plot.height());
+            painter.drawRect(x, y, cellWidth, cellHeight);
+            if (mirror && record.binX != record.binY) {
+                const int mirroredX = plot.left() + static_cast<int>((record.binY - x0) / spanX * plot.width());
+                const int mirroredY = plot.top() + static_cast<int>((record.binX - y0) / spanY * plot.height());
+                painter.drawRect(mirroredX, mirroredY, cellWidth, cellHeight);
+            }
+        }
+    };
+    drawRecords(records, false);
+    drawRecords(controlRecords, true);
+}
+
+void paintHeatmapLegend(QPainter& painter, const QRect& legend, const HeatmapColorSettings& colors,
+                        const QColor& textColor) {
+    for (int x = 0; x < legend.width(); ++x) {
+        const double t = x / static_cast<double>(std::max(1, legend.width() - 1));
+        const double value = colors.minimum + t * (colors.maximum - colors.minimum);
+        painter.setPen(heatmapColorForValue(value, colors));
+        painter.drawLine(legend.left() + x, legend.top(), legend.left() + x, legend.bottom());
+    }
+    painter.setPen(textColor);
+    painter.drawText(legend.left(), legend.bottom() + 14, QString::number(colors.minimum, 'g', 4));
+    painter.drawText(legend.right() - 48, legend.bottom() + 14, QString::number(colors.maximum, 'g', 4));
+}
 }
 
 HicDataController::HicDataController(QObject* parent)
@@ -94,8 +149,11 @@ HicDataController::HicDataController(QObject* parent)
         const PooledHicMetadataResult result = m_metadataWatcher.result();
         if (result.metadata) {
             applyMetadata(result.metadata);
-            setStatus(QStringLiteral("Loaded %1.").arg(m_filePath));
+            if (!m_pendingSavedState.isEmpty()) continueSavedStateRestore();
+            else setStatus(QStringLiteral("Loaded %1.").arg(m_filePath));
         } else {
+            m_pendingSavedState.clear();
+            m_deferRequests = false;
             setStatus(QStringLiteral("Failed to open file: %1").arg(result.error));
         }
     });
@@ -119,6 +177,13 @@ HicDataController::HicDataController(QObject* parent)
             setStatus(QStringLiteral("Failed to open control map: %1").arg(result.error));
         }
         emit controlReadyChanged();
+        if (!m_pendingSavedState.isEmpty()) {
+            const QString warning = m_controlReady ? QString()
+                : (result.error.isEmpty() ? QStringLiteral("the control map is incompatible with the primary map")
+                                          : result.error);
+            finishSavedStateRestore(warning);
+            return;
+        }
         if (!m_controlReady && matrixNeedsControl(m_matrixType)) {
             m_matrixType = QStringLiteral("observed");
             clearLoadedRegion();
@@ -128,6 +193,37 @@ HicDataController::HicDataController(QObject* parent)
             clearLoadedRegion();
             scheduleRequest();
         }
+    });
+
+    connect(&m_trackWatcher, &QFutureWatcher<PooledTrackResult>::finished, this, [this]() {
+        const PooledTrackResult pooled = m_trackWatcher.result();
+        m_trackLoadActive = false;
+        if (pooled.data) {
+            appendTrackLayer(pooled.data);
+            if (!m_activeTrackState.isEmpty()) applyTrackRestoreState(m_tracks.size() - 1, m_activeTrackState);
+        }
+        else setStatus(pooled.error);
+        m_activeTrackState.clear();
+        startNextTrackLoad();
+    });
+
+    connect(&m_annotationWatcher, &QFutureWatcher<PooledAnnotationResult>::finished, this, [this]() {
+        const PooledAnnotationResult pooled = m_annotationWatcher.result();
+        m_annotationLoadActive = false;
+        if (pooled.data) {
+            appendAnnotationLayer(pooled.data);
+            if (!m_activeAnnotationState.isEmpty())
+                applyAnnotationRestoreState(m_annotationLayers.size() - 1, m_activeAnnotationState);
+        }
+        else setStatus(pooled.error);
+        m_activeAnnotationState.clear();
+        startNextAnnotationLoad();
+    });
+
+    connect(&m_cytobandWatcher, &QFutureWatcher<GenomicCytobandReadResult>::finished, this, [this]() {
+        m_cytobandLoadActive = false;
+        applyCytobandResult(m_cytobandWatcher.result(), m_activeCytobandPath);
+        startNextCytobandLoad();
     });
 
     connect(&m_tileWatcher, &QFutureWatcher<TileResult>::finished, this, [this]() {
@@ -217,6 +313,9 @@ HicDataController::HicDataController(QObject* parent)
 HicDataController::~HicDataController() {
     m_metadataWatcher.cancel();
     m_controlMetadataWatcher.cancel();
+    m_trackWatcher.cancel();
+    m_annotationWatcher.cancel();
+    m_cytobandWatcher.cancel();
     m_tileWatcher.cancel();
     m_minimapWatcher.cancel();
 }
@@ -324,6 +423,11 @@ void HicDataController::openFile(const QUrl& url) {
     }
 
     m_filePath = path;
+    m_metadata.reset();
+    m_genomeId.clear();
+    m_chrX.clear();
+    m_chrY.clear();
+    m_resolution = 0;
     clearLoadedRegion();
     {
         QMutexLocker locker(&m_mutex);
@@ -340,6 +444,8 @@ void HicDataController::openFile(const QUrl& url) {
     m_minimapRequestSignature.clear();
     emit minimapChanged();
     emit filePathChanged();
+    emit metadataChanged();
+    emit viewChanged();
     emit recordsChanged();
     addRecent(QStringLiteral("recentMaps"), path);
     setBusy(true);
@@ -395,12 +501,21 @@ void HicDataController::loadTrack(const QUrl& url) {
 }
 
 void HicDataController::loadTrackFromPath(const QString& path) {
-    const PooledTrackResult pooled = m_registry->loadTrack(path);
-    if (!pooled.data) {
-        setStatus(pooled.error);
-        return;
-    }
-    appendTrackLayer(pooled.data);
+    if (path.trimmed().isEmpty()) return;
+    m_pendingTrackPaths.enqueue(path);
+    m_pendingTrackStates.enqueue({});
+    startNextTrackLoad();
+}
+
+void HicDataController::startNextTrackLoad() {
+    if (m_trackLoadActive || m_pendingTrackPaths.isEmpty()) return;
+    const QString path = m_pendingTrackPaths.dequeue();
+    m_activeTrackState = m_pendingTrackStates.dequeue();
+    m_trackLoadActive = true;
+    setStatus(QStringLiteral("Loading 1D track: %1").arg(path));
+    m_trackWatcher.setFuture(QtConcurrent::run([registry = m_registry, path]() {
+        return registry->loadTrack(path);
+    }));
 }
 
 void HicDataController::loadTrackResource(const QString& resourceId) {
@@ -438,18 +553,47 @@ void HicDataController::appendTrackLayer(const std::shared_ptr<const PooledTrack
     emit tracksChanged();
 }
 
+void HicDataController::applyTrackRestoreState(int index, const QVariantMap& item) {
+    if (index < 0 || index >= m_tracks.size()) return;
+    TrackLayer& track = m_tracks[index];
+    track.name = item.value(QStringLiteral("name"), track.name).toString();
+    track.color = QColor(item.value(QStringLiteral("positiveColor"), track.color.name()).toString());
+    track.negativeColor = QColor(item.value(QStringLiteral("negativeColor"), track.negativeColor.name()).toString());
+    track.minValue = item.value(QStringLiteral("min"), track.minValue).toDouble();
+    track.maxValue = item.value(QStringLiteral("max"), track.maxValue).toDouble();
+    track.logScale = item.value(QStringLiteral("logScale"), false).toBool();
+    track.reduction = item.value(QStringLiteral("reduction"), QStringLiteral("mean")).toString();
+    track.binSize = item.value(QStringLiteral("binSize"), 0).toLongLong();
+    track.visible = item.value(QStringLiteral("visible"), true).toBool();
+    track.collapsed = item.value(QStringLiteral("collapsed"), false).toBool();
+    track.autoscale = item.value(QStringLiteral("autoscale"), true).toBool();
+    track.height = item.value(QStringLiteral("height"), 100).toInt();
+    track.placement = item.value(QStringLiteral("placement"), QStringLiteral("above")).toString() == QStringLiteral("below")
+        ? QStringLiteral("below") : QStringLiteral("above");
+    emit tracksChanged();
+}
+
 void HicDataController::loadAnnotations(const QUrl& url) {
     const QString path = localPathFromUrl(url);
     loadAnnotationsFromPath(path);
 }
 
 void HicDataController::loadAnnotationsFromPath(const QString& path) {
-    const PooledAnnotationResult pooled = m_registry->loadAnnotations(path);
-    if (!pooled.data) {
-        setStatus(pooled.error);
-        return;
-    }
-    appendAnnotationLayer(pooled.data);
+    if (path.trimmed().isEmpty()) return;
+    m_pendingAnnotationPaths.enqueue(path);
+    m_pendingAnnotationStates.enqueue({});
+    startNextAnnotationLoad();
+}
+
+void HicDataController::startNextAnnotationLoad() {
+    if (m_annotationLoadActive || m_pendingAnnotationPaths.isEmpty()) return;
+    const QString path = m_pendingAnnotationPaths.dequeue();
+    m_activeAnnotationState = m_pendingAnnotationStates.dequeue();
+    m_annotationLoadActive = true;
+    setStatus(QStringLiteral("Loading 2D annotations: %1").arg(path));
+    m_annotationWatcher.setFuture(QtConcurrent::run([registry = m_registry, path]() {
+        return registry->loadAnnotations(path);
+    }));
 }
 
 void HicDataController::loadAnnotationResource(const QString& resourceId) {
@@ -477,6 +621,22 @@ void HicDataController::appendAnnotationLayer(const std::shared_ptr<PooledAnnota
     emit annotationsChanged();
 }
 
+void HicDataController::applyAnnotationRestoreState(int index, const QVariantMap& item) {
+    if (index < 0 || index >= m_annotationLayers.size()) return;
+    AnnotationLayer& layer = m_annotationLayers[index];
+    layer.name = item.value(QStringLiteral("name"), layer.name).toString();
+    layer.color = QColor(item.value(QStringLiteral("color"), layer.color.name()).toString());
+    layer.colorOverride = item.value(QStringLiteral("colorOverride"), false).toBool();
+    const QString placement = item.value(QStringLiteral("placement"), QStringLiteral("both")).toString();
+    layer.placement = placement == QStringLiteral("above") || placement == QStringLiteral("below")
+        ? placement : QStringLiteral("both");
+    layer.visible = item.value(QStringLiteral("visible"), true).toBool();
+    layer.transparent = item.value(QStringLiteral("transparent"), false).toBool();
+    layer.sparse = item.value(QStringLiteral("sparse"), false).toBool();
+    layer.enlarged = item.value(QStringLiteral("enlarged"), false).toBool();
+    emit annotationsChanged();
+}
+
 const QVector<HicDataController::Annotation2D>&
 HicDataController::layerAnnotations(const AnnotationLayer& layer) const {
     static const QVector<Annotation2D> empty;
@@ -501,7 +661,23 @@ QVector<HicDataController::Annotation2D>& HicDataController::editableAnnotations
 
 void HicDataController::loadCytobands(const QUrl& url) {
     const QString path = localPathFromUrl(url);
-    const GenomicCytobandReadResult result = readGenomicCytobands(path);
+    if (path.trimmed().isEmpty()) return;
+    m_pendingCytobandPaths.enqueue(path);
+    startNextCytobandLoad();
+}
+
+void HicDataController::startNextCytobandLoad() {
+    if (m_cytobandLoadActive || m_pendingCytobandPaths.isEmpty()) return;
+    m_activeCytobandPath = m_pendingCytobandPaths.dequeue();
+    m_cytobandLoadActive = true;
+    setStatus(QStringLiteral("Loading cytobands: %1").arg(m_activeCytobandPath));
+    const QString path = m_activeCytobandPath;
+    m_cytobandWatcher.setFuture(QtConcurrent::run([path]() {
+        return readGenomicCytobands(path);
+    }));
+}
+
+void HicDataController::applyCytobandResult(const GenomicCytobandReadResult& result, const QString& path) {
     QVector<Cytoband> parsed;
     parsed.reserve(result.cytobands.size());
     for (const GenomicCytoband& record : result.cytobands) {
@@ -1222,8 +1398,9 @@ void HicDataController::goTo(const QString& xLocation, const QString& yLocation)
                 requestedResolution = 0;
             }
         }
-        start = std::clamp<qint64>(start, 0, chrLength);
-        end = std::clamp<qint64>(end, start + m_resolution, chrLength);
+        const qint64 minimumSpan = std::min<qint64>(chrLength, std::max<qint64>(1, m_resolution));
+        start = std::clamp<qint64>(start, 0, std::max<qint64>(0, chrLength - minimumSpan));
+        end = std::clamp<qint64>(end, start + minimumSpan, chrLength);
         return end > start;
     };
 
@@ -1330,21 +1507,77 @@ void HicDataController::restoreSavedState(int index) {
     if (index < 0 || index >= states.size()) {
         return;
     }
-    const QVariantMap state = states[index].toMap();
-    if (state.contains("controlFilePath")) {
-        m_controlFilePath = state.value("controlFilePath").toString();
-        emit controlFilePathChanged();
+    if (m_metadataWatcher.isRunning() || m_controlMetadataWatcher.isRunning() || m_tileWatcher.isRunning()) {
+        setStatus(QStringLiteral("Please wait for the current map load to finish before restoring state."));
+        return;
     }
-    if (state.contains("matrixType")) m_matrixType = state.value("matrixType").toString();
-    if (state.contains("norm")) m_norm = state.value("norm").toString();
-    if (state.contains("colorMap")) m_colorMap = state.value("colorMap").toString();
-    if (state.contains("colorMin")) m_colorMin = state.value("colorMin").toDouble();
-    if (state.contains("colorMax")) m_colorMax = state.value("colorMax").toDouble();
-    if (applyViewState(state)) {
-        emit colorMapChanged();
-        emit colorMaxChanged();
-        scheduleRequest();
+    m_pendingSavedState = states[index].toMap();
+    m_deferRequests = true;
+    const QString primaryPath = m_pendingSavedState.value(QStringLiteral("filePath"), m_filePath).toString();
+    if (!primaryPath.isEmpty() && (primaryPath != m_filePath || !m_metadata)) {
+        openFile(QUrl::fromUserInput(primaryPath));
+        return;
     }
+    continueSavedStateRestore();
+}
+
+void HicDataController::continueSavedStateRestore() {
+    if (m_pendingSavedState.isEmpty()) return;
+    const QString controlPath = m_pendingSavedState.value(QStringLiteral("controlFilePath")).toString();
+    if (controlPath.isEmpty()) {
+        const bool pathChanged = !m_controlFilePath.isEmpty();
+        const bool readyChanged = m_controlReady;
+        m_controlFilePath.clear();
+        m_controlMetadata.reset();
+        m_controlReady = false;
+        {
+            QMutexLocker locker(&m_mutex);
+            m_controlRecords.clear();
+            m_controlHoverLookup.clear();
+        }
+        if (pathChanged) emit controlFilePathChanged();
+        if (readyChanged) emit controlReadyChanged();
+        finishSavedStateRestore();
+        return;
+    }
+    if (controlPath != m_controlFilePath || !m_controlReady || !m_controlMetadata) {
+        openControlFile(QUrl::fromUserInput(controlPath));
+        return;
+    }
+    finishSavedStateRestore();
+}
+
+void HicDataController::finishSavedStateRestore(const QString& controlWarning) {
+    if (m_pendingSavedState.isEmpty()) return;
+    const QVariantMap state = m_pendingSavedState;
+    m_pendingSavedState.clear();
+
+    const QString requestedNorm = state.value(QStringLiteral("norm"), QStringLiteral("NONE")).toString();
+    const bool normAvailable = requestedNorm == QStringLiteral("NONE") ||
+        (m_metadata && std::find(m_metadata->normalizations.cbegin(), m_metadata->normalizations.cend(),
+                                 requestedNorm.toStdString()) != m_metadata->normalizations.cend());
+    m_norm = normAvailable ? requestedNorm : QStringLiteral("NONE");
+    const bool viewApplied = applyViewState(state);
+    const QString requestedMatrix = state.value(QStringLiteral("matrixType"), QStringLiteral("observed")).toString();
+    const bool matrixAvailable = validateMatrixMode(requestedMatrix);
+    m_matrixType = matrixAvailable ? requestedMatrix : QStringLiteral("observed");
+    m_colorMap = state.value(QStringLiteral("colorMap"), m_colorMap).toString();
+    m_colorMin = state.value(QStringLiteral("colorMin"), m_colorMin).toDouble();
+    m_colorMax = state.value(QStringLiteral("colorMax"), m_colorMax).toDouble();
+    clearLoadedRegion();
+    m_deferRequests = false;
+    emit colorMapChanged();
+    emit colorMaxChanged();
+    emit viewChanged();
+    if (!viewApplied) setStatus(QStringLiteral("Saved state could not be applied to this map."));
+    else if (!matrixAvailable)
+        setStatus(QStringLiteral("Restored state using observed because %1 is unavailable.").arg(requestedMatrix));
+    else if (!controlWarning.isEmpty())
+        setStatus(QStringLiteral("Restored state without its control map: %1").arg(controlWarning));
+    else if (!normAvailable)
+        setStatus(QStringLiteral("Restored state using NONE because normalization %1 is unavailable.").arg(requestedNorm));
+    else setStatus(QStringLiteral("Restored saved state."));
+    scheduleRequest();
 }
 
 void HicDataController::exportState(const QUrl& url) const {
@@ -1374,8 +1607,10 @@ void HicDataController::importState(const QUrl& url) {
 
 void HicDataController::exportFigurePdf(const QUrl& url, int width, int height) const {
     const QString path = localPathFromUrl(url);
+    width = std::clamp(width, 300, 12000);
+    height = std::clamp(height, 300, 12000);
     QPdfWriter writer(path);
-    writer.setPageSize(QPageSize(QSize(std::max(300, width), std::max(300, height)), QPageSize::Point));
+    writer.setPageSize(QPageSize(QSize(width, height), QPageSize::Point));
     writer.setResolution(72);
     QPainter painter(&writer);
     painter.fillRect(QRect(0, 0, width, height), Qt::white);
@@ -1385,22 +1620,20 @@ void HicDataController::exportFigurePdf(const QUrl& url, int width, int height) 
     painter.drawText(24, 56, QStringLiteral("%1 %2:%3-%4 by %5:%6-%7 %8 bp")
                          .arg(m_matrixType, m_chrX).arg(m_x0).arg(m_x1)
                          .arg(m_chrY).arg(m_y0).arg(m_y1).arg(m_resolution));
-    const int side = std::min(width - 80, height - 110);
+    const int side = std::max(1, std::min(width - 80, height - 130));
     const QRect plot(40, 80, side, side);
-    painter.setPen(QPen(Qt::lightGray, 1));
-    painter.drawRect(plot);
     const std::vector<contactRecord> snapshot = recordsSnapshot();
-    const double spanX = std::max<qint64>(1, m_x1 - m_x0);
-    const double spanY = std::max<qint64>(1, m_y1 - m_y0);
-    painter.setPen(Qt::NoPen);
-    painter.setBrush(QColor("#d7191c"));
-    const int stride = std::max(1, static_cast<int>(snapshot.size() / 40000));
-    for (std::size_t i = 0; i < snapshot.size(); i += stride) {
-        const contactRecord& rec = snapshot[i];
-        const int x = plot.left() + static_cast<int>((rec.binX - m_x0) / spanX * plot.width());
-        const int y = plot.top() + static_cast<int>((rec.binY - m_y0) / spanY * plot.height());
-        painter.drawRect(QRect(x, y, 1, 1));
-    }
+    const std::vector<contactRecord> controlSnapshot = controlRecordsSnapshot();
+    HeatmapColorSettings colors{m_colorMin, m_colorMax, m_matrixType, m_colorMap,
+                                m_customLowColor, m_customHighColor, m_missingValueColor, m_zeroTransparent};
+    painter.fillRect(plot, heatmapColorForValue(0.0, colors));
+    paintHeatmapRecords(painter, plot, snapshot, controlSnapshot, m_chrX, m_chrY, m_matrixType,
+                        m_x0, m_x1, m_y0, m_y1, m_resolution, colors);
+    painter.setBrush(Qt::NoBrush);
+    painter.setPen(QPen(Qt::lightGray, 1));
+    painter.drawRect(plot.adjusted(0, 0, -1, -1));
+    paintHeatmapLegend(painter, QRect(plot.left(), plot.bottom() + 16, std::min(280, plot.width()), 10),
+                       colors, Qt::darkGray);
     painter.end();
 }
 
@@ -1428,65 +1661,18 @@ bool HicDataController::exportFigurePng(const QUrl& url, int width, int height) 
 
     const int legendHeight = 34;
     const QRect plot(64, 72, std::max(1, width - 96), std::max(1, height - 112 - legendHeight));
-    painter.fillRect(plot, QColor("#ffffff"));
-    const double spanX = std::max<qint64>(1, m_x1 - m_x0);
-    const double spanY = std::max<qint64>(1, m_y1 - m_y0);
-    const bool divergent = matrixIsDivergent(m_matrixType);
-    auto valueColor = [&](double value) {
-        if (!std::isfinite(value)) return m_missingValueColor;
-        if (value == 0.0 && m_zeroTransparent) return QColor(255, 255, 255, 0);
-        if (divergent || m_symmetricColorScale) {
-            const double range = std::max(0.000001, std::max(std::abs(m_colorMin), std::abs(m_colorMax)));
-            const double t = std::clamp(value / range, -1.0, 1.0);
-            return t < 0.0
-                ? QColor::fromRgbF(1.0 + t, 1.0 + t, 1.0)
-                : QColor::fromRgbF(1.0, 1.0 - t, 1.0 - t);
-        }
-        const double t = std::clamp((value - m_colorMin) / std::max(0.000001, m_colorMax - m_colorMin), 0.0, 1.0);
-        if (m_colorMap == QStringLiteral("Grayscale")) return QColor::fromRgbF(1.0 - t * 0.93, 1.0 - t * 0.93, 1.0 - t * 0.93);
-        return QColor::fromRgbF(1.0, 1.0 - t * 0.91, 1.0 - t * 0.89);
-    };
     const std::vector<contactRecord> snapshot = recordsSnapshot();
     const std::vector<contactRecord> controlSnapshot = controlRecordsSnapshot();
-    const bool splitVs = m_chrX == m_chrY && !controlSnapshot.empty() &&
-                         (m_matrixType == QStringLiteral("vs") || m_matrixType.endsWith(QStringLiteral("vs")));
-    const int stride = std::max(1, static_cast<int>((snapshot.size() + controlSnapshot.size()) / 400000));
-    const int cellW = std::max(1, static_cast<int>(std::ceil(m_resolution / spanX * plot.width())));
-    const int cellH = std::max(1, static_cast<int>(std::ceil(m_resolution / spanY * plot.height())));
-    const bool mirror = m_chrX == m_chrY && !splitVs;
-    painter.setPen(Qt::NoPen);
-    auto drawRecords = [&](const std::vector<contactRecord>& records, bool control) {
-      for (std::size_t i = 0; i < records.size(); i += static_cast<std::size_t>(stride)) {
-        const contactRecord& rec = records[i];
-        if (rec.binX < m_x0 || rec.binX >= m_x1 || rec.binY < m_y0 || rec.binY >= m_y1) continue;
-        painter.setBrush(valueColor(rec.counts));
-        const int drawBinX = splitVs ? (control ? std::min(rec.binX, rec.binY) : std::max(rec.binX, rec.binY)) : rec.binX;
-        const int drawBinY = splitVs ? (control ? std::max(rec.binX, rec.binY) : std::min(rec.binX, rec.binY)) : rec.binY;
-        const int x = plot.left() + static_cast<int>((drawBinX - m_x0) / spanX * plot.width());
-        const int y = plot.top() + static_cast<int>((drawBinY - m_y0) / spanY * plot.height());
-        painter.drawRect(x, y, cellW, cellH);
-        if (mirror && rec.binX != rec.binY) {
-            const int mx = plot.left() + static_cast<int>((rec.binY - m_x0) / spanX * plot.width());
-            const int my = plot.top() + static_cast<int>((rec.binX - m_y0) / spanY * plot.height());
-            painter.drawRect(mx, my, cellW, cellH);
-        }
-      }
-    };
-    drawRecords(snapshot, false);
-    drawRecords(controlSnapshot, true);
+    HeatmapColorSettings colors{m_colorMin, m_colorMax, m_matrixType, m_colorMap,
+                                m_customLowColor, m_customHighColor, m_missingValueColor, m_zeroTransparent};
+    painter.fillRect(plot, heatmapColorForValue(0.0, colors));
+    paintHeatmapRecords(painter, plot, snapshot, controlSnapshot, m_chrX, m_chrY, m_matrixType,
+                        m_x0, m_x1, m_y0, m_y1, m_resolution, colors);
     painter.setBrush(Qt::NoBrush);
     painter.setPen(QColor("#52606d"));
     painter.drawRect(plot.adjusted(0, 0, -1, -1));
     const QRect legend(plot.left(), plot.bottom() + 18, std::min(280, plot.width()), 10);
-    for (int x = 0; x < legend.width(); ++x) {
-        const double t = x / static_cast<double>(std::max(1, legend.width() - 1));
-        const double value = m_colorMin + t * (m_colorMax - m_colorMin);
-        painter.setPen(valueColor(value));
-        painter.drawLine(legend.left() + x, legend.top(), legend.left() + x, legend.bottom());
-    }
-    painter.setPen(QColor("#c5d0dc"));
-    painter.drawText(legend.left(), legend.bottom() + 14, QString::number(m_colorMin, 'g', 4));
-    painter.drawText(legend.right() - 48, legend.bottom() + 14, QString::number(m_colorMax, 'g', 4));
+    paintHeatmapLegend(painter, legend, colors, QColor("#c5d0dc"));
     painter.end();
     return image.save(localPathFromUrl(url), "PNG");
 }
@@ -1620,25 +1806,15 @@ void HicDataController::restoreSessionState(const QVariantMap& state, bool inclu
             pooled = m_registry->restoreDerivedTrack(resourceId, item.value(QStringLiteral("name")).toString(),
                                                       features, item.value(QStringLiteral("provenance")).toMap());
         }
-        if (!pooled.data && !source.startsWith(QStringLiteral("track:derived:")))
-            pooled = m_registry->loadTrack(source);
+        if (!pooled.data && !source.startsWith(QStringLiteral("track:derived:")) && !source.isEmpty()) {
+            m_pendingTrackPaths.enqueue(source);
+            m_pendingTrackStates.enqueue(item);
+            startNextTrackLoad();
+            continue;
+        }
         if (!pooled.data) continue;
         appendTrackLayer(pooled.data);
-        TrackLayer& track = m_tracks.back();
-        track.name = item.value(QStringLiteral("name"), track.name).toString();
-        track.color = QColor(item.value(QStringLiteral("positiveColor"), track.color.name()).toString());
-        track.negativeColor = QColor(item.value(QStringLiteral("negativeColor"), track.negativeColor.name()).toString());
-        track.minValue = item.value(QStringLiteral("min"), track.minValue).toDouble();
-        track.maxValue = item.value(QStringLiteral("max"), track.maxValue).toDouble();
-        track.logScale = item.value(QStringLiteral("logScale"), false).toBool();
-        track.reduction = item.value(QStringLiteral("reduction"), QStringLiteral("mean")).toString();
-        track.binSize = item.value(QStringLiteral("binSize"), 0).toLongLong();
-        track.visible = item.value(QStringLiteral("visible"), true).toBool();
-        track.collapsed = item.value(QStringLiteral("collapsed"), false).toBool();
-        track.autoscale = item.value(QStringLiteral("autoscale"), true).toBool();
-        track.height = item.value(QStringLiteral("height"), 100).toInt();
-        track.placement = item.value(QStringLiteral("placement"), QStringLiteral("above")).toString() == QStringLiteral("below")
-            ? QStringLiteral("below") : QStringLiteral("above");
+        applyTrackRestoreState(m_tracks.size() - 1, item);
     }
 
     m_annotationLayers.clear();
@@ -1669,21 +1845,20 @@ void HicDataController::restoreSessionState(const QVariantMap& state, bool inclu
             pooled = m_registry->restoreCustomAnnotations(item.value(QStringLiteral("resourceId")).toString(),
                                                           item.value(QStringLiteral("name")).toString(), features);
         } else {
-            pooled = m_registry->loadAnnotations(item.value(QStringLiteral("source")).toString());
+            pooled = m_registry->annotationById(item.value(QStringLiteral("resourceId")).toString());
+            if (!pooled.data) {
+                const QString source = item.value(QStringLiteral("source")).toString();
+                if (!source.isEmpty()) {
+                    m_pendingAnnotationPaths.enqueue(source);
+                    m_pendingAnnotationStates.enqueue(item);
+                    startNextAnnotationLoad();
+                }
+                continue;
+            }
         }
         if (!pooled.data) continue;
         appendAnnotationLayer(pooled.data);
-        AnnotationLayer& layer = m_annotationLayers.back();
-        layer.name = item.value(QStringLiteral("name"), layer.name).toString();
-        layer.color = QColor(item.value(QStringLiteral("color"), layer.color.name()).toString());
-        layer.colorOverride = item.value(QStringLiteral("colorOverride"), false).toBool();
-        const QString placement = item.value(QStringLiteral("placement"), QStringLiteral("both")).toString();
-        layer.placement = placement == QStringLiteral("above") || placement == QStringLiteral("below")
-            ? placement : QStringLiteral("both");
-        layer.visible = item.value(QStringLiteral("visible"), true).toBool();
-        layer.transparent = item.value(QStringLiteral("transparent"), false).toBool();
-        layer.sparse = item.value(QStringLiteral("sparse"), false).toBool();
-        layer.enlarged = item.value(QStringLiteral("enlarged"), false).toBool();
+        applyAnnotationRestoreState(m_annotationLayers.size() - 1, item);
     }
     if (m_annotationLayers.isEmpty()) addAnnotationLayer(QStringLiteral("Selection"));
     m_activeAnnotationLayer = 0;
@@ -2003,30 +2178,83 @@ void HicDataController::resetView() {
 
 void HicDataController::syncViewFrom(HicDataController* other, bool includeColor) {
     if (!other || other == this) return;
-    const bool sameView = m_chrX == other->m_chrX && m_chrY == other->m_chrY &&
-                          m_x0 == other->m_x0 && m_x1 == other->m_x1 &&
-                          m_y0 == other->m_y0 && m_y1 == other->m_y1 &&
-                          m_resolution == other->m_resolution;
+    QString nextChrX = m_chrX;
+    QString nextChrY = m_chrY;
+    qint64 nextX0 = m_x0;
+    qint64 nextX1 = m_x1;
+    qint64 nextY0 = m_y0;
+    qint64 nextY1 = m_y1;
+    bool incompatibleAxis = false;
+    auto mapAxis = [this, &incompatibleAxis](bool locked, const QString& sourceChr,
+                                             qint64 sourceStart, qint64 sourceEnd,
+                                             QString& targetChr, qint64& targetStart, qint64& targetEnd) {
+        if (locked) return;
+        if (m_metadata) {
+            const chromosome resolved = chromosomeByName(sourceChr);
+            if (resolved.name.empty()) {
+                incompatibleAxis = true;
+                return;
+            }
+            targetChr = QString::fromStdString(resolved.name);
+        } else {
+            targetChr = sourceChr;
+        }
+        targetStart = sourceStart;
+        targetEnd = sourceEnd;
+    };
+    mapAxis(m_xLocusLocked, other->m_chrX, other->m_x0, other->m_x1, nextChrX, nextX0, nextX1);
+    mapAxis(m_yLocusLocked, other->m_chrY, other->m_y0, other->m_y1, nextChrY, nextY0, nextY1);
+    int nextResolution = m_resolution;
+    if (!m_resolutionLocked) {
+        nextResolution = other->m_resolution;
+        if (m_metadata && !m_metadata->bpResolutions.empty()) {
+            nextResolution = *std::min_element(m_metadata->bpResolutions.cbegin(), m_metadata->bpResolutions.cend(),
+                [other](int a, int b) {
+                    return std::abs(static_cast<qint64>(a) - other->m_resolution) <
+                           std::abs(static_cast<qint64>(b) - other->m_resolution);
+                });
+        }
+    }
+    const bool sameView = m_chrX == nextChrX && m_chrY == nextChrY &&
+                          m_x0 == nextX0 && m_x1 == nextX1 &&
+                          m_y0 == nextY0 && m_y1 == nextY1 &&
+                          m_resolution == nextResolution;
     const bool sameColor = !includeColor || (m_colorMin == other->m_colorMin && m_colorMax == other->m_colorMax &&
-                                             m_colorMap == other->m_colorMap);
+                                             m_colorMap == other->m_colorMap &&
+                                             m_customLowColor == other->m_customLowColor &&
+                                             m_customHighColor == other->m_customHighColor);
+    if (incompatibleAxis)
+        setStatus(QStringLiteral("Linked view skipped a chromosome that is unavailable in this map."));
     if (sameView && sameColor) return;
-    m_chrX = other->m_chrX;
-    m_chrY = other->m_chrY;
-    m_x0 = other->m_x0;
-    m_x1 = other->m_x1;
-    m_y0 = other->m_y0;
-    m_y1 = other->m_y1;
-    if (!m_resolutionLocked) m_resolution = other->m_resolution;
+    m_chrX = nextChrX;
+    m_chrY = nextChrY;
+    m_x0 = nextX0;
+    m_x1 = nextX1;
+    m_y0 = nextY0;
+    m_y1 = nextY1;
+    m_resolution = nextResolution;
     if (includeColor) {
         m_colorMin = other->m_colorMin;
         m_colorMax = other->m_colorMax;
         m_colorMap = other->m_colorMap;
+        m_customLowColor = other->m_customLowColor;
+        m_customHighColor = other->m_customHighColor;
         m_colorMaxAuto = other->m_colorMaxAuto;
         emit colorMaxChanged();
         emit colorMapChanged();
     }
     clearLoadedRegion();
     clampRegion();
+    if (m_xLocusLocked) {
+        m_chrX = nextChrX;
+        m_x0 = nextX0;
+        m_x1 = nextX1;
+    }
+    if (m_yLocusLocked) {
+        m_chrY = nextChrY;
+        m_y0 = nextY0;
+        m_y1 = nextY1;
+    }
     emit viewChanged();
     scheduleRequest();
 }
@@ -3093,11 +3321,14 @@ bool HicDataController::validateMatrixMode(const QString& matrixType) {
 }
 
 void HicDataController::clampRegion() {
-    const qint64 maxX = std::max<qint64>(m_resolution, chromosomeLength(m_chrX));
-    const qint64 maxY = std::max<qint64>(m_resolution, chromosomeLength(m_chrY));
-    const qint64 minSpan = std::max<qint64>(m_resolution, m_resolution * 20LL);
-    const qint64 spanX = std::clamp<qint64>(std::max<qint64>(minSpan, m_x1 - m_x0), m_resolution, maxX);
-    const qint64 spanY = std::clamp<qint64>(std::max<qint64>(minSpan, m_y1 - m_y0), m_resolution, maxY);
+    const qint64 maxX = std::max<qint64>(1, chromosomeLength(m_chrX));
+    const qint64 maxY = std::max<qint64>(1, chromosomeLength(m_chrY));
+    const qint64 resolution = std::max<qint64>(1, m_resolution);
+    const qint64 minSpan = std::max<qint64>(resolution, resolution * 20LL);
+    const qint64 spanX = std::clamp<qint64>(std::max<qint64>(minSpan, m_x1 - m_x0),
+                                           std::min(resolution, maxX), maxX);
+    const qint64 spanY = std::clamp<qint64>(std::max<qint64>(minSpan, m_y1 - m_y0),
+                                           std::min(resolution, maxY), maxY);
     m_x0 = std::clamp<qint64>(m_x0, 0, std::max<qint64>(0, maxX - spanX));
     m_y0 = std::clamp<qint64>(m_y0, 0, std::max<qint64>(0, maxY - spanY));
     m_x1 = m_x0 + spanX;
@@ -3325,10 +3556,17 @@ QVariantMap HicDataController::currentViewState(const QString& name) const {
 }
 
 bool HicDataController::applyViewState(const QVariantMap& state) {
-    const QString nextChrX = state.value("chrX").toString();
-    const QString nextChrY = state.value("chrY").toString();
+    QString nextChrX = state.value("chrX").toString();
+    QString nextChrY = state.value("chrY").toString();
     if (nextChrX.isEmpty() || nextChrY.isEmpty()) {
         return false;
+    }
+    if (m_metadata) {
+        const chromosome resolvedX = chromosomeByName(nextChrX);
+        const chromosome resolvedY = chromosomeByName(nextChrY);
+        if (resolvedX.name.empty() || resolvedY.name.empty()) return false;
+        nextChrX = QString::fromStdString(resolvedX.name);
+        nextChrY = QString::fromStdString(resolvedY.name);
     }
     pushViewHistory();
     m_chrX = nextChrX;
@@ -3337,8 +3575,18 @@ bool HicDataController::applyViewState(const QVariantMap& state) {
     m_x1 = state.value("x1").toLongLong();
     m_y0 = state.value("y0").toLongLong();
     m_y1 = state.value("y1").toLongLong();
-    if (state.value("resolution").toInt() > 0) {
-        m_resolution = state.value("resolution").toInt();
+    const int requestedResolution = state.value("resolution").toInt();
+    if (requestedResolution > 0) {
+        m_resolution = requestedResolution;
+        if (m_metadata && !m_metadata->bpResolutions.empty() &&
+            std::find(m_metadata->bpResolutions.cbegin(), m_metadata->bpResolutions.cend(), m_resolution) ==
+                m_metadata->bpResolutions.cend()) {
+            m_resolution = *std::min_element(m_metadata->bpResolutions.cbegin(), m_metadata->bpResolutions.cend(),
+                [requestedResolution](int a, int b) {
+                    return std::abs(static_cast<qint64>(a) - requestedResolution) <
+                           std::abs(static_cast<qint64>(b) - requestedResolution);
+                });
+        }
     }
     clampRegion();
     applyViewportAspectRatio();
@@ -3522,6 +3770,7 @@ void HicDataController::clearLoadedRegion() {
 }
 
 void HicDataController::scheduleRequest() {
+    if (m_deferRequests) return;
     if (m_filePath.isEmpty()) {
         return;
     }
@@ -3546,7 +3795,7 @@ void HicDataController::scheduleRequest() {
     const quint64 requestId = ++m_requestSerial;
 
     if (!matrixNeedsControl(m_matrixType) && matrixNeedsPrimary(m_matrixType)) {
-        if (const HicTile* cached = m_cache->get(key)) {
+        if (const auto cached = m_cache->get(key)) {
             std::vector<contactRecord> displayRecords = transformRecordsForDisplay(m_matrixType, cached->records, {});
             {
                 QMutexLocker locker(&m_mutex);

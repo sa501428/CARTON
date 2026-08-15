@@ -1,6 +1,7 @@
 #include "GenomicTrackReader.h"
 
 #include <QFileInfo>
+#include <QStringList>
 #include <QUrl>
 
 #include <igv/igv.hpp>
@@ -50,10 +51,20 @@ QColor parseColor(const std::string& value, const QColor& fallback) {
     return redOk && greenOk && blueOk ? QColor(red, green, blue) : fallback;
 }
 
-QString cappedWarning(const QString& kind) {
-    return QStringLiteral("%1 was capped at %2 records to keep memory bounded.")
-        .arg(kind)
-        .arg(kMaxResidentRecords);
+template <typename Record>
+QString batchWarning(const QString& kind, const igv::RecordBatch<Record>& batch) {
+    QStringList warnings;
+    if (batch.truncated) {
+        warnings.push_back(QStringLiteral("%1 was sampled across the complete resource at %2 records to keep memory bounded")
+                               .arg(kind)
+                               .arg(kMaxResidentRecords));
+    }
+    if (batch.skipped_records > 0) {
+        warnings.push_back(QStringLiteral("skipped %1 malformed record%2")
+                               .arg(batch.skipped_records)
+                               .arg(batch.skipped_records == 1 ? QString() : QStringLiteral("s")));
+    }
+    return warnings.isEmpty() ? QString() : warnings.join(QStringLiteral("; ")) + QLatin1Char('.');
 }
 }
 
@@ -79,7 +90,7 @@ GenomicTrackReadResult readGenomicTrack(const QString& pathOrUrl) {
                 if (record.color) feature.color = parseColor(*record.color, feature.color);
                 result.features.push_back(std::move(feature));
             }
-            if (batch.truncated) result.warning = cappedWarning(QStringLiteral("Track"));
+            result.warning = batchWarning(QStringLiteral("Track"), batch);
             return result;
         }
 
@@ -91,7 +102,7 @@ GenomicTrackReadResult readGenomicTrack(const QString& pathOrUrl) {
                     QString::fromUtf8(record.interval.contig), record.interval.start, record.interval.end,
                     defaultName, record.value, QColor("#4b7bec")});
             }
-            if (batch.truncated) result.warning = cappedWarning(QStringLiteral("Track"));
+            result.warning = batchWarning(QStringLiteral("Track"), batch);
             return result;
         }
 
@@ -136,7 +147,7 @@ GenomicInteractionReadResult readGenomicInteractions(const QString& pathOrUrl) {
             }
             result.interactions.push_back(std::move(interaction));
         }
-        if (batch.truncated) result.warning = cappedWarning(QStringLiteral("Interaction file"));
+        result.warning = batchWarning(QStringLiteral("Interaction file"), batch);
     } catch (const std::exception& error) {
         result.warning = QString::fromUtf8(error.what());
     }
@@ -157,7 +168,7 @@ GenomicCytobandReadResult readGenomicCytobands(const QString& pathOrUrl) {
                 QString::fromUtf8(record.name),
                 stain == record.attributes.end() ? QStringLiteral("gneg") : QString::fromUtf8(stain->second)});
         }
-        if (batch.truncated) result.warning = cappedWarning(QStringLiteral("Cytoband file"));
+        result.warning = batchWarning(QStringLiteral("Cytoband file"), batch);
     } catch (const std::exception& error) {
         result.warning = QString::fromUtf8(error.what());
     }

@@ -355,7 +355,7 @@ ApplicationWindow {
             else if (argument.indexOf("--regions-format=") === 0) initialRegionFormat = argument.substring(17)
         }
         addTab(initialType)
-        if (initialRegions.length > 0 && activeTab) activeTab.loadRegions(initialRegions, initialRegionFormat)
+        if (initialRegions.length > 0 && activeTab) activeTab.loadRegionsAsync(initialRegions, initialRegionFormat)
     }
 
     FileDialog {
@@ -408,7 +408,7 @@ ApplicationWindow {
                (regionFormat === "bedpe-as-bed" ? "Project BEDPE endpoints" : "Load BEDPE regions")
         nameFilters: regionFormat === "bed" ? ["BED regions (*.bed *.txt *.tsv)", "All files (*)"]
                                              : ["BEDPE regions (*.bedpe *.txt *.tsv)", "All files (*)"]
-        onAccepted: if (activeTab) activeTab.loadRegions(selectedFile, regionFormat)
+        onAccepted: if (activeTab) activeTab.loadRegionsAsync(selectedFile, regionFormat)
     }
 
     FileDialog {

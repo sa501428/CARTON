@@ -29,9 +29,9 @@ public:
     QVariantList entries() const;
     void setWindowSize(qint64 value);
 
-    Q_INVOKABLE bool loadBed(const QUrl& url);
-    Q_INVOKABLE bool loadBedpe(const QUrl& url);
-    Q_INVOKABLE bool loadBedpeAsBed(const QUrl& url);
+    bool loadBed(const QUrl& url);
+    bool loadBedpe(const QUrl& url);
+    bool loadBedpeAsBed(const QUrl& url);
     Q_INVOKABLE void clear();
     Q_INVOKABLE QVariantMap state() const;
     Q_INVOKABLE bool restoreState(const QVariantMap& state);

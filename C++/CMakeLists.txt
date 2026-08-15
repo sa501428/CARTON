@@ -1,6 +1,6 @@
 cmake_minimum_required(VERSION 3.24)
 
-project(CARTON VERSION 0.1.0 LANGUAGES C CXX)
+project(CARTON VERSION 0.2.0 LANGUAGES C CXX)
 
 include(CTest)
 
@@ -62,6 +62,7 @@ add_library(carton_core STATIC
     src/GenomicTrackReader.cpp
     src/GenomicTrackReader.h
     src/HicTileCache.h
+    src/HeatmapColorMapping.h
     src/WorkspaceListModel.cpp
     src/WorkspaceListModel.h
     src/MatrixAnalysis.cpp
@@ -134,6 +135,9 @@ target_link_libraries(carton
 if(BUILD_TESTING)
     add_executable(carton_core_smoke tests/controller_smoke.cpp)
     target_link_libraries(carton_core_smoke PRIVATE carton_core Qt6::Gui)
+    target_compile_definitions(carton_core_smoke PRIVATE
+        CARTON_TEST_HIC_PATH="${CMAKE_CURRENT_SOURCE_DIR}/../igv-main/test/data/hic/test_chr22.hic"
+    )
     add_test(NAME carton_core_smoke COMMAND carton_core_smoke)
     set_tests_properties(carton_core_smoke PROPERTIES ENVIRONMENT "QT_QPA_PLATFORM=offscreen")
 
@@ -192,27 +196,20 @@ install(TARGETS carton
 )
 # ── macOS Qt deployment (runs during `cmake --install`) ──────────────────────
 if(APPLE)
+    get_target_property(_qt_qmake Qt6::qmake IMPORTED_LOCATION)
+    get_filename_component(_qt_bin_dir "${_qt_qmake}" DIRECTORY)
+    find_program(CARTON_MACDEPLOYQT NAMES macdeployqt HINTS "${_qt_bin_dir}" REQUIRED)
+    find_program(CARTON_QTPATHS NAMES qtpaths6 qtpaths HINTS "${_qt_bin_dir}" REQUIRED)
+    foreach(_query LIBS PLUGINS QML)
+        execute_process(
+            COMMAND "${CARTON_QTPATHS}" --query "QT_INSTALL_${_query}"
+            OUTPUT_VARIABLE "CARTON_QT_${_query}_DIR"
+            OUTPUT_STRIP_TRAILING_WHITESPACE
+            COMMAND_ERROR_IS_FATAL ANY
+        )
+    endforeach()
     set(DEPLOY_SCRIPT "${CMAKE_CURRENT_BINARY_DIR}/deploy_macos.cmake")
-    file(WRITE "${DEPLOY_SCRIPT}"
-        "execute_process(\n"
-        "    COMMAND \"/opt/homebrew/bin/macdeployqt\" \"\${CMAKE_INSTALL_PREFIX}/carton.app\""
-        " \"-qmldir=${CMAKE_CURRENT_SOURCE_DIR}/qml\"\n"
-        "    RESULT_VARIABLE _r\n"
-        ")\n"
-        "if(NOT _r EQUAL 0)\n"
-        "    message(FATAL_ERROR \"macdeployqt failed\")\n"
-        "endif()\n"
-        # macdeployqt rewrites load commands (rpaths) after the linker's ad-hoc
-        # signature was embedded, which invalidates it; re-sign or launch fails
-        # with a "Code Signature Invalid" SIGKILL.
-        "execute_process(\n"
-        "    COMMAND \"codesign\" \"--force\" \"--deep\" \"--sign\" \"-\" \"\${CMAKE_INSTALL_PREFIX}/carton.app\"\n"
-        "    RESULT_VARIABLE _rs\n"
-        ")\n"
-        "if(NOT _rs EQUAL 0)\n"
-        "    message(FATAL_ERROR \"codesign failed\")\n"
-        "endif()\n"
-    )
+    configure_file(cmake/DeployMacOS.cmake.in "${DEPLOY_SCRIPT}" @ONLY)
     install(SCRIPT "${DEPLOY_SCRIPT}")
 endif()
 

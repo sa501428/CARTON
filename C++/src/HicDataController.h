@@ -9,6 +9,7 @@
 #include <QHash>
 #include <QAbstractItemModel>
 #include <QMap>
+#include <QQueue>
 #include <QUrl>
 #include <QVariantMap>
 #include <QVariantList>
@@ -408,6 +409,12 @@ private:
     void refreshTracksModel();
     void refreshAnnotationsModel();
     void refreshSearchResultsModel();
+    void startNextTrackLoad();
+    void startNextAnnotationLoad();
+    void startNextCytobandLoad();
+    void applyCytobandResult(const GenomicCytobandReadResult& result, const QString& path);
+    void continueSavedStateRestore();
+    void finishSavedStateRestore(const QString& controlWarning = QString());
 
     struct TrackLayer {
         QString name;
@@ -462,6 +469,8 @@ private:
     const QVector<Annotation2D>& layerAnnotations(const AnnotationLayer& layer) const;
     void appendTrackLayer(const std::shared_ptr<const PooledTrackData>& data);
     void appendAnnotationLayer(const std::shared_ptr<PooledAnnotationData>& data);
+    void applyTrackRestoreState(int index, const QVariantMap& state);
+    void applyAnnotationRestoreState(int index, const QVariantMap& state);
 
     mutable QMutex m_mutex;
     QString m_filePath;
@@ -529,8 +538,24 @@ private:
     bool m_hasLoadedKey = false;
     QFutureWatcher<PooledHicMetadataResult> m_metadataWatcher;
     QFutureWatcher<PooledHicMetadataResult> m_controlMetadataWatcher;
+    QFutureWatcher<PooledTrackResult> m_trackWatcher;
+    QFutureWatcher<PooledAnnotationResult> m_annotationWatcher;
+    QFutureWatcher<GenomicCytobandReadResult> m_cytobandWatcher;
     QFutureWatcher<TileResult> m_tileWatcher;
     QFutureWatcher<MinimapResult> m_minimapWatcher;
+    QQueue<QString> m_pendingTrackPaths;
+    QQueue<QVariantMap> m_pendingTrackStates;
+    QVariantMap m_activeTrackState;
+    bool m_trackLoadActive = false;
+    QQueue<QString> m_pendingAnnotationPaths;
+    QQueue<QVariantMap> m_pendingAnnotationStates;
+    QVariantMap m_activeAnnotationState;
+    bool m_annotationLoadActive = false;
+    QQueue<QString> m_pendingCytobandPaths;
+    QString m_activeCytobandPath;
+    bool m_cytobandLoadActive = false;
+    QVariantMap m_pendingSavedState;
+    bool m_deferRequests = false;
     quint64 m_requestSerial = 0;
     bool m_reloadPending = false;
     QVector<QVariantMap> m_undoStack;

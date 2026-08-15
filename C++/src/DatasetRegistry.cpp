@@ -131,21 +131,45 @@ PooledHicMetadataResult DatasetRegistry::loadHicMetadata(const QString& pathOrUr
     PooledHicMetadataResult result;
     result.source = canonicalSource(pathOrUrl);
     result.id = canonicalResourceId(QStringLiteral("hic"), result.source);
+    const QUrl sourceUrl = QUrl::fromUserInput(result.source);
+    const bool localSource = sourceUrl.isLocalFile() || sourceUrl.scheme().isEmpty();
+    const QFileInfo sourceInfo(localSource && sourceUrl.isLocalFile() ? sourceUrl.toLocalFile() : result.source);
+    const qint64 fileSize = localSource && sourceInfo.exists() ? sourceInfo.size() : -1;
+    const qint64 modifiedMSecs = localSource && sourceInfo.exists()
+        ? sourceInfo.lastModified().toMSecsSinceEpoch() : -1;
     std::shared_ptr<HicEntry> entry;
+    bool invalidateTiles = false;
     {
         QMutexLocker locker(&m_mutex);
         entry = m_hicEntries.value(result.id);
         if (!entry) {
             entry = std::make_shared<HicEntry>();
             entry->loading = true;
+            entry->fileSize = fileSize;
+            entry->modifiedMSecs = modifiedMSecs;
             m_hicEntries.insert(result.id, entry);
         } else {
-            while (entry->loading) entry->ready.wait(&m_mutex);
-            result.metadata = entry->metadata;
-            result.error = entry->error;
-            return result;
+            bool waited = false;
+            while (entry->loading) {
+                waited = true;
+                entry->ready.wait(&m_mutex);
+            }
+            const bool unchanged = !localSource ||
+                (entry->fileSize == fileSize && entry->modifiedMSecs == modifiedMSecs);
+            if (waited || (entry->metadata && unchanged)) {
+                result.metadata = entry->metadata;
+                result.error = entry->error;
+                return result;
+            }
+            invalidateTiles = entry->metadata && !unchanged;
+            entry = std::make_shared<HicEntry>();
+            entry->loading = true;
+            entry->fileSize = fileSize;
+            entry->modifiedMSecs = modifiedMSecs;
+            m_hicEntries.insert(result.id, entry);
         }
     }
+    if (invalidateTiles) m_tileCache->removeFile(result.source.toStdString());
 
     std::shared_ptr<const HicFileMetadata> metadata;
     QString error;
@@ -159,6 +183,8 @@ PooledHicMetadataResult DatasetRegistry::loadHicMetadata(const QString& pathOrUr
         QMutexLocker locker(&m_mutex);
         entry->metadata = metadata;
         entry->error = error;
+        entry->fileSize = fileSize;
+        entry->modifiedMSecs = modifiedMSecs;
         entry->loading = false;
         entry->ready.wakeAll();
         if (metadata) {
@@ -181,6 +207,14 @@ PooledTrackResult DatasetRegistry::loadTrack(const QString& pathOrUrl) {
             result.data = found.value();
             return result;
         }
+        while (m_tracksLoading.contains(result.id)) {
+            m_resourceReady.wait(&m_mutex);
+            if (const auto found = m_tracks.constFind(result.id); found != m_tracks.cend()) {
+                result.data = found.value();
+                return result;
+            }
+        }
+        m_tracksLoading.insert(result.id);
     }
 
     const GenomicTrackReadResult parsed = readGenomicTrack(source);
@@ -188,6 +222,9 @@ PooledTrackResult DatasetRegistry::loadTrack(const QString& pathOrUrl) {
         result.error = parsed.warning.isEmpty()
             ? QStringLiteral("No intervals found in 1D track: %1").arg(source)
             : parsed.warning;
+        QMutexLocker locker(&m_mutex);
+        m_tracksLoading.remove(result.id);
+        m_resourceReady.wakeAll();
         return result;
     }
 
@@ -230,6 +267,8 @@ PooledTrackResult DatasetRegistry::loadTrack(const QString& pathOrUrl) {
             recordResourceLocked({result.id, QStringLiteral("track"), displayName(source), source,
                                   data->features.size(), false});
         }
+        m_tracksLoading.remove(result.id);
+        m_resourceReady.wakeAll();
     }
     result.data = data;
     return result;
@@ -319,6 +358,14 @@ PooledAnnotationResult DatasetRegistry::loadAnnotations(const QString& pathOrUrl
             result.data = found.value();
             return result;
         }
+        while (m_annotationsLoading.contains(result.id)) {
+            m_resourceReady.wait(&m_mutex);
+            if (const auto found = m_annotations.constFind(result.id); found != m_annotations.cend()) {
+                result.data = found.value();
+                return result;
+            }
+        }
+        m_annotationsLoading.insert(result.id);
     }
 
     const GenomicInteractionReadResult parsed = readGenomicInteractions(source);
@@ -326,6 +373,9 @@ PooledAnnotationResult DatasetRegistry::loadAnnotations(const QString& pathOrUrl
         result.error = parsed.warning.isEmpty()
             ? QStringLiteral("No valid BEDPE annotations found in %1").arg(source)
             : parsed.warning;
+        QMutexLocker locker(&m_mutex);
+        m_annotationsLoading.remove(result.id);
+        m_resourceReady.wakeAll();
         return result;
     }
     auto data = std::make_shared<PooledAnnotationData>();
@@ -357,6 +407,8 @@ PooledAnnotationResult DatasetRegistry::loadAnnotations(const QString& pathOrUrl
             recordResourceLocked({result.id, QStringLiteral("annotation"), displayName(source), source,
                                   data->annotations.size(), false});
         }
+        m_annotationsLoading.remove(result.id);
+        m_resourceReady.wakeAll();
     }
     result.data = data;
     return result;

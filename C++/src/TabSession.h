@@ -4,6 +4,7 @@
 #include <QObject>
 #include <QPointer>
 #include <QHash>
+#include <QFutureWatcher>
 #include <QUrl>
 #include <QVariantList>
 
@@ -115,7 +116,8 @@ public:
     Q_INVOKABLE void removeMap(int mapIndex);
     Q_INVOKABLE void setPrimaryFile(int cellIndex, const QUrl& url);
     Q_INVOKABLE void setControlFile(int cellIndex, const QUrl& url);
-    Q_INVOKABLE bool loadRegions(const QUrl& url, const QString& format = QString());
+    bool loadRegions(const QUrl& url, const QString& format = QString());
+    Q_INVOKABLE void loadRegionsAsync(const QUrl& url, const QString& format = QString());
     Q_INVOKABLE void loadTrack(const QUrl& url, const QString& scope = QString());
     Q_INVOKABLE void loadTrackFromPath(const QString& pathOrUrl, const QString& scope = QString());
     Q_INVOKABLE void loadTrackResource(const QString& resourceId, const QString& scope = QString());
@@ -167,6 +169,17 @@ private:
         bool diagonal = false;
         bool blank = false;
     };
+    struct RegionLoadRequest {
+        quint64 generation = 0;
+        QUrl url;
+        QString format;
+        qint64 windowSize = 2000000;
+    };
+    struct RegionLoadResult {
+        quint64 generation = 0;
+        QVariantMap state;
+        QString error;
+    };
 
     static Type parseType(const QString& value);
     static QString typeName(Type type);
@@ -185,6 +198,7 @@ private:
     bool cellsShareNavigation(const CellSpec& source, const CellSpec& target) const;
     void propagateColor(HicDataController* source);
     bool isMultiSourceType() const;
+    void startRegionLoad(const RegionLoadRequest& request);
 
     Type m_type = Type::Single;
     QString m_title = QStringLiteral("Map");
@@ -192,6 +206,11 @@ private:
     QVector<CellSpec> m_cells;
     QVariantList m_cellModel;
     RegionSetModel* m_regionSet = nullptr;
+    QFutureWatcher<RegionLoadResult> m_regionLoadWatcher;
+    RegionLoadRequest m_pendingRegionLoad;
+    bool m_hasPendingRegionLoad = false;
+    bool m_regionLoadActive = false;
+    quint64 m_regionLoadGeneration = 0;
     int m_activeCellIndex = 0;
     int m_layoutColumns = 2;
     bool m_transposed = false;

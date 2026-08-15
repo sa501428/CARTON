@@ -1,4 +1,5 @@
 #include "HicHeatmapItem.h"
+#include "HeatmapColorMapping.h"
 
 #include <QMouseEvent>
 #include <QSGFlatColorMaterial>
@@ -42,29 +43,6 @@ public:
     int vertexCapacity = 0;
 };
 
-QColor interpolateColor(const QColor& a, const QColor& b, double t) {
-    t = std::clamp(t, 0.0, 1.0);
-    return QColor(
-        static_cast<int>(a.red() + (b.red() - a.red()) * t),
-        static_cast<int>(a.green() + (b.green() - a.green()) * t),
-        static_cast<int>(a.blue() + (b.blue() - a.blue()) * t),
-        static_cast<int>(a.alpha() + (b.alpha() - a.alpha()) * t)
-    );
-}
-
-QColor interpolateStops(const std::vector<QColor>& stops, double t) {
-    if (stops.empty()) {
-        return QColor("#d7191c");
-    }
-    if (stops.size() == 1) {
-        return stops.front();
-    }
-    t = std::clamp(t, 0.0, 1.0);
-    const double scaled = t * static_cast<double>(stops.size() - 1);
-    const auto idx = static_cast<std::size_t>(std::floor(scaled));
-    const std::size_t next = std::min(idx + 1, stops.size() - 1);
-    return interpolateColor(stops[idx], stops[next], scaled - std::floor(scaled));
-}
 }
 
 HicHeatmapItem::HicHeatmapItem(QQuickItem* parent)
@@ -255,84 +233,16 @@ void HicHeatmapItem::mouseReleaseEvent(QMouseEvent* event) {
 }
 
 QColor HicHeatmapItem::colorForValue(float value) const {
-    const double maxValue = m_controller ? m_controller->colorMax() : 50.0;
-    const double minValue = m_controller ? m_controller->colorMin() : 0.0;
-    const QString matrixType = m_controller ? m_controller->matrixType() : QStringLiteral("observed");
-    if (!std::isfinite(value)) {
-        return m_controller ? m_controller->missingValueColor() : QColor("#4b5563");
+    HeatmapColorSettings settings;
+    if (m_controller) {
+        settings.minimum = m_controller->colorMin();
+        settings.maximum = m_controller->colorMax();
+        settings.matrixType = m_controller->matrixType();
+        settings.colorMap = m_controller->colorMap();
+        settings.customLowColor = m_controller->customLowColor();
+        settings.customHighColor = m_controller->customHighColor();
+        settings.missingValueColor = m_controller->missingValueColor();
+        settings.zeroTransparent = m_controller->zeroTransparent();
     }
-    if (value == 0.0f && m_controller && m_controller->zeroTransparent()) return QColor(0, 0, 0, 0);
-
-    const bool pearson = matrixType.contains(QStringLiteral("pearson"));
-    const bool logRatio = matrixType == QStringLiteral("logratio") || matrixType == QStringLiteral("diff") ||
-                          matrixType == QStringLiteral("logoe") || matrixType == QStringLiteral("explogoe");
-    const bool ratioLike = matrixType == QStringLiteral("oe") || matrixType == QStringLiteral("controloe") ||
-                           matrixType == QStringLiteral("oeratio") || matrixType == QStringLiteral("oevs") ||
-                           matrixType == QStringLiteral("logeovs") || matrixType == QStringLiteral("ratio") ||
-                           matrixType == QStringLiteral("ratio1");
-    if (pearson || logRatio || ratioLike) {
-        if (!pearson && !logRatio && value <= 0.0f) {
-            return m_controller ? m_controller->missingValueColor() : QColor("#4b5563");
-        }
-        double scaled = 0.0;
-        double low = minValue;
-        double high = maxValue;
-        if (low >= high) {
-            high = low + 1.0;
-        }
-        if (pearson) {
-            scaled = std::clamp(static_cast<double>(value), low, high);
-        } else if (logRatio) {
-            scaled = std::clamp(static_cast<double>(value), low, high);
-        } else {
-            low = std::log(std::max(0.000001, minValue));
-            high = std::log(std::max(0.000001, maxValue));
-            if (low >= high) {
-                high = low + 1.0;
-            }
-            scaled = std::clamp(std::log(static_cast<double>(value)), low, high);
-        }
-        const double midpoint = low < 0.0 && high > 0.0 ? 0.0 : (low + high) * 0.5;
-        const double positiveRange = std::max(0.000001, high - midpoint);
-        const double negativeRange = std::max(0.000001, midpoint - low);
-        QColor mapped = QColor("#ffffff");
-        if (scaled >= midpoint) {
-            const double t = std::clamp((scaled - midpoint) / positiveRange, 0.0, 1.0);
-            mapped = interpolateColor(QColor("#ffffff"), QColor("#b2182b"), t);
-        } else {
-            const double t = std::clamp((midpoint - scaled) / negativeRange, 0.0, 1.0);
-            mapped = interpolateColor(QColor("#ffffff"), QColor("#2166ac"), t);
-        }
-        mapped.setAlpha(245);
-        return mapped;
-    }
-
-    double scaledValue = static_cast<double>(std::max(0.0f, value));
-    double scaledMin = minValue;
-    double scaledMax = maxValue;
-    if (matrixType == QStringLiteral("log") || matrixType == QStringLiteral("logcontrol") ||
-        matrixType == QStringLiteral("logvs")) {
-        scaledValue = std::log1p(scaledValue);
-        scaledMin = std::log1p(std::max(0.0, scaledMin));
-        scaledMax = std::log1p(std::max(0.0, scaledMax));
-    }
-    if (scaledMin >= scaledMax) {
-        scaledMax = scaledMin + 1.0;
-    }
-    const double t = std::clamp((scaledValue - scaledMin) / (scaledMax - scaledMin), 0.0, 1.0);
-    const QString colorMap = m_controller ? m_controller->colorMap() : QStringLiteral("White-Red");
-    QColor color;
-    if (colorMap == QStringLiteral("Viridis")) {
-        color = interpolateStops({QColor("#440154"), QColor("#31688e"), QColor("#35b779"), QColor("#fde725")}, t);
-    } else if (colorMap == QStringLiteral("Blue-White-Red")) {
-        color = interpolateStops({QColor("#2166ac"), QColor("#ffffff"), QColor("#b2182b")}, t);
-    } else if (colorMap == QStringLiteral("Grayscale")) {
-        color = interpolateColor(QColor("#ffffff"), QColor("#111111"), t);
-    } else if (colorMap == QStringLiteral("Custom") && m_controller) {
-        color = interpolateColor(m_controller->customLowColor(), m_controller->customHighColor(), t);
-    } else {
-        color = interpolateColor(QColor("#ffffff"), QColor("#d7191c"), t);
-    }
-    color.setAlpha(245);
-    return color;
+    return heatmapColorForValue(value, settings);
 }

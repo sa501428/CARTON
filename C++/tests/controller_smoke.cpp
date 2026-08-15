@@ -1,15 +1,21 @@
 #include <QFile>
+#include <QFileInfo>
+#include <QElapsedTimer>
+#include <QEventLoop>
 #include <QGuiApplication>
 #include <QImage>
 #include <QSettings>
 #include <QTemporaryDir>
+#include <QThread>
 #include <QUrl>
 
 #include <limits>
 #include <cmath>
+#include <functional>
 
 #include "HicDataController.h"
 #include "HicTileCache.h"
+#include "HeatmapColorMapping.h"
 #include "DatasetRegistry.h"
 #include "RegionSetModel.h"
 #include "TabSession.h"
@@ -24,6 +30,16 @@ bool require(bool condition, const char* message) {
 bool writeFile(const QString& path, const QByteArray& contents) {
     QFile file(path);
     return file.open(QIODevice::WriteOnly) && file.write(contents) == contents.size();
+}
+
+bool waitFor(const std::function<bool()>& predicate, int timeoutMs = 5000) {
+    QElapsedTimer timer;
+    timer.start();
+    while (!predicate() && timer.elapsed() < timeoutMs) {
+        QCoreApplication::processEvents(QEventLoop::AllEvents, 20);
+        QThread::msleep(1);
+    }
+    return predicate();
 }
 }
 
@@ -48,6 +64,20 @@ int main(int argc, char** argv) {
     if (!require(cache.tileCount() <= 2 && cache.recordCount() <= 3, "cache bounds")) return 1;
     cache.setLimits(1, 1);
     if (!require(cache.tileCount() <= 1 && cache.recordCount() <= 1, "cache trims after limit change")) return 1;
+
+    HeatmapColorSettings viridisColors;
+    viridisColors.minimum = 0.0;
+    viridisColors.maximum = 10.0;
+    viridisColors.colorMap = QStringLiteral("Viridis");
+    const QColor viridisMidpoint = heatmapColorForValue(5.0, viridisColors);
+    HeatmapColorSettings ratioColors;
+    ratioColors.minimum = 0.2;
+    ratioColors.maximum = 5.0;
+    ratioColors.matrixType = QStringLiteral("oe");
+    const QColor ratioMidpoint = heatmapColorForValue(1.0, ratioColors);
+    if (!require(viridisMidpoint != QColor("#ffffff") && ratioMidpoint.red() > 240 &&
+                 ratioMidpoint.green() > 240 && ratioMidpoint.blue() > 240,
+                 "shared heatmap color mapping covers palettes and ratio midpoint")) return 1;
 
     HicDataController controller;
     const QVariantList matrixOptions = controller.matrixTypeOptions();
@@ -101,14 +131,14 @@ int main(int argc, char** argv) {
             "chr1\t0\t100\tp11\tgneg\nchr1\t100\t180\tp12\tgpos50\nchr1\t180\t220\tacen\tacen\n"),
             "write cytobands")) return 1;
     controller.loadCytobands(QUrl::fromLocalFile(cytobands));
-    if (!require(controller.cytobandCount() == 3, "cytoband parsing")) return 1;
+    if (!require(waitFor([&]() { return controller.cytobandCount() == 3; }), "cytoband parsing")) return 1;
     controller.clearCytobands();
     if (!require(controller.cytobandCount() == 0, "cytoband clearing")) return 1;
 
     const QString track = temporary.filePath(QStringLiteral("signal.bedgraph"));
     if (!require(writeFile(track, "chr1\t0\t100\t2.5\nchr1\t100\t200\t-1.5\n"), "write track")) return 1;
     controller.loadTrackFromPath(track);
-    if (!require(controller.trackCount() == 1, "track parsing")) return 1;
+    if (!require(waitFor([&]() { return controller.trackCount() == 1; }), "track parsing")) return 1;
     if (!require(controller.trackSummaries().front().toMap().value("height").toInt() == 100 &&
                  controller.visibleTrackHeight() == 100,
                  "default track height")) return 1;
@@ -144,6 +174,9 @@ int main(int argc, char** argv) {
     const QString png = temporary.filePath(QStringLiteral("figure.png"));
     if (!require(controller.exportFigurePng(QUrl::fromLocalFile(png), 640, 480), "PNG export")) return 1;
     if (!require(!QImage(png).isNull(), "PNG is readable")) return 1;
+    const QString pdf = temporary.filePath(QStringLiteral("figure.pdf"));
+    controller.exportFigurePdf(QUrl::fromLocalFile(pdf), 640, 480);
+    if (!require(QFileInfo(pdf).size() > 0, "PDF export is written")) return 1;
 
     // Regression test: many .hic files (e.g. classic Juicer output) name
     // chromosomes without a "chr" prefix ("1") while bedGraph/BED/wig/bigWig
@@ -162,7 +195,7 @@ int main(int argc, char** argv) {
     if (!require(writeFile(prefixTrack, "chr1\t0\t100\t2.5\nchr1\t100\t200\t-1.5\n"), "write chr-prefixed track"))
         return 1;
     prefixController.loadTrackFromPath(prefixTrack);
-    if (!require(prefixController.trackCount() == 1, "chr-prefixed track parsing")) return 1;
+    if (!require(waitFor([&]() { return prefixController.trackCount() == 1; }), "chr-prefixed track parsing")) return 1;
     const QVariantList prefixSegments = prefixController.visibleTrackSegments(true);
     if (!require(prefixSegments.size() == 2, "chr-prefix-insensitive track visibility")) return 1;
     if (!require(prefixSegments.front().toMap().value("kind").toString() == QStringLiteral("signal"),
@@ -176,6 +209,7 @@ int main(int argc, char** argv) {
     const QString denseTrack = temporary.filePath(QStringLiteral("dense.bedgraph"));
     if (!require(writeFile(denseTrack, denseContents), "write dense bedGraph")) return 1;
     prefixController.loadTrackFromPath(denseTrack);
+    if (!require(waitFor([&]() { return prefixController.trackCount() == 2; }), "dense track parsing")) return 1;
     const QVariantList pixelSegments = prefixController.visibleTrackSegmentsForPixels(true, 100);
     int denseSegmentCount = 0;
     for (const QVariant& value : pixelSegments) {
@@ -220,6 +254,7 @@ int main(int argc, char** argv) {
     const QString bedTrack = temporary.filePath(QStringLiteral("features.bed"));
     if (!require(writeFile(bedTrack, "chr1\t10\t30\tfeature-a\t500\n"), "write BED")) return 1;
     prefixController.loadTrackFromPath(bedTrack);
+    if (!require(waitFor([&]() { return prefixController.trackCount() == 3; }), "BED track parsing")) return 1;
     const QVariantList mixedSegments = prefixController.visibleTrackSegmentsForPixels(true, 100);
     bool foundBedFeature = false;
     for (const QVariant& value : mixedSegments) {
@@ -234,6 +269,7 @@ int main(int argc, char** argv) {
     const QString inferredBedTrack = temporary.filePath(QStringLiteral("features.tsv"));
     if (!require(writeFile(inferredBedTrack, "chr1\t40\t60\n"), "write extensionless-style BED")) return 1;
     prefixController.loadTrackFromPath(inferredBedTrack);
+    if (!require(waitFor([&]() { return prefixController.trackCount() == 4; }), "inferred BED track parsing")) return 1;
     const QVariantMap inferredBedSummary = prefixController.trackSummaries().back().toMap();
     if (!require(inferredBedSummary.value("format").toString() == QStringLiteral("bed") &&
                  inferredBedSummary.value("renderMode").toString() == QStringLiteral("feature"),
@@ -294,6 +330,8 @@ int main(int argc, char** argv) {
     placementController.setY0(0);
     placementController.setY1(1000);
     placementController.loadAnnotationsFromPath(placementAnnotations);
+    if (!require(waitFor([&]() { return placementController.annotationLayerSummaries().size() == 2; }),
+                 "placement annotation parsing")) return 1;
     const int placementLayer = placementController.annotationLayerSummaries().size() - 1;
     if (!require(placementController.visibleAnnotations().size() == 2,
                  "intrachromosomal annotations render on both sides by default")) return 1;
@@ -345,6 +383,11 @@ int main(int argc, char** argv) {
     if (!require(restoredProjection.restoreState(regionSet.state()) && restoredProjection.rowCount() == 4 &&
                  restoredProjection.kind() == QStringLiteral("bedpe-as-bed"),
                  "BEDPE projection mode round-trips")) return 1;
+    TabSession asynchronousRegions;
+    asynchronousRegions.initialize(QStringLiteral("multi-region"));
+    asynchronousRegions.loadRegionsAsync(QUrl::fromLocalFile(regionsBedpe), QStringLiteral("bedpe"));
+    if (!require(waitFor([&]() { return asynchronousRegions.regionCount() == 2; }),
+                 "region files load asynchronously for interactive sessions")) return 1;
 
     TabSession multiMap;
     multiMap.initialize(QStringLiteral("multi-map"));
@@ -352,6 +395,13 @@ int main(int argc, char** argv) {
     if (!require(multiMap.mapCount() == 3 && multiMap.cellCount() == 3,
                  "multi-map tabs create independent map cells")) return 1;
     multiMap.loadTrackFromPath(track);
+    if (!require(waitFor([&]() {
+            for (const QVariant& value : multiMap.cells()) {
+                if (auto* cellController = value.toMap().value("controller").value<HicDataController*>();
+                    cellController && cellController->trackCount() == 1) return true;
+            }
+            return false;
+        }), "multi-map asynchronous track load")) return 1;
     int multiMapTrackCells = 0;
     for (const QVariant& value : multiMap.cells()) {
         if (auto* cellController = value.toMap().value("controller").value<HicDataController*>();
@@ -365,6 +415,14 @@ int main(int argc, char** argv) {
                  multiRegion.regionCount() == 2 && multiRegion.cellCount() == 2,
                  "multi-region tabs build one cell per BEDPE row")) return 1;
     multiRegion.loadTrackFromPath(track);
+    if (!require(waitFor([&]() {
+            int loaded = 0;
+            for (const QVariant& value : multiRegion.cells()) {
+                if (auto* cellController = value.toMap().value("controller").value<HicDataController*>();
+                    cellController && cellController->trackCount() == 1) ++loaded;
+            }
+            return loaded == 2;
+        }), "multi-region asynchronous track load")) return 1;
     int multiRegionTrackCells = 0;
     for (const QVariant& value : multiRegion.cells()) {
         if (auto* cellController = value.toMap().value("controller").value<HicDataController*>();
@@ -378,6 +436,14 @@ int main(int argc, char** argv) {
                  mapRegion.cellCount() == 4 && mapRegion.rowCount() == 2 && mapRegion.columnCount() == 2,
                  "map-by-region tabs build the Cartesian product")) return 1;
     mapRegion.loadTrackFromPath(track);
+    if (!require(waitFor([&]() {
+            int loaded = 0;
+            for (const QVariant& value : mapRegion.cells()) {
+                if (auto* cellController = value.toMap().value("controller").value<HicDataController*>();
+                    cellController && cellController->trackCount() == 1) ++loaded;
+            }
+            return loaded == 2;
+        }), "map-region asynchronous track load")) return 1;
     int mapScopedTrackCells = 0;
     for (const QVariant& value : mapRegion.cells()) {
         if (auto* cellController = value.toMap().value("controller").value<HicDataController*>();
@@ -405,6 +471,89 @@ int main(int argc, char** argv) {
     if (!require(restored.restoreState(pairwiseState) && restored.type() == QStringLiteral("pairwise") &&
                  restored.cellCount() == 4 && restored.diagonalMode() == QStringLiteral("blank"),
                  "versioned tab state round-trips")) return 1;
+
+#ifdef CARTON_TEST_HIC_PATH
+    const QString testHic = QString::fromUtf8(CARTON_TEST_HIC_PATH);
+    HicDataController linkedSource;
+    HicDataController linkedTarget;
+    linkedSource.openFile(QUrl::fromLocalFile(testHic));
+    linkedTarget.openFile(QUrl::fromLocalFile(testHic));
+    if (!require(waitFor([&]() { return !linkedSource.resolutions().isEmpty() &&
+                                        !linkedTarget.resolutions().isEmpty() &&
+                                        !linkedSource.busy() && !linkedTarget.busy(); }, 15000),
+                 "load Hi-C metadata for navigation tests")) return 1;
+    QString linkedChromosome = linkedSource.chrX();
+    for (const QVariant& chromosome : linkedSource.chromosomeNames()) {
+        if (chromosome.toString().contains(QStringLiteral("22"))) {
+            linkedChromosome = chromosome.toString();
+            break;
+        }
+    }
+    linkedTarget.setViewRegion(linkedChromosome, 0, 1000000, linkedChromosome, 1000000, 2000000);
+    linkedSource.setViewRegion(linkedChromosome, 2000000, 3000000, linkedChromosome, 3000000, 4000000);
+    const QVariantList supportedResolutions = linkedTarget.resolutions();
+    if (supportedResolutions.size() > 1) {
+        linkedTarget.setResolution(supportedResolutions.back().toInt());
+        linkedSource.setResolution(supportedResolutions.front().toInt());
+    }
+    const qint64 lockedX0 = linkedTarget.x0();
+    const qint64 lockedX1 = linkedTarget.x1();
+    const int lockedResolution = linkedTarget.resolution();
+    linkedTarget.setXLocusLocked(true);
+    linkedTarget.setResolutionLocked(true);
+    linkedTarget.syncViewFrom(&linkedSource, false);
+    if (!require(linkedTarget.x0() == lockedX0 && linkedTarget.x1() == lockedX1 &&
+                 linkedTarget.y0() == linkedSource.y0() && linkedTarget.y1() == linkedSource.y1() &&
+                 linkedTarget.resolution() == lockedResolution,
+                 "linked navigation honors locus and resolution locks")) return 1;
+    linkedSource.goTo(linkedChromosome + QStringLiteral(":999999999"), QString());
+    if (!require(linkedSource.x1() <= linkedSource.xChromosomeLength() && linkedSource.x1() > linkedSource.x0(),
+                 "locus parsing clamps positions beyond chromosome end safely")) return 1;
+
+    const QString delayedHic = temporary.filePath(QStringLiteral("delayed.hic"));
+    const PooledHicMetadataResult failedMetadata = DatasetRegistry::instance()->loadHicMetadata(delayedHic);
+    if (!require(!failedMetadata.metadata && !failedMetadata.error.isEmpty(), "missing Hi-C metadata load fails")) return 1;
+    if (!require(QFile::copy(testHic, delayedHic), "create formerly missing Hi-C file")) return 1;
+    const PooledHicMetadataResult recoveredMetadata = DatasetRegistry::instance()->loadHicMetadata(delayedHic);
+    if (!require(static_cast<bool>(recoveredMetadata.metadata), "failed metadata cache entries are retried")) return 1;
+    HicTile staleTile;
+    staleTile.key.filePath = recoveredMetadata.source.toStdString();
+    staleTile.key.chrX = "22";
+    staleTile.records.resize(1);
+    const HicTileKey staleKey = staleTile.key;
+    DatasetRegistry::instance()->tileCache()->put(std::move(staleTile));
+    QFile changedHic(delayedHic);
+    if (!require(changedHic.open(QIODevice::Append) && changedHic.write("x", 1) == 1,
+                 "modify cached Hi-C file")) return 1;
+    changedHic.close();
+    const PooledHicMetadataResult refreshedMetadata = DatasetRegistry::instance()->loadHicMetadata(delayedHic);
+    if (!require(refreshedMetadata.metadata && !DatasetRegistry::instance()->tileCache()->get(staleKey),
+                 "local Hi-C changes invalidate metadata and tile caches")) return 1;
+
+    HicDataController savedStateController;
+    savedStateController.openFile(QUrl::fromLocalFile(testHic));
+    if (!require(waitFor([&]() { return !savedStateController.resolutions().isEmpty() &&
+                                        !savedStateController.busy(); }, 15000),
+                 "load saved-state source map")) return 1;
+    savedStateController.setViewRegion(savedStateController.chrX(), 1000000, 2000000,
+                                       savedStateController.chrY(), 2000000, 3000000);
+    if (!require(waitFor([&]() { return !savedStateController.busy(); }, 15000),
+                 "load saved-state source view")) return 1;
+    const QString savedPrimaryPath = savedStateController.filePath();
+    const qint64 savedX0 = savedStateController.x0();
+    savedStateController.saveCurrentState(QStringLiteral("Path restore"));
+    const QString alternateHic = temporary.filePath(QStringLiteral("alternate.hic"));
+    if (!require(QFile::copy(testHic, alternateHic), "copy alternate Hi-C file")) return 1;
+    savedStateController.openFile(QUrl::fromLocalFile(alternateHic));
+    if (!require(waitFor([&]() { return !savedStateController.busy() &&
+                                        savedStateController.filePath() == alternateHic; }, 15000),
+                 "load alternate Hi-C file")) return 1;
+    savedStateController.restoreSavedState(0);
+    if (!require(waitFor([&]() { return !savedStateController.busy() &&
+                                        savedStateController.filePath() == savedPrimaryPath; }, 15000) &&
+                 savedStateController.x0() == savedX0,
+                 "saved state reopens its primary file before restoring the view")) return 1;
+#endif
 
     const std::vector<contactRecord> syntheticRecords = {
         {0, 0, 1.0f}, {0, 100, 2.0f}, {100, 100, 4.0f}, {100, 200, 6.0f}

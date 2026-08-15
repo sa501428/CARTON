@@ -4,7 +4,7 @@ set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 BUILD_DIR="${1:-"${SCRIPT_DIR}/build-carton"}"
-VERSION="${CARTON_VERSION:-0.1.0}"
+VERSION="${CARTON_VERSION:-0.2.0}"
 LOGO="${SCRIPT_DIR}/logo.png"
 ICNS_DST="${SCRIPT_DIR}/carton.icns"
 DMG_OUTPUT="${BUILD_DIR}/CARTON-${VERSION}-macOS.dmg"
@@ -191,19 +191,14 @@ codesign --verify --deep --strict "${APP_BUNDLE}"
 echo "  ✓ App bundle signature verified"
 
 echo "→ Smoke-testing packaged app…"
-env -i PATH=/usr/bin:/bin:/usr/sbin:/sbin HOME="${BUILD_DIR}/smoke-home" \
+mkdir -p "${BUILD_DIR}/smoke-home"
+if ! env -i PATH=/usr/bin:/bin:/usr/sbin:/sbin HOME="${BUILD_DIR}/smoke-home" \
     QT_QPA_PLATFORM=offscreen QSG_RHI_BACKEND=null \
-    "${APP_BUNDLE}/Contents/MacOS/carton" >"${SMOKE_LOG}" 2>&1 &
-SMOKE_PID=$!
-sleep 2
-if ! kill -0 "${SMOKE_PID}" 2>/dev/null; then
-    wait "${SMOKE_PID}" || true
+    "${APP_BUNDLE}/Contents/MacOS/carton" --smoke-test >"${SMOKE_LOG}" 2>&1; then
     echo "error: packaged app failed its headless startup test:" >&2
     sed -n '1,200p' "${SMOKE_LOG}" >&2
     exit 1
 fi
-kill "${SMOKE_PID}"
-wait "${SMOKE_PID}" 2>/dev/null || true
 echo "  ✓ Packaged app initialized successfully"
 
 # ── 4. Stage DMG contents ─────────────────────────────────────────────────────

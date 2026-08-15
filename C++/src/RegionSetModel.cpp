@@ -200,13 +200,76 @@ QVariantMap RegionSetModel::state() const {
     result[QStringLiteral("kind")] = kind();
     result[QStringLiteral("sourcePath")] = m_sourcePath;
     result[QStringLiteral("windowSize")] = m_windowSize;
+    QVariantList axisRegions;
+    axisRegions.reserve(m_axisRegions.size());
+    for (const AxisRegion& region : m_axisRegions) {
+        QVariantMap item;
+        item[QStringLiteral("chr")] = region.chr;
+        item[QStringLiteral("start")] = region.start;
+        item[QStringLiteral("end")] = region.end;
+        item[QStringLiteral("label")] = region.label;
+        axisRegions.push_back(item);
+    }
+    result[QStringLiteral("axisRegions")] = axisRegions;
+    QVariantList pairedRegions;
+    pairedRegions.reserve(m_pairedRegions.size());
+    for (const PairedRegion& region : m_pairedRegions) {
+        QVariantMap item;
+        item[QStringLiteral("chrX")] = region.x.chr;
+        item[QStringLiteral("x0")] = region.x.start;
+        item[QStringLiteral("x1")] = region.x.end;
+        item[QStringLiteral("chrY")] = region.y.chr;
+        item[QStringLiteral("y0")] = region.y.start;
+        item[QStringLiteral("y1")] = region.y.end;
+        item[QStringLiteral("label")] = region.label;
+        pairedRegions.push_back(item);
+    }
+    result[QStringLiteral("pairedRegions")] = pairedRegions;
     return result;
 }
 
 bool RegionSetModel::restoreState(const QVariantMap& state) {
-    setWindowSize(state.value(QStringLiteral("windowSize"), 2000000).toLongLong());
+    m_windowSize = std::clamp<qint64>(state.value(QStringLiteral("windowSize"), 2000000).toLongLong(),
+                                     1000, 1000000000LL);
     const QUrl url = QUrl::fromUserInput(state.value(QStringLiteral("sourcePath")).toString());
     const QString nextKind = state.value(QStringLiteral("kind")).toString();
+    if (state.contains(QStringLiteral("axisRegions")) || state.contains(QStringLiteral("pairedRegions"))) {
+        m_sourcePath = localPath(url);
+        m_axisRegions.clear();
+        m_pairedRegions.clear();
+        if (nextKind == QStringLiteral("bed") || nextKind == QStringLiteral("bedpe-as-bed")) {
+            for (const QVariant& value : state.value(QStringLiteral("axisRegions")).toList()) {
+                const QVariantMap item = value.toMap();
+                AxisRegion region{item.value(QStringLiteral("chr")).toString(),
+                                  item.value(QStringLiteral("start")).toLongLong(),
+                                  item.value(QStringLiteral("end")).toLongLong(),
+                                  item.value(QStringLiteral("label")).toString()};
+                if (!region.chr.isEmpty() && region.end > region.start) m_axisRegions.push_back(std::move(region));
+            }
+            m_kind = nextKind == QStringLiteral("bed") ? Kind::Single : Kind::Projected;
+        } else if (nextKind == QStringLiteral("bedpe")) {
+            for (const QVariant& value : state.value(QStringLiteral("pairedRegions")).toList()) {
+                const QVariantMap item = value.toMap();
+                PairedRegion region;
+                region.label = item.value(QStringLiteral("label")).toString();
+                region.x = {item.value(QStringLiteral("chrX")).toString(),
+                            item.value(QStringLiteral("x0")).toLongLong(),
+                            item.value(QStringLiteral("x1")).toLongLong(), region.label};
+                region.y = {item.value(QStringLiteral("chrY")).toString(),
+                            item.value(QStringLiteral("y0")).toLongLong(),
+                            item.value(QStringLiteral("y1")).toLongLong(), region.label};
+                if (!region.x.chr.isEmpty() && !region.y.chr.isEmpty() &&
+                    region.x.end > region.x.start && region.y.end > region.y.start)
+                    m_pairedRegions.push_back(std::move(region));
+            }
+            m_kind = Kind::Paired;
+        } else {
+            m_kind = Kind::None;
+        }
+        setError(QString());
+        rebuildEntries();
+        return m_kind == Kind::None || !m_entries.isEmpty();
+    }
     if (nextKind == QStringLiteral("bedpe")) return loadBedpe(url);
     if (nextKind == QStringLiteral("bedpe-as-bed")) return loadBedpeAsBed(url);
     if (nextKind == QStringLiteral("bed")) return loadBed(url);

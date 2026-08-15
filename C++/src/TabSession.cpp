@@ -5,6 +5,7 @@
 #include <QJsonDocument>
 #include <QSaveFile>
 #include <QUuid>
+#include <QtConcurrent>
 
 #include <algorithm>
 #include <cmath>
@@ -16,10 +17,25 @@ TabSession::TabSession(QObject* parent)
     connect(m_regionSet, &RegionSetModel::regionsChanged, this, [this]() {
         if (!m_initializing) rebuildCells();
     });
+    connect(&m_regionLoadWatcher, &QFutureWatcher<RegionLoadResult>::finished, this, [this]() {
+        const RegionLoadResult result = m_regionLoadWatcher.result();
+        m_regionLoadActive = false;
+        if (result.generation == m_regionLoadGeneration) {
+            if (!result.error.isEmpty()) emit errorOccurred(result.error);
+            else if (!m_regionSet->restoreState(result.state)) emit errorOccurred(m_regionSet->errorString());
+        }
+        if (m_hasPendingRegionLoad) {
+            const RegionLoadRequest request = m_pendingRegionLoad;
+            m_hasPendingRegionLoad = false;
+            startRegionLoad(request);
+        }
+    });
     initialize(QStringLiteral("single"));
 }
 
-TabSession::~TabSession() = default;
+TabSession::~TabSession() {
+    m_regionLoadWatcher.cancel();
+}
 
 TabSession::Type TabSession::parseType(const QString& value) {
     const QString normalized = value.trimmed().toLower();
@@ -626,6 +642,43 @@ bool TabSession::loadRegions(const QUrl& url, const QString& requestedFormat) {
     return loaded;
 }
 
+void TabSession::loadRegionsAsync(const QUrl& url, const QString& requestedFormat) {
+    QString format = requestedFormat.trimmed().toLower();
+    if (format.isEmpty()) {
+        if (m_type == Type::Pairwise) format = url.toString().contains(QStringLiteral("bedpe"), Qt::CaseInsensitive)
+            ? QStringLiteral("bedpe-as-bed") : QStringLiteral("bed");
+        else format = QStringLiteral("bedpe");
+    }
+    RegionLoadRequest request;
+    request.generation = ++m_regionLoadGeneration;
+    request.url = url;
+    request.format = format;
+    request.windowSize = m_regionSet->windowSize();
+    if (m_regionLoadActive) {
+        m_pendingRegionLoad = request;
+        m_hasPendingRegionLoad = true;
+        return;
+    }
+    startRegionLoad(request);
+}
+
+void TabSession::startRegionLoad(const RegionLoadRequest& request) {
+    m_regionLoadActive = true;
+    m_regionLoadWatcher.setFuture(QtConcurrent::run([request]() {
+        RegionLoadResult result;
+        result.generation = request.generation;
+        RegionSetModel model;
+        model.setWindowSize(request.windowSize);
+        bool loaded = false;
+        if (request.format == QStringLiteral("bed")) loaded = model.loadBed(request.url);
+        else if (request.format == QStringLiteral("bedpe-as-bed")) loaded = model.loadBedpeAsBed(request.url);
+        else loaded = model.loadBedpe(request.url);
+        if (loaded) result.state = model.state();
+        else result.error = model.errorString();
+        return result;
+    }));
+}
+
 QString TabSession::resolvedScope(const QString& requestedScope) const {
     QString scope = requestedScope.trimmed().toLower();
     if (scope.isEmpty() || scope == QStringLiteral("default")) {
@@ -671,12 +724,7 @@ void TabSession::loadTrackResource(const QString& resourceId, const QString& sco
 
 void TabSession::loadAnnotations(const QUrl& url, const QString& scope) {
     const QString path = pathFromUrl(url);
-    PooledAnnotationResult pooled = DatasetRegistry::instance()->loadAnnotations(path);
-    if (!pooled.data) {
-        emit errorOccurred(pooled.error);
-        return;
-    }
-    for (HicDataController* controller : targetControllers(scope)) controller->loadAnnotationResource(pooled.id);
+    for (HicDataController* controller : targetControllers(scope)) controller->loadAnnotationsFromPath(path);
 }
 
 void TabSession::loadAnnotationResource(const QString& resourceId, const QString& scope) {

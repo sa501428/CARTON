@@ -4,6 +4,7 @@
 #include <QQuickWindow>
 #include <QQuickStyle>
 #include <QSGRendererInterface>
+#include <QTimer>
 
 #include "HicDataController.h"
 #include "HicHeatmapItem.h"
@@ -39,6 +40,12 @@ int main(int argc, char* argv[]) {
         QCoreApplication::exit(1);
     }, Qt::QueuedConnection);
     engine.loadFromModule("Carton", "Main");
+
+    if (QCoreApplication::arguments().contains(QStringLiteral("--smoke-test"))) {
+        QTimer::singleShot(0, &app, [&engine]() {
+            QCoreApplication::exit(engine.rootObjects().isEmpty() ? 1 : 0);
+        });
+    }
 
     return app.exec();
 }
