@@ -5,7 +5,7 @@ This directory contains the CARTON desktop application and the reusable C++ `.hi
 ## Description:
 `carton` is a Qt 6 / Qt Quick desktop viewer for Hi-C contact matrices. The app keeps the UI shell in QML and renders the matrix through a custom C++ scene-graph item, so large heatmap content is batched into GPU geometry instead of being represented as QML objects.
 
-The `carton_hic` library provides local/HTTP `.hic` metadata inspection, sparse range reads, normalization support, and block decompression. Genomics annotation, signal, and interaction files are read through the separately reusable `igv-cpp` library.
+The shared Straw C++ library provides local/HTTP `.hic` metadata inspection, sparse range reads, normalization support, block decompression, v10 support, and resolutions derived on demand. Set `STRAW_SOURCE_DIR` to its `C++` directory when it is not available at the default sibling path. Genomics annotation, signal, and interaction files are read through the separately reusable `igv-cpp` library.
 
 ## Building
 

@@ -354,7 +354,7 @@ private:
 
     void setStatus(const QString& value);
     void setBusy(bool value);
-    void applyMetadata(const std::shared_ptr<const HicFileMetadata>& metadata);
+    void applyMetadata(const std::shared_ptr<const StrawFileInfo>& metadata);
     chromosome chromosomeByName(const QString& name) const;
     qint64 chromosomeLength(const QString& name) const;
     qint64 genomeLength() const;
@@ -495,8 +495,8 @@ private:
     QString m_colorMap = "White-Red";
     QColor m_customLowColor = QColor("#ffffff");
     QColor m_customHighColor = QColor("#d7191c");
-    std::shared_ptr<const HicFileMetadata> m_metadata;
-    std::shared_ptr<const HicFileMetadata> m_controlMetadata;
+    std::shared_ptr<const StrawFileInfo> m_metadata;
+    std::shared_ptr<const StrawFileInfo> m_controlMetadata;
     std::vector<contactRecord> m_records;
     std::vector<contactRecord> m_controlRecords;
     std::vector<contactRecord> m_minimapRecords;

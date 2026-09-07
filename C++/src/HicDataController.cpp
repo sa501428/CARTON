@@ -164,11 +164,11 @@ HicDataController::HicDataController(QObject* parent)
         if (result.metadata) {
             m_controlMetadata = result.metadata;
             m_controlReady = true;
-            if (!m_genomeId.isEmpty() && !m_controlMetadata->genomeID.empty() &&
-                m_genomeId != QString::fromStdString(m_controlMetadata->genomeID)) {
+            if (!m_genomeId.isEmpty() && !m_controlMetadata->genome.empty() &&
+                m_genomeId != QString::fromStdString(m_controlMetadata->genome)) {
                 m_controlReady = false;
                 setStatus(QStringLiteral("Control map genome %1 does not match %2.")
-                              .arg(QString::fromStdString(m_controlMetadata->genomeID), m_genomeId));
+                              .arg(QString::fromStdString(m_controlMetadata->genome), m_genomeId));
             } else {
                 setStatus(QStringLiteral("Control map ready: %1").arg(m_controlFilePath));
             }
@@ -3096,15 +3096,15 @@ void HicDataController::setBusy(bool value) {
     emit busyChanged();
 }
 
-void HicDataController::applyMetadata(const std::shared_ptr<const HicFileMetadata>& metadata) {
+void HicDataController::applyMetadata(const std::shared_ptr<const StrawFileInfo>& metadata) {
     if (!metadata) return;
     m_metadata = metadata;
     clearLoadedRegion();
-    m_genomeId = QString::fromStdString(metadata->genomeID);
+    m_genomeId = QString::fromStdString(metadata->genome);
     if (m_controlMetadata && !m_controlMetadata->chromosomes.empty()) {
         const bool wasReady = m_controlReady;
-        m_controlReady = m_genomeId.isEmpty() || m_controlMetadata->genomeID.empty() ||
-                         m_genomeId == QString::fromStdString(m_controlMetadata->genomeID);
+        m_controlReady = m_genomeId.isEmpty() || m_controlMetadata->genome.empty() ||
+                         m_genomeId == QString::fromStdString(m_controlMetadata->genome);
         if (m_controlReady != wasReady) emit controlReadyChanged();
     }
     if (!metadata->bpResolutions.empty()) {
@@ -3185,10 +3185,10 @@ bool HicDataController::controlSupportsCurrentView(QString* reason) const {
     if (!m_controlReady || !m_controlMetadata) {
         return fail(QStringLiteral("the control header has not finished loading"));
     }
-    if (!m_genomeId.isEmpty() && !m_controlMetadata->genomeID.empty() &&
-        m_genomeId != QString::fromStdString(m_controlMetadata->genomeID)) {
+    if (!m_genomeId.isEmpty() && !m_controlMetadata->genome.empty() &&
+        m_genomeId != QString::fromStdString(m_controlMetadata->genome)) {
         return fail(QStringLiteral("genome %1 does not match %2")
-                        .arg(QString::fromStdString(m_controlMetadata->genomeID), m_genomeId));
+                        .arg(QString::fromStdString(m_controlMetadata->genome), m_genomeId));
     }
     const auto hasChromosome = [this](const QString& name) {
         if (isAllChromosome(name)) return true;

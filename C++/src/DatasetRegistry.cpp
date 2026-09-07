@@ -171,10 +171,10 @@ PooledHicMetadataResult DatasetRegistry::loadHicMetadata(const QString& pathOrUr
     }
     if (invalidateTiles) m_tileCache->removeFile(result.source.toStdString());
 
-    std::shared_ptr<const HicFileMetadata> metadata;
+    std::shared_ptr<const StrawFileInfo> metadata;
     QString error;
     try {
-        metadata = std::make_shared<const HicFileMetadata>(inspectHicFile(result.source.toStdString()));
+        metadata = std::make_shared<const StrawFileInfo>(getFileInfo(result.source.toStdString()));
     } catch (const std::exception& exception) {
         error = QString::fromUtf8(exception.what());
     }

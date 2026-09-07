@@ -66,7 +66,7 @@ struct PooledHicMetadataResult {
     QString id;
     QString source;
     QString error;
-    std::shared_ptr<const HicFileMetadata> metadata;
+    std::shared_ptr<const StrawFileInfo> metadata;
 };
 
 struct PooledTrackResult {
@@ -144,7 +144,7 @@ private:
         QString error;
         qint64 fileSize = -1;
         qint64 modifiedMSecs = -1;
-        std::shared_ptr<const HicFileMetadata> metadata;
+        std::shared_ptr<const StrawFileInfo> metadata;
         QWaitCondition ready;
     };
 

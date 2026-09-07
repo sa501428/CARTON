@@ -12,12 +12,25 @@ set(CMAKE_AUTOMOC ON)
 set(CMAKE_AUTORCC ON)
 set(CMAKE_AUTOUIC ON)
 
-find_package(CURL REQUIRED)
-find_package(ZLIB REQUIRED)
 find_package(Threads REQUIRED)
 find_package(Qt6 6.5 REQUIRED COMPONENTS Core Gui Quick QuickControls2 Concurrent Svg)
-find_library(ZSTD_LIBRARY zstd REQUIRED)
-find_path(ZSTD_INCLUDE_DIR zstd.h REQUIRED)
+
+set(STRAW_SOURCE_DIR "${CMAKE_CURRENT_SOURCE_DIR}/../../straw/C++" CACHE PATH
+    "Path to the shared Straw C++ source checkout")
+if(NOT TARGET straw_core)
+    if(EXISTS "${STRAW_SOURCE_DIR}/CMakeLists.txt")
+        set(STRAW_BUILD_C_API OFF CACHE BOOL "Build Straw's stable C API" FORCE)
+        # CARTON owns its top-level test suite. Do not register Straw's CLI and
+        # conformance tests a second time when consuming its library target.
+        set(CARTON_BUILD_TESTING "${BUILD_TESTING}")
+        set(BUILD_TESTING OFF)
+        add_subdirectory("${STRAW_SOURCE_DIR}" "${CMAKE_CURRENT_BINARY_DIR}/straw" EXCLUDE_FROM_ALL)
+        set(BUILD_TESTING "${CARTON_BUILD_TESTING}")
+    else()
+        message(FATAL_ERROR
+            "A shared Straw checkout is required. Set STRAW_SOURCE_DIR to its C++ directory.")
+    endif()
+endif()
 
 set(IGVCPP_SOURCE_DIR "${CMAKE_CURRENT_SOURCE_DIR}/../../igv-cpp" CACHE PATH
     "Path to an igv-cpp source checkout; leave invalid to use an installed package")
@@ -33,20 +46,6 @@ endif()
 
 qt_standard_project_setup(REQUIRES 6.5)
 qt_policy(SET QTP0004 NEW)
-
-add_library(carton_hic STATIC
-    straw.cpp
-    straw_v10.cpp
-)
-target_include_directories(carton_hic PUBLIC ${CMAKE_CURRENT_SOURCE_DIR})
-target_include_directories(carton_hic PRIVATE ${ZSTD_INCLUDE_DIR})
-target_link_libraries(carton_hic
-    PUBLIC
-        CURL::libcurl
-        ZLIB::ZLIB
-        Threads::Threads
-        ${ZSTD_LIBRARY}
-)
 
 set(CARTON_LOGO_SVG "${CMAKE_CURRENT_SOURCE_DIR}/logo.svg")
 if(NOT EXISTS "${CARTON_LOGO_SVG}")
@@ -126,7 +125,7 @@ add_library(carton_core STATIC
 target_include_directories(carton_core PUBLIC ${CMAKE_CURRENT_SOURCE_DIR} ${CMAKE_CURRENT_SOURCE_DIR}/src)
 target_link_libraries(carton_core
     PUBLIC
-        carton_hic
+        straw_core
         Qt6::Core
         Qt6::Gui
         Qt6::Concurrent
