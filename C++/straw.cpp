@@ -37,6 +37,7 @@
 #include "zlib.h"
 #include "zstd.h"
 #include "straw.h"
+#include "straw_v10.h"
 #include <thread>
 #include <mutex>
 #include <future>
@@ -2041,6 +2042,23 @@ vector<string> readAvailableNormalizationsFromFooter(istream &fin, int64_t maste
 }
 
 HicFileMetadata inspectHicFile(const string &fileName) {
+    if (straw_v10::isV10(fileName)) {
+        straw_v10::File file(fileName);
+        HicFileMetadata metadata;
+        metadata.fileName = fileName;
+        metadata.genomeID = file.genome();
+        metadata.version = 10;
+        metadata.chromosomes = file.chromosomes();
+        // V10 advertises stored and derived resolutions through the same API;
+        // derived resolutions are aggregated from a finer matrix on demand.
+        metadata.bpResolutions = file.resolutions("BP");
+        metadata.normalizations = file.normalizations();
+        if (std::find(metadata.normalizations.begin(), metadata.normalizations.end(), "NONE") ==
+            metadata.normalizations.end()) {
+            metadata.normalizations.push_back("NONE");
+        }
+        return metadata;
+    }
     HiCFile hiCFile(fileName);
     HicFileMetadata metadata;
     metadata.fileName = fileName;
@@ -2081,6 +2099,11 @@ void parsePositions(const string &chrLoc, string &chrom, int64_t &pos1, int64_t 
 bool strawStream(const string &matrixType, const string &norm, const string &fileName, const string &chr1loc,
                  const string &chr2loc, const string &unit, int32_t binsize,
                  const StrawRecordCallback &callback) {
+    if (straw_v10::isV10(fileName)) {
+        straw_v10::File(fileName).stream(matrixType, norm, chr1loc, chr2loc, unit, binsize, callback);
+        return true;
+    }
+
     if (!(unit == "BP" || unit == "FRAG")) {
         cerr << "Norm specified incorrectly, must be one of <BP/FRAG>" << endl;
         cerr << "Usage: straw [observed/oe/expected] <NONE/VC/VC_SQRT/KR> <hicFile(s)> <chr1>[:x1:x2] <chr2>[:y1:y2] <BP/FRAG> <binsize>"
@@ -2121,6 +2144,10 @@ vector<contactRecord> straw(const string &matrixType, const string &norm, const 
 
 vector<vector<float> > strawAsMatrix(const string &matrixType, const string &norm, const string &fileName, const string &chr1loc,
                    const string &chr2loc, const string &unit, int32_t binsize) {
+    if (straw_v10::isV10(fileName)) {
+        return straw_v10::File(fileName).matrix(matrixType, norm, chr1loc, chr2loc, unit, binsize);
+    }
+
     if (!(unit == "BP" || unit == "FRAG")) {
         cerr << "Norm specified incorrectly, must be one of <BP/FRAG>" << endl;
         cerr << "Usage: straw [observed/oe/expected] <NONE/VC/VC_SQRT/KR> <hicFile(s)> <chr1>[:x1:x2] <chr2>[:y1:y2] <BP/FRAG> <binsize>"

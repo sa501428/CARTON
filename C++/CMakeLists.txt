@@ -36,6 +36,7 @@ qt_policy(SET QTP0004 NEW)
 
 add_library(carton_hic STATIC
     straw.cpp
+    straw_v10.cpp
 )
 target_include_directories(carton_hic PUBLIC ${CMAKE_CURRENT_SOURCE_DIR})
 target_include_directories(carton_hic PRIVATE ${ZSTD_INCLUDE_DIR})
