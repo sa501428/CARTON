@@ -85,7 +85,11 @@ QString DatasetRegistry::chromosomeKey(const QString& name) {
 
 QString DatasetRegistry::displayName(const QString& pathOrUrl) {
     const QUrl url(pathOrUrl);
-    const QString path = url.isLocalFile() ? url.toLocalFile() : pathOrUrl;
+    // A remote source keeps its query and fragment in the string form, and
+    // neither belongs in a label.
+    const QString path = url.isLocalFile()
+        ? url.toLocalFile()
+        : (url.isValid() && !url.scheme().isEmpty() ? url.path() : pathOrUrl);
     const QString fileName = QFileInfo(path).fileName();
     return fileName.isEmpty() ? pathOrUrl : fileName;
 }
@@ -217,7 +221,7 @@ PooledTrackResult DatasetRegistry::loadTrack(const QString& pathOrUrl) {
         m_tracksLoading.insert(result.id);
     }
 
-    const GenomicTrackReadResult parsed = readGenomicTrack(source);
+    GenomicTrackReadResult parsed = readGenomicTrack(source);
     if (parsed.features.isEmpty()) {
         result.error = parsed.warning.isEmpty()
             ? QStringLiteral("No intervals found in 1D track: %1").arg(source)
@@ -231,11 +235,22 @@ PooledTrackResult DatasetRegistry::loadTrack(const QString& pathOrUrl) {
     auto data = std::make_shared<PooledTrackData>();
     data->id = result.id;
     data->source = source;
-    data->name = QFileInfo(source).baseName();
+    // baseName() cuts at the FIRST dot, so "ENCFF001.fc.signal.bigWig" became
+    // "ENCFF001". Labels default to the plain file name instead.
+    data->name = displayName(source);
     data->format = parsed.format;
     data->warning = parsed.warning;
-    data->features = parsed.features;
-    for (GenomicTrackFeature& feature : data->features) feature.chr = chromosomeKey(feature.chr);
+    data->features = std::move(parsed.features);
+    // Canonicalise in place and share one buffer per chromosome: a per-record
+    // copy plus a per-record QString allocation doubled the peak footprint of
+    // every large track.
+    QHash<QString, QString> canonicalChromosomes;
+    for (GenomicTrackFeature& feature : data->features) {
+        auto cached = canonicalChromosomes.constFind(feature.chr);
+        if (cached == canonicalChromosomes.cend())
+            cached = canonicalChromosomes.insert(feature.chr, chromosomeKey(feature.chr));
+        feature.chr = cached.value();
+    }
     std::sort(data->features.begin(), data->features.end(), [](const auto& a, const auto& b) {
         if (a.chr != b.chr) return a.chr < b.chr;
         if (a.start != b.start) return a.start < b.start;
@@ -316,7 +331,13 @@ PooledTrackResult DatasetRegistry::restoreDerivedTrack(const QString& resourceId
     data->derived = true;
     data->provenance = provenance;
     data->features = features;
-    for (GenomicTrackFeature& feature : data->features) feature.chr = chromosomeKey(feature.chr);
+    QHash<QString, QString> canonicalChromosomes;
+    for (GenomicTrackFeature& feature : data->features) {
+        auto cached = canonicalChromosomes.constFind(feature.chr);
+        if (cached == canonicalChromosomes.cend())
+            cached = canonicalChromosomes.insert(feature.chr, chromosomeKey(feature.chr));
+        feature.chr = cached.value();
+    }
     std::sort(data->features.begin(), data->features.end(), [](const auto& a, const auto& b) {
         if (a.chr != b.chr) return a.chr < b.chr;
         if (a.start != b.start) return a.start < b.start;
@@ -381,7 +402,7 @@ PooledAnnotationResult DatasetRegistry::loadAnnotations(const QString& pathOrUrl
     auto data = std::make_shared<PooledAnnotationData>();
     data->id = result.id;
     data->source = source;
-    data->name = QFileInfo(source).baseName();
+    data->name = displayName(source);
     data->warning = parsed.warning;
     int serial = 0;
     for (const GenomicInteraction& record : parsed.interactions) {

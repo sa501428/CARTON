@@ -895,6 +895,10 @@ QVariantList HicDataController::trackSummaries() const {
         item["eigenvector"] = track.eigenvector;
         item["resourceId"] = track.resourceId;
         item["featureCount"] = track.data ? track.data->features.size() : 0;
+        // Kept on the track rather than left in the load-time status line: a
+        // track that lost records is misleading to read for the rest of the
+        // session, not just while it loads.
+        item["warning"] = track.data ? track.data->warning : QString();
         item["visible"] = track.visible;
         item["collapsed"] = track.collapsed;
         item["autoscale"] = track.autoscale;
@@ -932,23 +936,31 @@ QVariantList HicDataController::visibleTrackSegments(bool xAxis) const {
     return visibleTrackSegmentsForPixels(xAxis, 0);
 }
 
-QVariantList HicDataController::visibleTrackSegmentsForPixels(bool xAxis, int pixelCount) const {
-    QVariantList values;
+namespace {
+// Round an autoscale extreme out to the next 1/2/5 x 10^n bound. Recomputing
+// the exact visible extremes on every frame made lanes breathe vertically
+// while panning; snapping to a coarse ladder keeps the scale still until the
+// data genuinely leaves the previous decade step.
+double niceAxisBound(double magnitude) {
+    if (!std::isfinite(magnitude) || magnitude <= 0.0) return 0.0;
+    const double exponent = std::floor(std::log10(magnitude));
+    const double base = std::pow(10.0, exponent);
+    const double normalized = magnitude / base;
+    const double step = normalized <= 1.0 ? 1.0 : (normalized <= 2.0 ? 2.0 : (normalized <= 5.0 ? 5.0 : 10.0));
+    return step * base;
+}
+}
+
+QVector<HicDataController::TrackRenderPass> HicDataController::computeTrackRenderPasses(
+    bool xAxis, int pixelCount) const {
+    QVector<TrackRenderPass> passes;
     const QString chr = xAxis ? m_chrX : m_chrY;
     const qint64 start = xAxis ? m_x0 : m_y0;
     const qint64 end = xAxis ? m_x1 : m_y1;
     const qint64 span = std::max<qint64>(1, end - start);
     pixelCount = std::clamp(pixelCount, 0, 8192);
 
-    struct RenderedSegment {
-        qint64 start = 0;
-        qint64 end = 0;
-        double value = 0.0;
-        double rawValue = 0.0;
-        QColor color;
-        QString name;
-        qint64 renderedBinSize = 0;
-    };
+    using RenderedSegment = TrackRenderSegment;
 
     for (int trackIndex = 0; trackIndex < static_cast<int>(m_tracks.size()); ++trackIndex) {
         const TrackLayer& track = m_tracks[static_cast<std::size_t>(trackIndex)];
@@ -1120,13 +1132,27 @@ QVariantList HicDataController::visibleTrackSegmentsForPixels(bool xAxis, int pi
                 rangeMin = std::min(rangeMin, segment.value);
                 rangeMax = std::max(rangeMax, segment.value);
             }
+            rangeMax = niceAxisBound(rangeMax);
+            rangeMin = -niceAxisBound(-rangeMin);
             if (rangeMax <= rangeMin) rangeMax = rangeMin + 1.0;
         }
-        const double displayMin = track.autoscale ? rangeMin : (track.logScale ? signedLog(rangeMin) : rangeMin);
-        const double displayMax = track.autoscale ? rangeMax : (track.logScale ? signedLog(rangeMax) : rangeMax);
-        for (const RenderedSegment& segment : rendered) {
+        TrackRenderPass pass;
+        pass.trackIndex = trackIndex;
+        pass.displayMin = track.autoscale ? rangeMin : (track.logScale ? signedLog(rangeMin) : rangeMin);
+        pass.displayMax = track.autoscale ? rangeMax : (track.logScale ? signedLog(rangeMax) : rangeMax);
+        pass.segments = std::move(rendered);
+        passes.push_back(std::move(pass));
+    }
+    return passes;
+}
+
+QVariantList HicDataController::visibleTrackSegmentsForPixels(bool xAxis, int pixelCount) const {
+    QVariantList values;
+    for (const TrackRenderPass& pass : computeTrackRenderPasses(xAxis, pixelCount)) {
+        const TrackLayer& track = m_tracks[static_cast<std::size_t>(pass.trackIndex)];
+        for (const TrackRenderSegment& segment : pass.segments) {
             QVariantMap item;
-            item["trackIndex"] = trackIndex;
+            item["trackIndex"] = pass.trackIndex;
             item["trackName"] = track.name;
             item["kind"] = track.renderMode;
             item["format"] = track.format;
@@ -1137,13 +1163,55 @@ QVariantList HicDataController::visibleTrackSegmentsForPixels(bool xAxis, int pi
             item["end"] = segment.end;
             item["rawValue"] = segment.rawValue;
             item["value"] = segment.value;
-            item["min"] = displayMin;
-            item["max"] = displayMax;
+            item["min"] = pass.displayMin;
+            item["max"] = pass.displayMax;
             item["color"] = segment.color;
             values.push_back(item);
         }
     }
     return values;
+}
+
+QVariantList HicDataController::trackRenderBatches(bool xAxis, int pixelCount) const {
+    QVariantList batches;
+    const QVector<TrackRenderPass> passes = computeTrackRenderPasses(xAxis, pixelCount);
+    batches.reserve(passes.size());
+    for (const TrackRenderPass& pass : passes) {
+        const TrackLayer& track = m_tracks[static_cast<std::size_t>(pass.trackIndex)];
+        const qsizetype count = pass.segments.size();
+        // Signal bins take their colour from the sign of the value, so the
+        // painter only needs the two track colours. Feature rows can carry a
+        // colour per record and get an explicit list.
+        const bool perSegmentColor = track.renderMode != QStringLiteral("signal");
+        QList<double> starts;
+        QList<double> ends;
+        QList<double> values;
+        QStringList colors;
+        starts.reserve(count);
+        ends.reserve(count);
+        values.reserve(count);
+        if (perSegmentColor) colors.reserve(count);
+        for (const TrackRenderSegment& segment : pass.segments) {
+            starts.push_back(static_cast<double>(segment.start));
+            ends.push_back(static_cast<double>(segment.end));
+            values.push_back(segment.value);
+            if (perSegmentColor) colors.push_back(segment.color.name(QColor::HexRgb));
+        }
+        QVariantMap item;
+        item["trackIndex"] = pass.trackIndex;
+        item["kind"] = track.renderMode;
+        item["count"] = static_cast<int>(count);
+        item["min"] = pass.displayMin;
+        item["max"] = pass.displayMax;
+        item["positiveColor"] = track.color;
+        item["negativeColor"] = track.negativeColor;
+        item["starts"] = QVariant::fromValue(starts);
+        item["ends"] = QVariant::fromValue(ends);
+        item["values"] = QVariant::fromValue(values);
+        item["colors"] = colors;
+        batches.push_back(item);
+    }
+    return batches;
 }
 
 QVariantList HicDataController::visibleAnnotations() const {

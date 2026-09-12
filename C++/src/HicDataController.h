@@ -176,6 +176,11 @@ public:
     Q_INVOKABLE QVariantList annotationLayerSummaries() const;
     Q_INVOKABLE QVariantList visibleTrackSegments(bool xAxis) const;
     Q_INVOKABLE QVariantList visibleTrackSegmentsForPixels(bool xAxis, int pixelCount) const;
+    // Same data as visibleTrackSegmentsForPixels, grouped one entry per track
+    // with parallel numeric arrays. Painters repaint on every pan event, and
+    // building a QVariantMap per bin there costs thousands of JavaScript
+    // objects per frame; the arrays cross into QML as sequences instead.
+    Q_INVOKABLE QVariantList trackRenderBatches(bool xAxis, int pixelCount) const;
     Q_INVOKABLE QVariantList visibleAnnotations() const;
     Q_INVOKABLE QString positionText(double xFraction, double yFraction) const;
     Q_INVOKABLE void copyPosition(double xFraction, double yFraction) const;
@@ -415,6 +420,25 @@ private:
     void applyCytobandResult(const GenomicCytobandReadResult& result, const QString& path);
     void continueSavedStateRestore();
     void finishSavedStateRestore(const QString& controlWarning = QString());
+
+    struct TrackRenderSegment {
+        qint64 start = 0;
+        qint64 end = 0;
+        double value = 0.0;
+        double rawValue = 0.0;
+        QColor color;
+        QString name;
+        qint64 renderedBinSize = 0;
+    };
+
+    struct TrackRenderPass {
+        int trackIndex = 0;
+        double displayMin = 0.0;
+        double displayMax = 1.0;
+        QVector<TrackRenderSegment> segments;
+    };
+
+    QVector<TrackRenderPass> computeTrackRenderPasses(bool xAxis, int pixelCount) const;
 
     struct TrackLayer {
         QString name;

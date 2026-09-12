@@ -84,11 +84,14 @@ Rectangle {
                 ctx.textBaseline = "bottom"
                 ctx.fillText(root.formatBp(start + span * fraction), position, thickness - 1)
             } else if (!root.compact) {
+                // Rotating by -90 turns the local +y into screen +x, so a "top"
+                // baseline pushed these labels off the right edge of the strip
+                // and the end labels past its ends.
                 ctx.save()
                 ctx.translate(thickness - 1, position)
                 ctx.rotate(-Math.PI / 2)
-                ctx.textAlign = t === 0 ? "left" : (t === ticks - 1 ? "right" : "center")
-                ctx.textBaseline = "top"
+                ctx.textAlign = t === 0 ? "right" : (t === ticks - 1 ? "left" : "center")
+                ctx.textBaseline = "bottom"
                 ctx.fillText(root.formatBp(start + span * fraction), 0, 0)
                 ctx.restore()
             }

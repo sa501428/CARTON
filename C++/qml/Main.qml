@@ -124,22 +124,105 @@ ApplicationWindow {
         trackHeightDialog.open()
     }
 
-    function trackIndexAtPanelPosition(position, trackStart, trackEnd, minimumLaneSize) {
-        if (!activeController || !trackPanelsOpen || position < trackStart || position >= trackEnd)
-            return -1
+    // Lane geometry for the 1D track strip, indexed by track index. Track
+    // heights act as relative weights so the lanes always add up to exactly
+    // the space available: clamping each lane to a minimum instead used to
+    // push the last tracks past the ruler and off the canvas.
+    function trackLaneLayout(trackStart, trackEnd) {
+        var lanes = []
+        if (!activeController || !trackPanelsOpen) return lanes
         var summaries = activeController.trackSummaries()
-        var totalHeight = 0
+        var totalWeight = 0
         for (var i = 0; i < summaries.length; ++i) {
             if (summaries[i].visible && !summaries[i].collapsed)
-                totalHeight += Math.max(20, summaries[i].height)
+                totalWeight += Math.max(20, summaries[i].height)
         }
+        if (totalWeight <= 0) return lanes
+        var available = Math.max(0, trackEnd - trackStart)
         var cursor = trackStart
         for (var j = 0; j < summaries.length; ++j) {
             if (!summaries[j].visible || summaries[j].collapsed) continue
-            var laneSize = Math.max(minimumLaneSize, (trackEnd - trackStart) * Math.max(20, summaries[j].height) / Math.max(1, totalHeight))
-            if (position >= cursor && position < cursor + laneSize)
+            var size = available * Math.max(20, summaries[j].height) / totalWeight
+            lanes[j] = {
+                start: cursor,
+                size: size,
+                name: summaries[j].name,
+                source: summaries[j].source,
+                warning: summaries[j].warning
+            }
+            cursor += size
+        }
+        return lanes
+    }
+
+    // Canvas has no eliding, so trim to the run available and mark the cut.
+    // One extra measureText beats walking the string a character at a time on
+    // every repaint.
+    function elideCanvasText(ctx, text, maxWidth) {
+        if (!text || maxWidth <= 0) return ""
+        var full = ctx.measureText(text).width
+        if (full <= maxWidth) return text
+        var keep = Math.floor(text.length * maxWidth / full) - 1
+        if (keep < 1) return ""
+        return text.substring(0, keep) + "…"
+    }
+
+    readonly property bool edgeGuidesActive: hoverActive && (straightEdgeEnabled || diagonalEdgeEnabled)
+
+    // The guides live on their own thin overlays so a moving cursor never
+    // forces the track strips themselves to repaint.
+    function repaintEdgeGuides() {
+        guideCanvas.requestPaint()
+        topTrackGuide.requestPaint()
+        leftTrackGuide.requestPaint()
+    }
+
+    // A halo in the strip's own background tone under the dashed line, so the
+    // guide reads against the panel and against a saturated bar alike, in
+    // either theme.
+    function strokeEdgeGuide(ctx, x0, y0, x1, y1) {
+        ctx.setLineDash([])
+        ctx.strokeStyle = Theme.surfaceSunken
+        ctx.lineWidth = 3.5
+        ctx.globalAlpha = 0.75
+        ctx.beginPath()
+        ctx.moveTo(x0, y0)
+        ctx.lineTo(x1, y1)
+        ctx.stroke()
+        ctx.globalAlpha = 1
+        ctx.strokeStyle = Theme.guideLine
+        ctx.lineWidth = 1.25
+        ctx.setLineDash([5, 4])
+        ctx.beginPath()
+        ctx.moveTo(x0, y0)
+        ctx.lineTo(x1, y1)
+        ctx.stroke()
+        ctx.setLineDash([])
+    }
+
+    function trackTooltipText(index) {
+        var summary = trackSummary(index)
+        if (!summary) return ""
+        var lines = [summary.name]
+        if (summary.source && summary.source !== summary.name) lines.push(summary.source)
+        if (summary.warning) lines.push("⚠ " + summary.warning)
+        return lines.join("\n")
+    }
+
+    function openTrackNameEditor(index) {
+        var summary = trackSummary(index)
+        if (!summary) return
+        pendingTrackIndex = index
+        trackNameField.text = summary.name
+        trackNameSource.text = summary.source
+        trackNameDialog.open()
+    }
+
+    function trackIndexAtPanelPosition(position, trackStart, trackEnd) {
+        var lanes = trackLaneLayout(trackStart, trackEnd)
+        for (var j = 0; j < lanes.length; ++j) {
+            if (lanes[j] && position >= lanes[j].start && position < lanes[j].start + lanes[j].size)
                 return j
-            cursor += laneSize
         }
         return -1
     }
@@ -759,6 +842,38 @@ ApplicationWindow {
     }
 
     Dialog {
+        id: trackNameDialog
+        title: "Rename 1D Track"
+        modal: true
+        width: 420
+        standardButtons: Dialog.Ok | Dialog.Cancel
+        background: DialogFrame {}
+        onAccepted: {
+            if (!activeController || pendingTrackIndex < 0) return
+            var value = trackNameField.text.trim()
+            if (value.length > 0) activeController.setTrackName(pendingTrackIndex, value)
+        }
+        ColumnLayout {
+            anchors.fill: parent
+            spacing: 8
+            Label { text: "Track name"; color: Theme.textSecondary }
+            AppTextField {
+                id: trackNameField
+                Layout.fillWidth: true
+                onAccepted: trackNameDialog.accept()
+            }
+            Label { text: "Source"; color: Theme.textSecondary }
+            Label {
+                id: trackNameSource
+                Layout.fillWidth: true
+                color: Theme.textMuted
+                font.pixelSize: Theme.textXs
+                wrapMode: Text.WrapAnywhere
+            }
+        }
+    }
+
+    Dialog {
         id: trackHeightDialog
         title: "Set Track Height"
         modal: true
@@ -1149,7 +1264,7 @@ ApplicationWindow {
                             topTrackCanvas.requestPaint()
                             leftTrackCanvas.requestPaint()
                             annotationCanvas.requestPaint()
-                            guideCanvas.requestPaint()
+                            repaintEdgeGuides()
                         }
                         function onTracksChanged() {
                             topTrackCanvas.requestPaint()
@@ -1171,7 +1286,7 @@ ApplicationWindow {
                             topTrackCanvas.requestPaint()
                             leftTrackCanvas.requestPaint()
                             annotationCanvas.requestPaint()
-                            guideCanvas.requestPaint()
+                            repaintEdgeGuides()
                         }
                     }
 
@@ -1181,6 +1296,7 @@ ApplicationWindow {
                         property var summary: ({})
 
                         MenuItem { text: plotTrackContextMenu.summary.name || "1D track"; enabled: false }
+                        MenuItem { text: "Rename track…"; onTriggered: openTrackNameEditor(plotTrackContextMenu.trackIndex) }
                         MenuSeparator {}
                         Menu {
                             title: "Windowing function"
@@ -1341,7 +1457,7 @@ ApplicationWindow {
                             onTriggered: {
                                 straightEdgeEnabled = checked
                                 if (checked) diagonalEdgeEnabled = false
-                                guideCanvas.requestPaint()
+                                repaintEdgeGuides()
                             }
                         }
                         MenuItem {
@@ -1352,7 +1468,7 @@ ApplicationWindow {
                             onTriggered: {
                                 diagonalEdgeEnabled = checked
                                 if (checked) straightEdgeEnabled = false
-                                guideCanvas.requestPaint()
+                                repaintEdgeGuides()
                             }
                         }
                         MenuItem {
@@ -1408,11 +1524,19 @@ ApplicationWindow {
                             repeat: false
                             onTriggered: plotFrame.fitControllerToCanvas()
                         }
+                        // Ruler, cytoband strip and tick labels, without any tracks.
+                        readonly property int axisChrome: 38
+                        // Upper bound on the share of the plot the 1D strip may
+                        // take. Summed track heights alone let four default
+                        // 100px tracks swallow more than half the viewport and
+                        // squeeze the map; past this point heights only decide
+                        // how the strip is divided between lanes.
+                        readonly property real trackStripFraction: 0.32
                         property int axisSize: {
                             if (!activeController || !trackPanelsOpen) return 46
-                            var extent = 38 + activeController.visibleTrackHeight
-                            var available = Math.floor(Math.min(plotFrame.width, plotFrame.height) - 80)
-                            return Math.max(46, Math.min(available, extent))
+                            var budget = Math.floor(Math.min(plotFrame.width, plotFrame.height) * trackStripFraction) - axisChrome
+                            var tracks = Math.max(0, Math.min(budget, activeController.visibleTrackHeight))
+                            return Math.max(46, axisChrome + tracks)
                         }
 
                         Rectangle {
@@ -1448,22 +1572,24 @@ ApplicationWindow {
                             y: 0
                             width: plotFrame.width - plotFrame.axisSize
                             height: plotFrame.axisSize
+                            readonly property real axisLabelHeight: 18
+                            readonly property real trackTop: activeController && activeController.showChromosomeContext ? 10 : 2
+                            readonly property real trackBottom: height - axisLabelHeight - 0.5 - 3
                             onPaint: {
                                 var ctx = getContext("2d")
                                 ctx.reset()
                                 ctx.fillStyle = Theme.surfaceSunken
                                 ctx.fillRect(0, 0, width, height)
                                 if (!activeController) return
-                                var segments = trackPanelsOpen ? activeController.visibleTrackSegmentsForPixels(true, Math.max(1, Math.ceil(width))) : []
-                                var span = Math.max(1, activeController.x1 - activeController.x0)
-                                var axisLabelHeight = 18
+                                var viewStart = activeController.x0
+                                var span = Math.max(1, activeController.x1 - viewStart)
                                 var axisY = height - axisLabelHeight - 0.5
                                 if (activeController.showChromosomeContext) {
                                     var xBands = activeController.visibleCytobands(true)
                                     if (xBands.length > 0) {
                                         for (var xb = 0; xb < xBands.length; ++xb) {
-                                            var bx0 = (xBands[xb].start - activeController.x0) / span * width
-                                            var bx1 = (xBands[xb].end - activeController.x0) / span * width
+                                            var bx0 = (xBands[xb].start - viewStart) / span * width
+                                            var bx1 = (xBands[xb].end - viewStart) / span * width
                                             ctx.fillStyle = xBands[xb].color
                                             ctx.fillRect(Math.max(0, bx0), 0, Math.max(1, bx1 - bx0), 8)
                                         }
@@ -1484,7 +1610,7 @@ ApplicationWindow {
                                 for (var t = 0; t < ticks; t++) {
                                     var f = ticks === 1 ? 0 : t / (ticks - 1)
                                     var tx = f * width
-                                    var label = formatBp(activeController.x0 + f * span)
+                                    var label = formatBp(viewStart + f * span)
                                     ctx.strokeStyle = Theme.borderStrong
                                     ctx.beginPath()
                                     ctx.moveTo(tx + 0.5, axisY)
@@ -1493,71 +1619,151 @@ ApplicationWindow {
                                     ctx.textAlign = t === 0 ? "left" : (t === ticks - 1 ? "right" : "center")
                                     ctx.fillText(label, tx, axisY + 6)
                                 }
-                                var trackTop = activeController.showChromosomeContext ? 10 : 2
-                                var trackBottom = axisY - 3
-                                var summaries = trackPanelsOpen ? activeController.trackSummaries() : []
-                                var totalHeight = 0
-                                var laneStart = []
-                                var laneSize = []
-                                for (var li = 0; li < summaries.length; ++li) {
-                                    if (summaries[li].visible && !summaries[li].collapsed)
-                                        totalHeight += Math.max(20, summaries[li].height)
+                                if (!trackPanelsOpen) return
+                                var lanes = trackLaneLayout(trackTop, trackBottom)
+                                var batches = activeController.trackRenderBatches(true, Math.max(1, Math.ceil(width)))
+                                var scale = width / span
+
+                                ctx.strokeStyle = Theme.border
+                                for (var li = 0; li < lanes.length; ++li) {
+                                    if (!lanes[li] || lanes[li].start <= trackTop + 1) continue
+                                    ctx.beginPath()
+                                    ctx.moveTo(0, Math.round(lanes[li].start) + 0.5)
+                                    ctx.lineTo(width, Math.round(lanes[li].start) + 0.5)
+                                    ctx.stroke()
                                 }
-                                var laneCursor = trackTop
-                                for (var lj = 0; lj < summaries.length; ++lj) {
-                                    if (!summaries[lj].visible || summaries[lj].collapsed) continue
-                                    var sized = Math.max(8, (trackBottom - trackTop) * Math.max(20, summaries[lj].height) / Math.max(1, totalHeight))
-                                    laneStart[lj] = laneCursor
-                                    laneSize[lj] = sized
-                                    laneCursor += sized
-                                }
-                                var baselineDrawn = []
-                                for (var i = 0; i < segments.length; i++) {
-                                    var s = segments[i]
-                                    var x0 = (s.start - activeController.x0) / span * width
-                                    var x1 = (s.end - activeController.x0) / span * width
-                                    var laneY = laneStart[s.trackIndex]
-                                    var laneHeight = laneSize[s.trackIndex]
-                                    if (s.kind === "feature") {
+
+                                for (var b = 0; b < batches.length; ++b) {
+                                    var batch = batches[b]
+                                    var lane = lanes[batch.trackIndex]
+                                    if (!lane || lane.size <= 0) continue
+                                    var laneY = lane.start
+                                    var laneHeight = lane.size
+                                    var count = batch.count
+                                    var starts = batch.starts
+                                    var ends = batch.ends
+                                    var values = batch.values
+                                    var i, px0, px1
+                                    if (batch.kind === "feature") {
                                         var featureHeight = Math.max(3, Math.min(12, laneHeight * 0.55))
                                         var featureY = laneY + (laneHeight - featureHeight) * 0.5
-                                        ctx.fillStyle = s.color
-                                        ctx.fillRect(Math.max(0, x0), featureY, Math.max(1, Math.min(width, x1) - Math.max(0, x0)), featureHeight)
+                                        var colors = batch.colors
+                                        for (i = 0; i < count; ++i) {
+                                            px0 = (starts[i] - viewStart) * scale
+                                            px1 = (ends[i] - viewStart) * scale
+                                            if (px1 <= 0 || px0 >= width) continue
+                                            px0 = Math.max(0, px0)
+                                            px1 = Math.min(width, px1)
+                                            ctx.fillStyle = colors[i]
+                                            ctx.fillRect(px0, featureY, Math.max(1, px1 - px0), featureHeight)
+                                        }
                                         continue
                                     }
-                                    var range = Math.max(0.000001, s.max - s.min)
-                                    var zero = laneY + laneHeight - (0 - s.min) / range * laneHeight
-                                    var valueY = laneY + laneHeight - (s.value - s.min) / range * laneHeight
+                                    var range = Math.max(0.000001, batch.max - batch.min)
+                                    var zero = laneY + laneHeight - (0 - batch.min) / range * laneHeight
                                     zero = Math.max(laneY, Math.min(laneY + laneHeight, zero))
-                                    valueY = Math.max(laneY, Math.min(laneY + laneHeight, valueY))
-                                    if (!baselineDrawn[s.trackIndex]) {
-                                        ctx.strokeStyle = Theme.borderStrong
-                                        ctx.beginPath()
-                                        ctx.moveTo(0, Math.round(zero) + 0.5)
-                                        ctx.lineTo(width, Math.round(zero) + 0.5)
-                                        ctx.stroke()
-                                        baselineDrawn[s.trackIndex] = true
+                                    ctx.strokeStyle = Theme.borderStrong
+                                    ctx.beginPath()
+                                    ctx.moveTo(0, Math.round(zero) + 0.5)
+                                    ctx.lineTo(width, Math.round(zero) + 0.5)
+                                    ctx.stroke()
+                                    // One fillStyle per sign rather than one per
+                                    // bin: with a dense track the per-bar state
+                                    // changes were what made panning stutter.
+                                    for (var sign = 0; sign < 2; ++sign) {
+                                        ctx.fillStyle = sign === 0 ? batch.positiveColor : batch.negativeColor
+                                        for (i = 0; i < count; ++i) {
+                                            var value = values[i]
+                                            if ((value < 0) !== (sign === 1)) continue
+                                            px0 = (starts[i] - viewStart) * scale
+                                            px1 = (ends[i] - viewStart) * scale
+                                            if (px1 <= 0 || px0 >= width) continue
+                                            px0 = Math.max(0, px0)
+                                            px1 = Math.min(width, px1)
+                                            var valueY = laneY + laneHeight - (value - batch.min) / range * laneHeight
+                                            valueY = Math.max(laneY, Math.min(laneY + laneHeight, valueY))
+                                            var barHeight = Math.abs(valueY - zero)
+                                            if (barHeight < 1) {
+                                                // An empty bin must not paint a
+                                                // phantom bar along the baseline.
+                                                if (value === 0) continue
+                                                barHeight = 1
+                                            }
+                                            ctx.fillRect(px0, Math.min(zero, valueY), Math.max(1, px1 - px0), barHeight)
+                                        }
                                     }
-                                    var barTop = Math.min(zero, valueY)
-                                    var h = Math.max(1.5, Math.abs(valueY - zero))
-                                    ctx.fillStyle = s.color
-                                    ctx.fillRect(Math.max(0, x0), barTop,
-                                                 Math.max(1, Math.min(width, x1) - Math.max(0, x0)), h)
+                                }
+
+                                // Names last so they sit above the bars, on a
+                                // scrim rather than directly on the signal.
+                                ctx.font = "10px sans-serif"
+                                ctx.textAlign = "left"
+                                ctx.textBaseline = "top"
+                                for (var ni = 0; ni < lanes.length; ++ni) {
+                                    var named = lanes[ni]
+                                    if (!named || named.size < 14) continue
+                                    var label = elideCanvasText(ctx, named.name, Math.max(0, width - 12))
+                                    if (label.length === 0) continue
+                                    var labelWidthPx = ctx.measureText(label).width
+                                    ctx.globalAlpha = 0.78
+                                    ctx.fillStyle = Theme.surfaceSunken
+                                    ctx.fillRect(2, named.start + 1, labelWidthPx + 7, 13)
+                                    ctx.globalAlpha = 1
+                                    ctx.fillStyle = named.warning ? Theme.danger : Theme.textSecondary
+                                    ctx.fillText(label, 5, named.start + 2)
                                 }
                             }
                             MouseArea {
+                                id: topTrackMouse
                                 anchors.fill: parent
-                                acceptedButtons: Qt.RightButton
+                                hoverEnabled: true
+                                acceptedButtons: Qt.LeftButton | Qt.RightButton
                                 cursorShape: Qt.PointingHandCursor
+                                property int hoveredTrack: -1
+                                function trackAt(y) {
+                                    return trackIndexAtPanelPosition(y, topTrackCanvas.trackTop, topTrackCanvas.trackBottom)
+                                }
+                                onPositionChanged: function(mouse) { hoveredTrack = trackAt(mouse.y) }
+                                onExited: hoveredTrack = -1
+                                ToolTip.visible: containsMouse && hoveredTrack >= 0 && ToolTip.text.length > 0
+                                ToolTip.delay: 350
+                                ToolTip.text: hoveredTrack >= 0 ? trackTooltipText(hoveredTrack) : ""
                                 onPressed: function(mouse) {
-                                    var trackTop = activeController && activeController.showChromosomeContext ? 10 : 2
-                                    var trackBottom = parent.height - 18 - 0.5 - 3
-                                    var index = trackIndexAtPanelPosition(mouse.y, trackTop, trackBottom, 8)
-                                    if (index >= 0) {
+                                    var index = trackAt(mouse.y)
+                                    if (index >= 0 && mouse.button === Qt.RightButton) {
                                         openPlotTrackMenu(index)
                                         mouse.accepted = true
+                                        return
                                     }
+                                    mouse.accepted = index >= 0
                                 }
+                                onDoubleClicked: function(mouse) {
+                                    var index = trackAt(mouse.y)
+                                    if (index >= 0 && mouse.button === Qt.LeftButton) openTrackNameEditor(index)
+                                }
+                            }
+                        }
+
+                        // Vertical readout of the cursor's genomic X on the top
+                        // strip. Separate from topTrackCanvas so the bars are
+                        // not re-rendered on every mouse move.
+                        Canvas {
+                            id: topTrackGuide
+                            x: topTrackCanvas.x
+                            y: topTrackCanvas.y
+                            width: topTrackCanvas.width
+                            height: topTrackCanvas.height
+                            z: 5
+                            visible: trackPanelsOpen && edgeGuidesActive
+                            onVisibleChanged: requestPaint()
+                            onWidthChanged: requestPaint()
+                            onHeightChanged: requestPaint()
+                            onPaint: {
+                                var ctx = getContext("2d")
+                                ctx.reset()
+                                if (!edgeGuidesActive || !trackPanelsOpen) return
+                                strokeEdgeGuide(ctx, hoverPlotX, topTrackCanvas.trackTop,
+                                                hoverPlotX, topTrackCanvas.trackBottom)
                             }
                         }
 
@@ -1567,22 +1773,28 @@ ApplicationWindow {
                             y: plotFrame.axisSize
                             width: plotFrame.axisSize
                             height: plotFrame.height - plotFrame.axisSize
+                            readonly property real axisLabelWidth: 16
+                            readonly property real trackLeft: activeController && activeController.showChromosomeContext ? 10 : 2
+                            readonly property real trackRight: width - 0.5 - axisLabelWidth - 2
                             onPaint: {
                                 var ctx = getContext("2d")
                                 ctx.reset()
                                 ctx.fillStyle = Theme.surfaceSunken
                                 ctx.fillRect(0, 0, width, height)
                                 if (!activeController) return
-                                var segments = trackPanelsOpen ? activeController.visibleTrackSegmentsForPixels(false, Math.max(1, Math.ceil(height))) : []
-                                var span = Math.max(1, activeController.y1 - activeController.y0)
-                                var labelWidth = 42
+                                var viewStart = activeController.y0
+                                var span = Math.max(1, activeController.y1 - viewStart)
+                                // Labels sit rotated in the strip next to the
+                                // ruler. They used to be drawn at x = 2, on top
+                                // of the first lane, while this reservation was
+                                // taken out of the other end of the strip.
                                 var axisX = width - 0.5
                                 if (activeController.showChromosomeContext) {
                                     var yBands = activeController.visibleCytobands(false)
                                     if (yBands.length > 0) {
                                         for (var yb = 0; yb < yBands.length; ++yb) {
-                                            var by0 = (yBands[yb].start - activeController.y0) / span * height
-                                            var by1 = (yBands[yb].end - activeController.y0) / span * height
+                                            var by0 = (yBands[yb].start - viewStart) / span * height
+                                            var by1 = (yBands[yb].end - viewStart) / span * height
                                             ctx.fillStyle = yBands[yb].color
                                             ctx.fillRect(0, Math.max(0, by0), 8, Math.max(1, by1 - by0))
                                         }
@@ -1598,85 +1810,169 @@ ApplicationWindow {
                                 ctx.stroke()
                                 ctx.font = "11px sans-serif"
                                 ctx.fillStyle = Theme.textSecondary
-                                ctx.textAlign = "left"
-                                ctx.textBaseline = "middle"
+                                ctx.textBaseline = "bottom"
                                 var ticks = activeController.axisEndpointsOnly ? 2 : 5
                                 for (var t = 0; t < ticks; t++) {
                                     var f = ticks === 1 ? 0 : t / (ticks - 1)
                                     var ty = f * height
-                                    var label = formatBp(activeController.y0 + f * span)
+                                    var label = formatBp(viewStart + f * span)
                                     ctx.strokeStyle = Theme.borderStrong
                                     ctx.beginPath()
                                     ctx.moveTo(axisX - 5, ty + 0.5)
                                     ctx.lineTo(axisX, ty + 0.5)
                                     ctx.stroke()
-                                    ctx.fillText(label, 2, Math.max(8, Math.min(height - 8, ty)))
+                                    ctx.save()
+                                    ctx.translate(axisX - 5, ty)
+                                    ctx.rotate(-Math.PI / 2)
+                                    ctx.textAlign = t === 0 ? "right" : (t === ticks - 1 ? "left" : "center")
+                                    ctx.fillText(label, 0, 0)
+                                    ctx.restore()
                                 }
-                                var trackLeft = activeController.showChromosomeContext ? 10 : 2
-                                var trackRight = axisX - labelWidth - 2
-                                var summaries = trackPanelsOpen ? activeController.trackSummaries() : []
-                                var totalHeight = 0
-                                var laneStart = []
-                                var laneSize = []
-                                for (var li = 0; li < summaries.length; ++li) {
-                                    if (summaries[li].visible && !summaries[li].collapsed)
-                                        totalHeight += Math.max(20, summaries[li].height)
+                                ctx.textBaseline = "alphabetic"
+                                if (!trackPanelsOpen) return
+                                var lanes = trackLaneLayout(trackLeft, trackRight)
+                                var batches = activeController.trackRenderBatches(false, Math.max(1, Math.ceil(height)))
+                                var scale = height / span
+
+                                ctx.strokeStyle = Theme.border
+                                for (var li = 0; li < lanes.length; ++li) {
+                                    if (!lanes[li] || lanes[li].start <= trackLeft + 1) continue
+                                    ctx.beginPath()
+                                    ctx.moveTo(Math.round(lanes[li].start) + 0.5, 0)
+                                    ctx.lineTo(Math.round(lanes[li].start) + 0.5, height)
+                                    ctx.stroke()
                                 }
-                                var laneCursor = trackLeft
-                                for (var lj = 0; lj < summaries.length; ++lj) {
-                                    if (!summaries[lj].visible || summaries[lj].collapsed) continue
-                                    var sized = Math.max(7, (trackRight - trackLeft) * Math.max(20, summaries[lj].height) / Math.max(1, totalHeight))
-                                    laneStart[lj] = laneCursor
-                                    laneSize[lj] = sized
-                                    laneCursor += sized
-                                }
-                                var baselineDrawn = []
-                                for (var i = 0; i < segments.length; i++) {
-                                    var s = segments[i]
-                                    var y0 = (s.start - activeController.y0) / span * height
-                                    var y1 = (s.end - activeController.y0) / span * height
-                                    var laneX = laneStart[s.trackIndex]
-                                    var laneWidth = laneSize[s.trackIndex]
-                                    if (s.kind === "feature") {
+
+                                for (var b = 0; b < batches.length; ++b) {
+                                    var batch = batches[b]
+                                    var lane = lanes[batch.trackIndex]
+                                    if (!lane || lane.size <= 0) continue
+                                    var laneX = lane.start
+                                    var laneWidth = lane.size
+                                    var count = batch.count
+                                    var starts = batch.starts
+                                    var ends = batch.ends
+                                    var values = batch.values
+                                    var i, py0, py1
+                                    if (batch.kind === "feature") {
                                         var featureWidth = Math.max(3, Math.min(12, laneWidth * 0.55))
                                         var featureX = laneX + (laneWidth - featureWidth) * 0.5
-                                        ctx.fillStyle = s.color
-                                        ctx.fillRect(featureX, Math.max(0, y0), featureWidth, Math.max(1, Math.min(height, y1) - Math.max(0, y0)))
+                                        var colors = batch.colors
+                                        for (i = 0; i < count; ++i) {
+                                            py0 = (starts[i] - viewStart) * scale
+                                            py1 = (ends[i] - viewStart) * scale
+                                            if (py1 <= 0 || py0 >= height) continue
+                                            py0 = Math.max(0, py0)
+                                            py1 = Math.min(height, py1)
+                                            ctx.fillStyle = colors[i]
+                                            ctx.fillRect(featureX, py0, featureWidth, Math.max(1, py1 - py0))
+                                        }
                                         continue
                                     }
-                                    var range = Math.max(0.000001, s.max - s.min)
-                                    var zero = laneX + (0 - s.min) / range * laneWidth
-                                    var valueX = laneX + (s.value - s.min) / range * laneWidth
+                                    var range = Math.max(0.000001, batch.max - batch.min)
+                                    var zero = laneX + (0 - batch.min) / range * laneWidth
                                     zero = Math.max(laneX, Math.min(laneX + laneWidth, zero))
-                                    valueX = Math.max(laneX, Math.min(laneX + laneWidth, valueX))
-                                    if (!baselineDrawn[s.trackIndex]) {
-                                        ctx.strokeStyle = Theme.borderStrong
-                                        ctx.beginPath()
-                                        ctx.moveTo(Math.round(zero) + 0.5, 0)
-                                        ctx.lineTo(Math.round(zero) + 0.5, height)
-                                        ctx.stroke()
-                                        baselineDrawn[s.trackIndex] = true
+                                    ctx.strokeStyle = Theme.borderStrong
+                                    ctx.beginPath()
+                                    ctx.moveTo(Math.round(zero) + 0.5, 0)
+                                    ctx.lineTo(Math.round(zero) + 0.5, height)
+                                    ctx.stroke()
+                                    for (var sign = 0; sign < 2; ++sign) {
+                                        ctx.fillStyle = sign === 0 ? batch.positiveColor : batch.negativeColor
+                                        for (i = 0; i < count; ++i) {
+                                            var value = values[i]
+                                            if ((value < 0) !== (sign === 1)) continue
+                                            py0 = (starts[i] - viewStart) * scale
+                                            py1 = (ends[i] - viewStart) * scale
+                                            if (py1 <= 0 || py0 >= height) continue
+                                            py0 = Math.max(0, py0)
+                                            py1 = Math.min(height, py1)
+                                            var valueX = laneX + (value - batch.min) / range * laneWidth
+                                            valueX = Math.max(laneX, Math.min(laneX + laneWidth, valueX))
+                                            var barWidth = Math.abs(valueX - zero)
+                                            if (barWidth < 1) {
+                                                if (value === 0) continue
+                                                barWidth = 1
+                                            }
+                                            ctx.fillRect(Math.min(zero, valueX), py0, barWidth, Math.max(1, py1 - py0))
+                                        }
                                     }
-                                    var barLeft = Math.min(zero, valueX)
-                                    var w = Math.max(1.5, Math.abs(valueX - zero))
-                                    ctx.fillStyle = s.color
-                                    ctx.fillRect(barLeft, Math.max(0, y0), w,
-                                                 Math.max(1, Math.min(height, y1) - Math.max(0, y0)))
+                                }
+
+                                // Rotated to read bottom-to-top along the lane,
+                                // anchored at the foot of the strip.
+                                ctx.font = "10px sans-serif"
+                                for (var ni = 0; ni < lanes.length; ++ni) {
+                                    var named = lanes[ni]
+                                    if (!named || named.size < 15) continue
+                                    ctx.save()
+                                    ctx.translate(named.start + 2, height - 4)
+                                    ctx.rotate(-Math.PI / 2)
+                                    ctx.textAlign = "left"
+                                    ctx.textBaseline = "top"
+                                    var label = elideCanvasText(ctx, named.name, Math.max(0, height - 12))
+                                    if (label.length > 0) {
+                                        var labelLengthPx = ctx.measureText(label).width
+                                        ctx.globalAlpha = 0.78
+                                        ctx.fillStyle = Theme.surfaceSunken
+                                        ctx.fillRect(-3, -1, labelLengthPx + 6, 13)
+                                        ctx.globalAlpha = 1
+                                        ctx.fillStyle = named.warning ? Theme.danger : Theme.textSecondary
+                                        ctx.fillText(label, 0, 0)
+                                    }
+                                    ctx.restore()
                                 }
                             }
                             MouseArea {
+                                id: leftTrackMouse
                                 anchors.fill: parent
-                                acceptedButtons: Qt.RightButton
+                                hoverEnabled: true
+                                acceptedButtons: Qt.LeftButton | Qt.RightButton
                                 cursorShape: Qt.PointingHandCursor
+                                property int hoveredTrack: -1
+                                function trackAt(x) {
+                                    return trackIndexAtPanelPosition(x, leftTrackCanvas.trackLeft, leftTrackCanvas.trackRight)
+                                }
+                                onPositionChanged: function(mouse) { hoveredTrack = trackAt(mouse.x) }
+                                onExited: hoveredTrack = -1
+                                ToolTip.visible: containsMouse && hoveredTrack >= 0 && ToolTip.text.length > 0
+                                ToolTip.delay: 350
+                                ToolTip.text: hoveredTrack >= 0 ? trackTooltipText(hoveredTrack) : ""
                                 onPressed: function(mouse) {
-                                    var trackLeft = activeController && activeController.showChromosomeContext ? 10 : 2
-                                    var trackRight = parent.width - 0.5 - 42 - 2
-                                    var index = trackIndexAtPanelPosition(mouse.x, trackLeft, trackRight, 7)
-                                    if (index >= 0) {
+                                    var index = trackAt(mouse.x)
+                                    if (index >= 0 && mouse.button === Qt.RightButton) {
                                         openPlotTrackMenu(index)
                                         mouse.accepted = true
+                                        return
                                     }
+                                    mouse.accepted = index >= 0
                                 }
+                                onDoubleClicked: function(mouse) {
+                                    var index = trackAt(mouse.x)
+                                    if (index >= 0 && mouse.button === Qt.LeftButton) openTrackNameEditor(index)
+                                }
+                            }
+                        }
+
+                        // Horizontal readout of the cursor's genomic Y on the
+                        // left strip.
+                        Canvas {
+                            id: leftTrackGuide
+                            x: leftTrackCanvas.x
+                            y: leftTrackCanvas.y
+                            width: leftTrackCanvas.width
+                            height: leftTrackCanvas.height
+                            z: 5
+                            visible: trackPanelsOpen && edgeGuidesActive
+                            onVisibleChanged: requestPaint()
+                            onWidthChanged: requestPaint()
+                            onHeightChanged: requestPaint()
+                            onPaint: {
+                                var ctx = getContext("2d")
+                                ctx.reset()
+                                if (!edgeGuidesActive || !trackPanelsOpen) return
+                                strokeEdgeGuide(ctx, leftTrackCanvas.trackLeft, hoverPlotY,
+                                                leftTrackCanvas.trackRight, hoverPlotY)
                             }
                         }
 
@@ -1945,7 +2241,7 @@ ApplicationWindow {
                                     updateBullseyeInspector(activeController, contextFx, contextFy)
                                     if (!hoverValueTimer.running)
                                         hoverValueTimer.start()
-                                    guideCanvas.requestPaint()
+                                    repaintEdgeGuides()
                                 }
 
                                 onPressed: function(mouse) {
@@ -2034,7 +2330,7 @@ ApplicationWindow {
                                 onExited: {
                                     hoverText = ""
                                     hoverActive = false
-                                    guideCanvas.requestPaint()
+                                    repaintEdgeGuides()
                                 }
                                 cursorShape: (selecting || annotating || straightEdgeEnabled || diagonalEdgeEnabled) ? Qt.CrossCursor : Qt.OpenHandCursor
                                 preventStealing: true

@@ -495,10 +495,32 @@ Rectangle {
                                     Layout.fillWidth: true
                                     AppCheckBox { checked: trackCard.entry.visible; onToggled: root.controller.setTrackVisible(trackCard.entry.index, checked) }
                                     AppToolButton { text: trackCard.entry.collapsed ? "›" : "⌄"; onLightSurface: true; onClicked: root.controller.setTrackCollapsed(trackCard.entry.index, !trackCard.entry.collapsed) }
-                                    AppTextField { Layout.fillWidth: true; text: trackCard.entry.name; onAccepted: root.controller.setTrackName(trackCard.entry.index, text) }
+                                    AppTextField {
+                                        Layout.fillWidth: true
+                                        text: trackCard.entry.name
+                                        placeholderText: "Track name"
+                                        Accessible.name: "Track name"
+                                        // Committing on Enter alone meant an
+                                        // edit was silently lost when focus moved.
+                                        onAccepted: root.controller.setTrackName(trackCard.entry.index, text)
+                                        onEditingFinished: if (text !== trackCard.entry.name && text.trim().length > 0)
+                                            root.controller.setTrackName(trackCard.entry.index, text)
+                                        hoverEnabled: true
+                                        ToolTip.visible: hovered && trackCard.entry.source.length > 0
+                                        ToolTip.delay: 350
+                                        ToolTip.text: trackCard.entry.source
+                                    }
                                     AppToolButton { text: "⋯"; onLightSurface: true; onClicked: root.trackMenuRequested(trackCard.entry.index) }
                                 }
                                 Label { visible: !trackCard.entry.collapsed; text: trackCard.entry.featureCount + " intervals · " + trackCard.entry.format; color: Theme.textMuted; font.pixelSize: Theme.textXs }
+                                Label {
+                                    visible: !trackCard.entry.collapsed && trackCard.entry.warning !== ""
+                                    Layout.fillWidth: true
+                                    text: "⚠ " + trackCard.entry.warning
+                                    color: Theme.danger
+                                    font.pixelSize: Theme.textXs
+                                    wrapMode: Text.WordWrap
+                                }
                                 RowLayout {
                                     visible: !trackCard.entry.collapsed && trackCard.entry.renderMode === "signal"
                                     Layout.fillWidth: true

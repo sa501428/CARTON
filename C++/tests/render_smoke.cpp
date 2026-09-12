@@ -1,6 +1,12 @@
+#include <QDir>
 #include <QElapsedTimer>
 #include <QEventLoop>
+#include <QFile>
 #include <QGuiApplication>
+#include <QJSEngine>
+#include <QJSValue>
+#include <QQmlEngine>
+#include <QTemporaryDir>
 #include <QQuickWindow>
 #include <QSGRendererInterface>
 #include <QThread>
@@ -109,6 +115,59 @@ int main(int argc, char** argv) {
                             renderedFrames > frameBeforeRotatedLoad;
                  }, 10000),
                  "45-degree renderer loads and paints a real Hi-C strip")) {
+        return 1;
+    }
+
+    // The track painters read trackRenderBatches from QML, so the parallel
+    // numeric arrays have to survive the C++ to JavaScript boundary as
+    // indexable sequences. Exercise that through a real engine rather than
+    // trusting the QVariant round trip.
+    QTemporaryDir temporary;
+    if (!require(temporary.isValid(), "temporary directory for the track batch check")) return 1;
+    const QString trackPath = temporary.filePath(QStringLiteral("batch.bedgraph"));
+    {
+        QFile file(trackPath);
+        if (!require(file.open(QIODevice::WriteOnly), "write bedGraph for the track batch check")) return 1;
+        file.write("chr22\t0\t1000\t4\nchr22\t1000\t2000\t-2\nchr22\t2000\t3000\t7\n");
+    }
+
+    HicDataController trackController;
+    trackController.setResolution(1000);
+    trackController.setChrX(QStringLiteral("22"));
+    trackController.setChrY(QStringLiteral("22"));
+    trackController.setX0(0);
+    trackController.setX1(3000);
+    trackController.setY0(0);
+    trackController.setY1(3000);
+    trackController.loadTrackFromPath(trackPath);
+    if (!require(spinUntil(application, [&]() { return trackController.trackCount() == 1; }),
+                 "track loaded for the batch check")) {
+        return 1;
+    }
+
+    QQmlEngine engine;
+    QJSValue evaluate = engine.evaluate(QStringLiteral(R"JS(
+        (function (controller) {
+            var batches = controller.trackRenderBatches(true, 300)
+            if (batches.length !== 1) return "expected one batch, got " + batches.length
+            var batch = batches[0]
+            if (batch.count <= 0) return "batch carries no bins"
+            if (batch.starts.length !== batch.count) return "starts is not indexable"
+            var total = 0
+            for (var i = 0; i < batch.count; ++i) {
+                if (!(batch.ends[i] > batch.starts[i])) return "bin " + i + " has no extent"
+                total += batch.values[i]
+            }
+            if (!(total > 0)) return "values did not survive as numbers"
+            if (!(batch.max > batch.min)) return "display range is empty"
+            return "ok"
+        })
+    )JS"));
+    if (!require(!evaluate.isError(), "track batch script compiles")) return 1;
+    const QJSValue outcome = evaluate.call({engine.toScriptValue(&trackController)});
+    if (!require(!outcome.isError() && outcome.toString() == QStringLiteral("ok"),
+                 qPrintable(QStringLiteral("trackRenderBatches reads correctly from QML: %1")
+                                .arg(outcome.toString())))) {
         return 1;
     }
 
