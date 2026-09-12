@@ -2371,27 +2371,11 @@ void HicDataController::setMatrixType(const QString& value) {
     m_matrixType = value;
     clearLoadedRegion();
     m_colorMaxAuto = true;
-    if (matrixIsPearson(m_matrixType)) {
-        m_colorMin = -1.0;
-        m_colorMax = 1.0;
-        if (m_colorMap != QStringLiteral("Blue-White-Red")) {
-            m_colorMap = QStringLiteral("Blue-White-Red");
-            emit colorMapChanged();
-        }
-    } else if (matrixIsCosine(m_matrixType)) {
-        m_colorMin = 0.0;
-        m_colorMax = 1.0;
-        if (m_colorMap != QStringLiteral("Viridis")) {
-            m_colorMap = QStringLiteral("Viridis");
-            emit colorMapChanged();
-        }
-    } else if (matrixIsDivergent(m_matrixType)) {
-        m_colorMin = -5.0;
-        m_colorMax = 5.0;
-    } else {
-        m_colorMin = 0.0;
-        m_colorMax = 50.0;
-    }
+    // The colour map is deliberately left alone. Forcing Blue-White-Red for
+    // Pearson and Viridis for cosine overwrote the user's choice and never put
+    // it back, so a round trip through either view silently lost it. Every map
+    // now grows a neutral midpoint on divergent data instead.
+    applyDefaultColorRange();
     emit colorMaxChanged();
     emit viewChanged();
     scheduleRequest();
@@ -2450,21 +2434,42 @@ void HicDataController::setColorMin(double value) {
 
 void HicDataController::resetColorScale() {
     m_colorMaxAuto = true;
+    applyDefaultColorRange();
+    emit colorMaxChanged();
+    scheduleRequest();
+}
+
+// Starting range for the current matrix type, before any data has been seen.
+// Shared by setMatrixType, resetColorScale and updateAutoColorScale so the
+// numeric domain always matches the domain the renderer expects.
+void HicDataController::applyDefaultColorRange() {
     if (matrixIsPearson(m_matrixType)) {
         m_colorMin = -1.0;
         m_colorMax = 1.0;
-    } else if (matrixIsCosine(m_matrixType)) {
+        return;
+    }
+    if (matrixIsCosine(m_matrixType)) {
         m_colorMin = 0.0;
         m_colorMax = 1.0;
-    } else if (matrixIsDivergent(m_matrixType)) {
-        m_colorMin = -5.0;
-        m_colorMax = 5.0;
-    } else {
-        m_colorMin = 0.0;
-        m_colorMax = 50.0;
+        return;
     }
-    emit colorMaxChanged();
-    scheduleRequest();
+    switch (heatmapScaleKind(m_matrixType)) {
+        case HeatmapScaleKind::Ratio:
+            // A ratio scale is read logarithmically around 1. The old default
+            // of [-5, 5] was a divergent range applied to a log domain, which
+            // clamped the lower bound to log(1e-6) and washed out depletion.
+            m_colorMin = 1.0 / 5.0;
+            m_colorMax = 5.0;
+            return;
+        case HeatmapScaleKind::Divergent:
+            m_colorMin = -5.0;
+            m_colorMax = 5.0;
+            return;
+        case HeatmapScaleKind::Sequential:
+            m_colorMin = 0.0;
+            m_colorMax = 50.0;
+            return;
+    }
 }
 
 void HicDataController::confirmLocalSimilarityMode(const QString& matrixType, int paddingBins) {
@@ -2488,6 +2493,16 @@ void HicDataController::confirmLocalSimilarityMode(const QString& matrixType, in
     } else {
         setMatrixType(matrixType);
     }
+}
+
+void HicDataController::declineLocalSimilarityMode() {
+    // setResolution() commits the new resolution and drops the loaded region
+    // before it raises this prompt, so returning without scheduling anything
+    // stranded the view on an empty matrix that only a later pan could
+    // refill. Fall back to the bounded default context and load that.
+    setStatus(QStringLiteral("Kept %1 with the default local context.").arg(matrixTypeLabel(m_matrixType)));
+    clearLoadedRegion();
+    scheduleRequest();
 }
 
 void HicDataController::setColorMap(const QString& value) {
@@ -2570,7 +2585,7 @@ void HicDataController::setCacheLimitMB(int value) {
 void HicDataController::setSymmetricColorScale(bool value) {
     if (m_symmetricColorScale == value) return;
     m_symmetricColorScale = value;
-    if (value) {
+    if (value && heatmapScaleKind(m_matrixType) != HeatmapScaleKind::Ratio) {
         const double extent = std::max(std::abs(m_colorMin), std::abs(m_colorMax));
         m_colorMin = -extent;
         m_colorMax = extent;
@@ -3300,14 +3315,6 @@ bool HicDataController::matrixIsSimilarity(const QString& matrixType) const {
     return matrixIsPearson(matrixType) || matrixIsCosine(matrixType);
 }
 
-bool HicDataController::matrixIsDivergent(const QString& matrixType) const {
-    return matrixType == QStringLiteral("oe") || matrixType == QStringLiteral("controloe") ||
-           matrixType == QStringLiteral("logoe") || matrixType == QStringLiteral("explogoe") ||
-           matrixType == QStringLiteral("oeratio") || matrixType == QStringLiteral("diff") ||
-           matrixType == QStringLiteral("logratio") || matrixIsPearson(matrixType) ||
-           matrixType == QStringLiteral("oevs") || matrixType == QStringLiteral("logeovs");
-}
-
 QString HicDataController::matrixTypeLabel(const QString& matrixType) const {
     const QVariantList options = matrixTypeOptions();
     for (const QVariant& value : options) {
@@ -3671,39 +3678,74 @@ void HicDataController::updateAutoColorScale(const std::vector<contactRecord>& r
     if (!m_colorMaxAuto) {
         return;
     }
+    // Pearson and cosine are mathematically bounded, so their range is fixed.
+    // Everything else is sampled from what is actually on screen; the old code
+    // only did that for sequential counts and pinned every divergent and ratio
+    // view to a hard-coded +/-5 no matter what the data looked like.
     if (matrixIsPearson(m_matrixType)) {
         m_colorMin = -1.0;
         m_colorMax = 1.0;
     } else if (matrixIsCosine(m_matrixType)) {
         m_colorMin = 0.0;
         m_colorMax = 1.0;
-    } else if (matrixIsDivergent(m_matrixType)) {
-        m_colorMin = -5.0;
-        m_colorMax = 5.0;
     } else {
-        m_colorMin = 0.0;
+        const HeatmapScaleKind kind = heatmapScaleKind(m_matrixType);
         std::vector<double> sampled;
         sampled.reserve(((records.size() + controlRecords.size()) / 10) + 1);
-        auto sampleRecords = [&sampled](const std::vector<contactRecord>& source) {
+        auto sampleRecords = [&sampled, kind](const std::vector<contactRecord>& source) {
             for (std::size_t i = 0; i < source.size(); i += 10) {
                 const contactRecord& rec = source[i];
-                if (rec.binX != rec.binY && std::isfinite(rec.counts) && rec.counts > 0.0f) {
-                    sampled.push_back(rec.counts);
+                // The diagonal dominates every count distribution, so it is
+                // excluded from the quantile as it always was.
+                if (rec.binX == rec.binY || !std::isfinite(rec.counts)) continue;
+                const double value = static_cast<double>(rec.counts);
+                switch (kind) {
+                    case HeatmapScaleKind::Ratio:
+                        // Fold each ratio onto the enriched side so the
+                        // quantile describes fold change in either direction.
+                        if (value > 0.0) sampled.push_back(std::max(value, 1.0 / value));
+                        break;
+                    case HeatmapScaleKind::Divergent:
+                        sampled.push_back(std::abs(value));
+                        break;
+                    case HeatmapScaleKind::Sequential:
+                        if (value > 0.0) sampled.push_back(value);
+                        break;
                 }
             }
         };
         sampleRecords(records);
         sampleRecords(controlRecords);
+
+        double extent = 0.0;
         if (!sampled.empty()) {
             const double quantile = std::clamp(m_colorPercentile / 100.0, 0.5, 1.0);
             const std::size_t index = static_cast<std::size_t>(std::floor(quantile * (sampled.size() - 1)));
             std::nth_element(sampled.begin(), sampled.begin() + index, sampled.end());
-            m_colorMax = std::max(1.0, sampled[index]);
-        } else {
-            m_colorMax = 1.0;
+            extent = sampled[index];
+        }
+        switch (kind) {
+            case HeatmapScaleKind::Ratio: {
+                const double fold = std::isfinite(extent) ? std::clamp(extent, 1.5, 1000.0) : 5.0;
+                m_colorMin = 1.0 / fold;
+                m_colorMax = fold;
+                break;
+            }
+            case HeatmapScaleKind::Divergent: {
+                const double bound = std::isfinite(extent) && extent > 0.0 ? extent : 5.0;
+                m_colorMin = -bound;
+                m_colorMax = bound;
+                break;
+            }
+            case HeatmapScaleKind::Sequential:
+                m_colorMin = 0.0;
+                m_colorMax = std::max(1.0, std::isfinite(extent) ? extent : 1.0);
+                break;
         }
     }
-    if (m_symmetricColorScale) {
+    // A ratio range is already symmetric about 1 by construction, and mirroring
+    // it to [-x, x] would push a negative bound back into the log domain.
+    if (m_symmetricColorScale && heatmapScaleKind(m_matrixType) != HeatmapScaleKind::Ratio) {
         const double extent = std::max(0.000001, std::max(std::abs(m_colorMin), std::abs(m_colorMax)));
         m_colorMin = -extent;
         m_colorMax = extent;

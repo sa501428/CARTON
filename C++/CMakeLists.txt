@@ -164,6 +164,7 @@ qt_add_qml_module(carton
         qml/AppTextField.qml
         qml/AppCheckBox.qml
         qml/AppTabButton.qml
+        qml/ColorSwatchButton.qml
         qml/Card.qml
         qml/DialogFrame.qml
         qml/SvgIcon.qml

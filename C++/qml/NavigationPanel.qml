@@ -429,9 +429,27 @@ Rectangle {
                     }
                     RowLayout {
                         Layout.fillWidth: true
-                        AppButton { text: "Low color"; tonal: true; Layout.fillWidth: true; onClicked: root.lowColorRequested() }
-                        AppButton { text: "High color"; tonal: true; Layout.fillWidth: true; onClicked: root.highColorRequested() }
-                        AppButton { text: "Missing"; tonal: true; Layout.fillWidth: true; onClicked: root.missingColorRequested() }
+                        spacing: 6
+                        ColorSwatchButton {
+                            Layout.fillWidth: true
+                            label: "Low"
+                            swatch: root.controller ? root.controller.customLowColor : "#2166ac"
+                            dimmed: !root.controller || root.controller.colorMap !== "Custom"
+                            onClicked: root.lowColorRequested()
+                        }
+                        ColorSwatchButton {
+                            Layout.fillWidth: true
+                            label: "High"
+                            swatch: root.controller ? root.controller.customHighColor : "#b2182b"
+                            dimmed: !root.controller || root.controller.colorMap !== "Custom"
+                            onClicked: root.highColorRequested()
+                        }
+                        ColorSwatchButton {
+                            Layout.fillWidth: true
+                            label: "Missing"
+                            swatch: root.controller ? root.controller.missingValueColor : Theme.missingData
+                            onClicked: root.missingColorRequested()
+                        }
                     }
                     RowLayout {
                         Layout.fillWidth: true

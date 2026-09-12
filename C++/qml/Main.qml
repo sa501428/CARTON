@@ -711,6 +711,13 @@ ApplicationWindow {
             if (targetController)
                 targetController.confirmLocalSimilarityMode(requestedMode, similarityPaddingBins.value)
         }
+        // Without this the dialog's Cancel did nothing at all. The prompt can
+        // be raised from a resolution change that has already dropped the
+        // loaded region, so dismissing it left the map blank until something
+        // else happened to trigger a request.
+        onRejected: {
+            if (targetController) targetController.declineLocalSimilarityMode()
+        }
     }
 
     ColorDialog {
@@ -950,6 +957,44 @@ ApplicationWindow {
                         if (activeController && isFinite(value)) activeController.colorMax = value
                     }
                 }
+            }
+
+            // The dialog offered "Custom" in the combo but had no way to pick
+            // the colours it refers to; they were tucked away in a collapsed
+            // sidebar section.
+            Label {
+                text: "Custom colors"
+                color: Theme.textSecondary
+                font.pixelSize: Theme.textSm
+            }
+            RowLayout {
+                Layout.fillWidth: true
+                spacing: 8
+                ColorSwatchButton {
+                    label: "Low"
+                    swatch: activeController ? activeController.customLowColor : "#2166ac"
+                    dimmed: !activeController || activeController.colorMap !== "Custom"
+                    onClicked: lowColorDialog.open()
+                }
+                ColorSwatchButton {
+                    label: "High"
+                    swatch: activeController ? activeController.customHighColor : "#b2182b"
+                    dimmed: !activeController || activeController.colorMap !== "Custom"
+                    onClicked: highColorDialog.open()
+                }
+                ColorSwatchButton {
+                    label: "Missing"
+                    swatch: activeController ? activeController.missingValueColor : Theme.missingData
+                    onClicked: missingColorDialog.open()
+                }
+            }
+            Label {
+                Layout.fillWidth: true
+                visible: activeController && activeController.colorMap !== "Custom"
+                text: "Picking a low or high color switches the map to Custom."
+                color: Theme.textMuted
+                font.pixelSize: Theme.textXs
+                wrapMode: Text.WordWrap
             }
 
             RowLayout {

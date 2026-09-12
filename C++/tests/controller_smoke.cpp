@@ -647,5 +647,109 @@ int main(int argc, char** argv) {
     boundedProcessing.setProcessingOperator(QStringLiteral("gabor"));
     if (!require(boundedProcessing.processingParameter() == 12.0,
                  "processing tabs clamp Gabor sigma before scheduling work")) return 1;
+
+    // The renderer and the auto-scaler used to classify matrix types from two
+    // separate hand-maintained lists that had drifted apart. Pin the shared
+    // classification, and pin that every declared matrix type lands in the
+    // numeric domain its colour ramp expects.
+    struct ScaleExpectation { const char* matrixType; HeatmapScaleKind kind; };
+    const ScaleExpectation expectations[] = {
+        {"observed", HeatmapScaleKind::Sequential},
+        {"log", HeatmapScaleKind::Sequential},
+        {"expected", HeatmapScaleKind::Sequential},
+        {"cosineobserved", HeatmapScaleKind::Sequential},
+        {"cosineoe", HeatmapScaleKind::Sequential},
+        {"pearson", HeatmapScaleKind::Divergent},
+        {"controlpearson", HeatmapScaleKind::Divergent},
+        {"logoe", HeatmapScaleKind::Divergent},
+        {"logeovs", HeatmapScaleKind::Divergent},
+        {"logratio", HeatmapScaleKind::Divergent},
+        {"diff", HeatmapScaleKind::Divergent},
+        {"oe", HeatmapScaleKind::Ratio},
+        {"controloe", HeatmapScaleKind::Ratio},
+        {"oevs", HeatmapScaleKind::Ratio},
+        {"oeratio", HeatmapScaleKind::Ratio},
+        {"explogoe", HeatmapScaleKind::Ratio},
+        {"ratio", HeatmapScaleKind::Ratio},
+        {"ratio1", HeatmapScaleKind::Ratio},
+    };
+    for (const ScaleExpectation& expectation : expectations) {
+        if (!require(heatmapScaleKind(QString::fromLatin1(expectation.matrixType)) == expectation.kind,
+                     qPrintable(QStringLiteral("%1 is classified for the ramp it renders with")
+                                    .arg(QString::fromLatin1(expectation.matrixType))))) {
+            return 1;
+        }
+    }
+
+    // A divergent matrix must read neutral at zero and a ratio at one, or the
+    // depleted half of the map collapses into a sliver of the ramp.
+    HeatmapColorSettings divergent;
+    divergent.matrixType = QStringLiteral("logoe");
+    divergent.minimum = -3.0;
+    divergent.maximum = 3.0;
+    if (!require(qFuzzyCompare(heatmapRampPosition(0.0, divergent, HeatmapScaleKind::Divergent) + 1.0, 1.5) &&
+                 heatmapRampPosition(-3.0, divergent, HeatmapScaleKind::Divergent) < 0.01 &&
+                 heatmapRampPosition(3.0, divergent, HeatmapScaleKind::Divergent) > 0.99,
+                 "divergent ramps put zero at the neutral midpoint")) return 1;
+
+    HeatmapColorSettings ratio;
+    ratio.matrixType = QStringLiteral("oe");
+    ratio.minimum = 1.0 / 5.0;
+    ratio.maximum = 5.0;
+    const double neutral = heatmapRampPosition(1.0, ratio, HeatmapScaleKind::Ratio);
+    const double depleted = heatmapRampPosition(1.0 / 2.0, ratio, HeatmapScaleKind::Ratio);
+    const double enriched = heatmapRampPosition(2.0, ratio, HeatmapScaleKind::Ratio);
+    if (!require(qFuzzyCompare(neutral + 1.0, 1.5) &&
+                 std::abs((neutral - depleted) - (enriched - neutral)) < 0.001 &&
+                 depleted > 0.1,
+                 "ratio ramps are symmetric in log space around one")) return 1;
+
+    // Every colour map has to reach the renderer for every scale kind; the
+    // divergent and ratio branches used to ignore the selection entirely.
+    for (const QString& map : {QStringLiteral("White-Red"), QStringLiteral("Viridis"),
+                               QStringLiteral("Blue-White-Red"), QStringLiteral("Grayscale"),
+                               QStringLiteral("Custom")}) {
+        HeatmapColorSettings probe;
+        probe.matrixType = QStringLiteral("oe");
+        probe.minimum = 1.0 / 5.0;
+        probe.maximum = 5.0;
+        probe.colorMap = map;
+        probe.customLowColor = QColor("#00ff00");
+        probe.customHighColor = QColor("#ff00ff");
+        const QColor high = heatmapColorForValue(5.0, probe);
+        if (!require(high.isValid(), qPrintable(QStringLiteral("%1 renders on a ratio matrix").arg(map))))
+            return 1;
+        if (map == QStringLiteral("Custom") &&
+            !require(high.red() > 200 && high.green() < 60 && high.blue() > 200,
+                     "custom high color reaches a ratio matrix")) {
+            return 1;
+        }
+    }
+
+    // Ratios are undefined at or below zero, but a divergent value is not:
+    // "logeovs" was classified as a ratio and painted its whole negative half
+    // with the missing-data color.
+    HeatmapColorSettings negative;
+    negative.matrixType = QStringLiteral("logeovs");
+    negative.minimum = -3.0;
+    negative.maximum = 3.0;
+    negative.missingValueColor = QColor("#4b5563");
+    if (!require(heatmapColorForValue(-1.5, negative) != negative.missingValueColor,
+                 "negative log ratios are colored, not treated as missing")) return 1;
+
+    // Switching render modes must not consume the user's color map.
+    HicDataController colorController;
+    colorController.setColorMap(QStringLiteral("Viridis"));
+    colorController.setMatrixType(QStringLiteral("oe"));
+    // Guard against the assertion below passing only because the switch was
+    // rejected and nothing actually happened.
+    if (!require(colorController.matrixType() == QStringLiteral("oe"),
+                 "matrix type switch takes effect")) return 1;
+    if (!require(colorController.colorMin() > 0.0 && colorController.colorMax() > 1.0,
+                 "a ratio matrix gets a positive, log-usable default range")) return 1;
+    colorController.setMatrixType(QStringLiteral("observed"));
+    if (!require(colorController.colorMap() == QStringLiteral("Viridis"),
+                 "matrix switches preserve the selected color map")) return 1;
+
     return 0;
 }

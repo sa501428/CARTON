@@ -212,6 +212,7 @@ public:
     Q_INVOKABLE void endInteraction();
     Q_INVOKABLE void resetColorScale();
     Q_INVOKABLE void confirmLocalSimilarityMode(const QString& matrixType, int paddingBins = 64);
+    Q_INVOKABLE void declineLocalSimilarityMode();
     Q_INVOKABLE void zoomToFractions(double xStartFraction, double yStartFraction,
                                      double xEndFraction, double yEndFraction);
     Q_INVOKABLE void requestVisibleRegion();
@@ -371,7 +372,6 @@ private:
     bool matrixIsPearson(const QString& matrixType) const;
     bool matrixIsCosine(const QString& matrixType) const;
     bool matrixIsSimilarity(const QString& matrixType) const;
-    bool matrixIsDivergent(const QString& matrixType) const;
     QString matrixTypeLabel(const QString& matrixType) const;
     bool similarityNeedsConfirmation(const QString& matrixType) const;
     void requestSimilarityConfirmation(const QString& matrixType);
@@ -412,6 +412,7 @@ private:
     void refreshDatasetsModel();
     void refreshBookmarksModel();
     void refreshTracksModel();
+    void applyDefaultColorRange();
     void refreshAnnotationsModel();
     void refreshSearchResultsModel();
     void startNextTrackLoad();
@@ -517,8 +518,11 @@ private:
     double m_colorMax = 50.0;
     bool m_colorMaxAuto = true;
     QString m_colorMap = "White-Red";
-    QColor m_customLowColor = QColor("#ffffff");
-    QColor m_customHighColor = QColor("#d7191c");
+    // Distinct from the White-Red preset on purpose: when these defaulted to
+    // white/#d7191c, selecting "Custom" produced a pixel-identical map and
+    // looked like the setting had no effect.
+    QColor m_customLowColor = QColor("#2166ac");
+    QColor m_customHighColor = QColor("#b2182b");
     std::shared_ptr<const StrawFileInfo> m_metadata;
     std::shared_ptr<const StrawFileInfo> m_controlMetadata;
     std::vector<contactRecord> m_records;
