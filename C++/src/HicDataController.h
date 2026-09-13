@@ -218,6 +218,10 @@ public:
     Q_INVOKABLE void beginInteraction();
     Q_INVOKABLE void endInteraction();
     Q_INVOKABLE void resetColorScale();
+    // Widens (factor > 1) or tightens (factor < 1) the colour range around the
+    // anchor its scale kind is read from: 1 for a ratio, 0 for a divergent
+    // scale, the current minimum otherwise.
+    Q_INVOKABLE void scaleColorRange(double factor);
     Q_INVOKABLE void confirmLocalSimilarityMode(const QString& matrixType, int paddingBins = 64);
     Q_INVOKABLE void declineLocalSimilarityMode();
     Q_INVOKABLE void zoomToFractions(double xStartFraction, double yStartFraction,

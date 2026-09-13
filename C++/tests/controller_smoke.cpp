@@ -159,6 +159,31 @@ int main(int argc, char** argv) {
     controller.setWorkspaceSearch(QStringLiteral("signal"));
     if (!require(controller.searchResultsModel()->rowCount() >= 1, "workspace search model")) return 1;
 
+    HicDataController colorScale;
+    colorScale.setColorMin(0.0);
+    colorScale.setColorMax(40.0);
+    colorScale.scaleColorRange(0.5);
+    if (!require(colorScale.colorMax() == 20.0 && colorScale.colorMin() == 0.0,
+                 "halving a sequential colour range scales the span from its floor")) return 1;
+    colorScale.scaleColorRange(2.0);
+    if (!require(colorScale.colorMax() == 40.0 && !colorScale.colorMaxAuto(),
+                 "doubling restores the previous maximum and pins the range")) return 1;
+    colorScale.setSymmetricColorScale(true);
+    colorScale.scaleColorRange(2.0);
+    if (!require(colorScale.colorMax() == 80.0 && colorScale.colorMin() == -80.0,
+                 "a symmetric range scales both ends around zero")) return 1;
+    colorScale.setSymmetricColorScale(false);
+    colorScale.setMatrixType(QStringLiteral("oe"));
+    colorScale.setColorMax(5.0);
+    colorScale.scaleColorRange(2.0);
+    if (!require(colorScale.colorMax() == 10.0 && colorScale.colorMin() == 0.1,
+                 "a ratio range stays reciprocal around one")) return 1;
+    const double pinnedMax = colorScale.colorMax();
+    colorScale.scaleColorRange(0.0);
+    colorScale.scaleColorRange(-1.0);
+    colorScale.scaleColorRange(std::numeric_limits<double>::quiet_NaN());
+    if (!require(colorScale.colorMax() == pinnedMax, "a non-positive scale factor is ignored")) return 1;
+
     controller.setCacheLimitMB(64);
     controller.setColorPercentile(97.5);
     controller.setZeroTransparent(true);

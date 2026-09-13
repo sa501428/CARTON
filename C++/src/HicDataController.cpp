@@ -2457,6 +2457,34 @@ void HicDataController::setColorMin(double value) {
     emit colorMaxChanged();
 }
 
+void HicDataController::scaleColorRange(double factor) {
+    if (!std::isfinite(factor) || factor <= 0.0) return;
+    // Small enough that a repeatedly halved range still shows structure, large
+    // enough that a repeatedly doubled one stays finite.
+    constexpr double kMinSpan = 1e-6;
+    constexpr double kMaxSpan = 1e12;
+    double nextMin = m_colorMin;
+    double nextMax = m_colorMax;
+    if (heatmapScaleKind(m_matrixType) == HeatmapScaleKind::Ratio) {
+        // A ratio is read logarithmically around 1, so both ends move away from
+        // 1 by the same factor and the range stays reciprocal.
+        nextMax = std::clamp(std::max(m_colorMax, 1.0 + kMinSpan) * factor, 1.0 + kMinSpan, kMaxSpan);
+        nextMin = 1.0 / nextMax;
+    } else if (m_symmetricColorScale || heatmapScaleKind(m_matrixType) == HeatmapScaleKind::Divergent) {
+        const double extent = std::max(std::abs(m_colorMin), std::abs(m_colorMax));
+        nextMax = std::clamp(std::max(extent, kMinSpan) * factor, kMinSpan, kMaxSpan);
+        nextMin = -nextMax;
+    } else {
+        const double span = std::max(m_colorMax - m_colorMin, kMinSpan);
+        nextMax = m_colorMin + std::clamp(span * factor, kMinSpan, kMaxSpan);
+    }
+    if (nextMin == m_colorMin && nextMax == m_colorMax) return;
+    m_colorMaxAuto = false;
+    m_colorMin = nextMin;
+    m_colorMax = nextMax;
+    emit colorMaxChanged();
+}
+
 void HicDataController::resetColorScale() {
     m_colorMaxAuto = true;
     applyDefaultColorRange();

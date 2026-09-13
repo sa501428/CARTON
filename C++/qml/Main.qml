@@ -1241,20 +1241,45 @@ ApplicationWindow {
             SplitView.fillHeight: true
             color: Theme.appBg
 
-            AppToolButton {
+            // The only way back to a hidden workspace panel, so it carries its
+            // own surface rather than relying on a bare glyph over the map.
+            Rectangle {
+                id: workspaceHandle
                 z: 200
                 visible: !navigationOpen
                 anchors.left: parent.left
                 anchors.verticalCenter: parent.verticalCenter
-                width: 28
-                height: 48
-                text: "›"
-                onLightSurface: true
-                contentColor: Theme.textSecondary
-                Accessible.name: "Open workspace"
-                ToolTip.visible: hovered
-                ToolTip.text: Accessible.name
-                onClicked: navigationOpen = true
+                width: 20
+                height: 64
+                topRightRadius: Theme.radiusSm
+                bottomRightRadius: Theme.radiusSm
+                color: handleArea.pressed ? Theme.surfacePressed
+                                          : handleArea.containsMouse ? Theme.surfaceHover : Theme.surface
+                border.color: Theme.borderStrong
+                Behavior on color { ColorAnimation { duration: Theme.reducedMotion ? 0 : Theme.animationFast } }
+
+                Text {
+                    anchors.centerIn: parent
+                    text: "›"
+                    color: Theme.textSecondary
+                    font.family: Theme.fontFamily
+                    font.pixelSize: Theme.textBase
+                    font.weight: Font.DemiBold
+                }
+
+                MouseArea {
+                    id: handleArea
+                    anchors.fill: parent
+                    hoverEnabled: true
+                    cursorShape: Qt.PointingHandCursor
+                    onClicked: navigationOpen = true
+                }
+
+                ToolTip.visible: handleArea.containsMouse
+                ToolTip.text: "Show workspace panel"
+                Accessible.role: Accessible.Button
+                Accessible.name: ToolTip.text
+                Accessible.onPressAction: navigationOpen = true
             }
 
             ColumnLayout {
@@ -2552,6 +2577,89 @@ ApplicationWindow {
                                 color: Theme.textMuted
                                 font.pixelSize: Theme.textXs
                                 horizontalAlignment: Text.AlignHCenter
+                            }
+                        }
+                    }
+
+                    // Zoom and colour-scale controls also live in the
+                    // workspace panel, but that panel is scrollable and often
+                    // hidden, so the two adjustments made constantly during
+                    // navigation float over the map as well.
+                    Rectangle {
+                        id: quickControls
+                        z: 110
+                        visible: activeController && activeController.filePath.length > 0
+                        anchors.right: parent.right
+                        anchors.bottom: parent.bottom
+                        anchors.rightMargin: 12
+                        anchors.bottomMargin: 12
+                        width: quickControlsRow.implicitWidth + 12
+                        height: 34
+                        radius: Theme.radiusMd
+                        color: Theme.surfaceAlt
+                        border.color: Theme.borderStrong
+                        // Dimmed until pointed at so the controls never compete
+                        // with the map they sit on top of.
+                        opacity: quickControlsHover.hovered ? 1.0 : 0.82
+                        Behavior on opacity { NumberAnimation { duration: Theme.reducedMotion ? 0 : Theme.animationFast } }
+
+                        HoverHandler { id: quickControlsHover }
+
+                        component QuickControlButton: AppToolButton {
+                            onLightSurface: !Theme.dark
+                            contentColor: Theme.textSecondary
+                            leftPadding: 4
+                            rightPadding: 4
+                            Layout.preferredWidth: Math.max(26, implicitContentWidth + 8)
+                            Layout.preferredHeight: 26
+                            ToolTip.visible: hovered
+                            ToolTip.text: Accessible.name
+                        }
+
+                        component QuickControlDivider: Rectangle {
+                            Layout.preferredWidth: 1
+                            Layout.preferredHeight: 18
+                            color: Theme.border
+                        }
+
+                        RowLayout {
+                            id: quickControlsRow
+                            anchors.centerIn: parent
+                            spacing: 2
+
+                            QuickControlButton {
+                                text: "−"
+                                Accessible.name: "Zoom out"
+                                onClicked: activeController.zoom(0.5, 0.5, 0.5)
+                            }
+                            QuickControlButton {
+                                text: "+"
+                                Accessible.name: "Zoom in"
+                                onClicked: activeController.zoom(2.0, 0.5, 0.5)
+                            }
+                            QuickControlButton {
+                                text: "Fit"
+                                Accessible.name: "Reset view to the whole chromosome"
+                                onClicked: activeController.resetView()
+                            }
+
+                            QuickControlDivider {}
+
+                            QuickControlButton {
+                                text: "½×"
+                                Accessible.name: "Halve the colour scale maximum (brighter map)"
+                                onClicked: activeController.scaleColorRange(0.5)
+                            }
+                            QuickControlButton {
+                                text: "2×"
+                                Accessible.name: "Double the colour scale maximum (dimmer map)"
+                                onClicked: activeController.scaleColorRange(2.0)
+                            }
+                            QuickControlButton {
+                                text: "Auto"
+                                enabled: activeController && !activeController.colorMaxAuto
+                                Accessible.name: "Restore the automatic colour range"
+                                onClicked: activeController.resetColorScale()
                             }
                         }
                     }
