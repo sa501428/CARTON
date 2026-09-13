@@ -26,6 +26,17 @@ cmake --build build-carton --target carton --parallel
 open build-carton/carton.app
 ```
 
+To erase the build directory and rebuild everything from scratch, then run the
+smoke tests:
+
+```sh
+./rebuild.sh
+```
+
+Pass `--debug` for a debug build, `--skip-tests` to stop after building, or
+`--reset-settings` to also clear saved preferences (recent files, bookmarks,
+display options) for a genuine first-run state.
+
 To build the deployable, smoke-tested, ad-hoc-signed disk image:
 
 ```sh
