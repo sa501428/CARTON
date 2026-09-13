@@ -105,6 +105,10 @@ RegionSetModel* TabSession::regionSet() const { return m_regionSet; }
 qint64 TabSession::windowSize() const { return m_regionSet->windowSize(); }
 int TabSession::analysisPaneHeight() const { return m_analysisPaneHeight; }
 qint64 TabSession::diagonalMaxDistance() const { return m_diagonalMaxDistance; }
+bool TabSession::diagonalAutoDistance() const { return m_diagonalAutoDistance; }
+qint64 TabSession::diagonalEffectiveDistance() const {
+    return m_diagonalAutoDistance ? m_diagonalEffectiveDistance : m_diagonalMaxDistance;
+}
 qint64 TabSession::bullseyeCenterX() const { return m_bullseyeCenterX; }
 qint64 TabSession::bullseyeCenterY() const { return m_bullseyeCenterY; }
 int TabSession::bullseyeRadiusBins() const { return m_bullseyeRadiusBins; }
@@ -228,15 +232,44 @@ void TabSession::setAnalysisPaneHeight(int value) {
 
 void TabSession::setDiagonalMaxDistance(qint64 value) {
     value = std::clamp<qint64>(value, 1000, 1000000000LL);
-    if (m_diagonalMaxDistance == value) return;
+    // Typing a distance is how the user takes the vertical axis off the aspect
+    // ratio, so it also leaves automatic mode.
+    if (m_diagonalMaxDistance == value && !m_diagonalAutoDistance) return;
     m_diagonalMaxDistance = value;
-    for (const CellSpec& cell : m_cells) {
-        if (cell.controller)
-            cell.controller->setAnalysisPaddingBins(static_cast<int>(std::clamp<qint64>(
-                (value + std::max(1, cell.controller->resolution()) - 1) /
-                    std::max(1, cell.controller->resolution()), 1, 2000)));
-    }
+    m_diagonalAutoDistance = false;
+    applyDiagonalSettings();
     emit analysisSettingsChanged();
+}
+
+void TabSession::setDiagonalAutoDistance(bool value) {
+    if (m_diagonalAutoDistance == value) return;
+    m_diagonalAutoDistance = value;
+    applyDiagonalSettings();
+    emit analysisSettingsChanged();
+}
+
+void TabSession::reportDiagonalDistance(qint64 value) {
+    value = std::clamp<qint64>(value, 1000, 1000000000LL);
+    if (m_diagonalEffectiveDistance == value) return;
+    m_diagonalEffectiveDistance = value;
+    applyDiagonalSettings();
+    if (m_diagonalAutoDistance) emit analysisSettingsChanged();
+}
+
+// A diamond centred on the left or right edge of the strip reaches half the
+// displayed separation past it, so the request has to carry that much context
+// or the strip loses a wedge at each end.
+void TabSession::applyDiagonalSettings(HicDataController* controller) {
+    if (!controller || m_type != Type::Rotated45) return;
+    const qint64 distance = std::max<qint64>(1, diagonalEffectiveDistance());
+    const qint64 resolution = std::max(1, controller->resolution());
+    controller->setAnalysisPaddingBins(static_cast<int>(std::clamp<qint64>(
+        (distance / 2 + resolution - 1) / resolution + 2, 1, 2000)));
+    controller->setAutoColorDistanceLimit(distance);
+}
+
+void TabSession::applyDiagonalSettings() {
+    for (const CellSpec& cell : m_cells) applyDiagonalSettings(cell.controller);
 }
 
 void TabSession::setBullseyeCenterX(qint64 value) {
@@ -348,6 +381,8 @@ void TabSession::initialize(const QString& value) {
     m_transposed = false;
     m_diagonalMode = QStringLiteral("split");
     m_layerScope = QStringLiteral("default");
+    m_diagonalAutoDistance = true;
+    m_diagonalEffectiveDistance = m_diagonalMaxDistance;
     m_linkNavigation = isMultiSourceType();
     m_linkCrosshair = true;
     m_linkColorScale = false;
@@ -387,9 +422,7 @@ HicDataController* TabSession::createController(const QString& key) {
     auto* controller = new HicDataController(this);
     controller->setMinimapEnabled(m_type == Type::Single);
     if (m_type == Type::Bullseye) controller->setAnalysisPaddingBins(m_bullseyeRadiusBins + 2);
-    else if (m_type == Type::Rotated45)
-        controller->setAnalysisPaddingBins(static_cast<int>(std::clamp<qint64>(
-            m_diagonalMaxDistance / std::max(1, controller->resolution()), 1, 2000)));
+    else if (m_type == Type::Rotated45) applyDiagonalSettings(controller);
     connect(controller, &HicDataController::metadataChanged, this, [this, controller]() {
         for (CellSpec& cell : m_cells) if (cell.controller == controller) {
             openMapForCell(cell);
@@ -402,6 +435,11 @@ HicDataController* TabSession::createController(const QString& key) {
             applyCellMode(cell);
             break;
         }
+        // Every map resets to its own first chromosome at its own automatic
+        // resolution as it finishes opening, so a linked tab has to be pulled
+        // back onto one view once the newcomer is ready rather than only when
+        // the user next pans or zooms.
+        syncNavigationToReference();
     });
     connect(controller, &HicDataController::controlReadyChanged, this, [this, controller]() {
         for (CellSpec& cell : m_cells) if (cell.controller == controller) {
@@ -416,10 +454,7 @@ HicDataController* TabSession::createController(const QString& key) {
         if (m_linkColorScale) propagateColor(controller);
     });
     connect(controller, &HicDataController::viewChanged, this, [this, controller]() {
-        if (m_type == Type::Rotated45)
-            controller->setAnalysisPaddingBins(static_cast<int>(std::clamp<qint64>(
-                (m_diagonalMaxDistance + std::max(1, controller->resolution()) - 1) /
-                    std::max(1, controller->resolution()), 1, 2000)));
+        if (m_type == Type::Rotated45) applyDiagonalSettings(controller);
         else if (m_type == Type::Bullseye)
             controller->setAnalysisPaddingBins(m_bullseyeRadiusBins + 2);
         if (m_type == Type::Rotated45 && controller->chrX() != controller->chrY() &&
@@ -740,6 +775,18 @@ bool TabSession::cellsShareNavigation(const CellSpec& source, const CellSpec& ta
     return false;
 }
 
+// Cell order decides the reference so the result does not depend on which map
+// finished opening first.
+void TabSession::syncNavigationToReference() {
+    if (!m_linkNavigation) return;
+    for (int index = 0; index < m_cells.size(); ++index) {
+        const CellSpec& cell = m_cells[index];
+        if (!cell.controller || cell.controller->chrX().isEmpty()) continue;
+        notifyViewportInteracted(index);
+        return;
+    }
+}
+
 void TabSession::notifyViewportInteracted(int cellIndex) {
     if (!m_linkNavigation || cellIndex < 0 || cellIndex >= m_cells.size()) return;
     const CellSpec& source = m_cells[cellIndex];
@@ -868,6 +915,7 @@ QVariantMap TabSession::state() const {
     QVariantMap analysis;
     analysis[QStringLiteral("paneHeight")] = m_analysisPaneHeight;
     analysis[QStringLiteral("diagonalMaxDistance")] = m_diagonalMaxDistance;
+    analysis[QStringLiteral("diagonalAutoDistance")] = m_diagonalAutoDistance;
     analysis[QStringLiteral("bullseyeCenterX")] = m_bullseyeCenterX;
     analysis[QStringLiteral("bullseyeCenterY")] = m_bullseyeCenterY;
     analysis[QStringLiteral("bullseyeRadiusBins")] = m_bullseyeRadiusBins;
@@ -934,6 +982,8 @@ bool TabSession::restoreState(const QVariantMap& value) {
     m_analysisPaneHeight = std::clamp(analysis.value(QStringLiteral("paneHeight"), 260).toInt(), 100, 1200);
     m_diagonalMaxDistance = std::clamp<qint64>(
         analysis.value(QStringLiteral("diagonalMaxDistance"), 2000000).toLongLong(), 1000, 1000000000LL);
+    m_diagonalAutoDistance = analysis.value(QStringLiteral("diagonalAutoDistance"), true).toBool();
+    m_diagonalEffectiveDistance = m_diagonalMaxDistance;
     m_bullseyeCenterX = std::max<qint64>(0, analysis.value(QStringLiteral("bullseyeCenterX"), 0).toLongLong());
     m_bullseyeCenterY = std::max<qint64>(0, analysis.value(QStringLiteral("bullseyeCenterY"), 0).toLongLong());
     m_bullseyeRadiusBins = std::clamp(analysis.value(QStringLiteral("bullseyeRadiusBins"), 12).toInt(), 1, 100);

@@ -123,6 +123,7 @@ public:
     void acquireReadSlot();
     void releaseReadSlot();
     void notifyAnnotationChanged(const QString& id);
+    void notifyRecentsChanged();
 
     Q_INVOKABLE QVariantList resources(const QString& kind = QString()) const;
     Q_INVOKABLE QString canonicalResourceId(const QString& kind, const QString& pathOrUrl) const;
@@ -135,6 +136,7 @@ public:
 signals:
     void resourcesChanged();
     void cacheStatsChanged();
+    void recentsChanged();
 
 private:
     explicit DatasetRegistry(QObject* parent = nullptr);

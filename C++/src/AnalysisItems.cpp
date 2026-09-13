@@ -13,6 +13,7 @@
 #include <exception>
 #include <new>
 
+#include "HeatmapColorMapping.h"
 #include "MatrixAnalysis.h"
 
 namespace {
@@ -99,36 +100,97 @@ void AnalysisItemBase::setController(HicDataController* controller) {
     update();
 }
 
+// Routed through the shared ramp so the analysis views paint with the colour
+// map, log domain and missing-value colour the user picked for the map. The
+// hand-rolled white-to-red interpolation this replaced ignored all three, which
+// is why a 45-degree strip stayed red whatever the heatmap was set to.
 QColor AnalysisItemBase::colorForValue(float value, float minimum, float maximum) const {
-    if (!std::isfinite(value)) return m_controller ? m_controller->missingValueColor() : QColor("#4b5563");
-    double low = maximum > minimum ? minimum : (m_controller ? m_controller->colorMin() : 0.0);
-    double high = maximum > minimum ? maximum : (m_controller ? m_controller->colorMax() : 50.0);
-    if (high <= low) high = low + 1.0;
-    if (low < 0.0 && high > 0.0) {
-        if (value >= 0.0f) {
-            const double t = std::clamp(value / high, 0.0, 1.0);
-            return QColor(255, static_cast<int>(255 * (1.0 - t)), static_cast<int>(255 * (1.0 - t)), 245);
-        }
-        const double t = std::clamp(value / low, 0.0, 1.0);
-        return QColor(static_cast<int>(255 * (1.0 - t)), static_cast<int>(255 * (1.0 - t)), 255, 245);
+    HeatmapColorSettings settings;
+    if (m_controller) {
+        settings.minimum = m_controller->colorMin();
+        settings.maximum = m_controller->colorMax();
+        settings.matrixType = m_controller->matrixType();
+        settings.colorMap = m_controller->colorMap();
+        settings.customLowColor = m_controller->customLowColor();
+        settings.customHighColor = m_controller->customHighColor();
+        settings.missingValueColor = m_controller->missingValueColor();
+        settings.zeroTransparent = m_controller->zeroTransparent();
     }
-    const double t = std::clamp((static_cast<double>(value) - low) / (high - low), 0.0, 1.0);
-    return QColor(255, static_cast<int>(255.0 * (1.0 - t)), static_cast<int>(255.0 * (1.0 - t)), 245);
+    if (maximum > minimum) {
+        settings.minimum = minimum;
+        settings.maximum = maximum;
+    }
+    return heatmapColorForValue(value, settings);
 }
 
 RotatedHeatmapItem::RotatedHeatmapItem(QQuickItem* parent) : AnalysisItemBase(parent) {
     connect(this, &RotatedHeatmapItem::settingsChanged, this, &QQuickItem::update);
+    connect(this, &AnalysisItemBase::controllerChanged, this, &RotatedHeatmapItem::attachController);
 }
 qint64 RotatedHeatmapItem::maxDistance() const { return m_maxDistance; }
 void RotatedHeatmapItem::setMaxDistance(qint64 value) {
     value = std::max<qint64>(1, value);
     if (m_maxDistance == value) return;
-    m_maxDistance = value; emit settingsChanged();
+    m_maxDistance = value;
+    refreshEffectiveDistance();
+    emit settingsChanged();
 }
+bool RotatedHeatmapItem::autoDistance() const { return m_autoDistance; }
+void RotatedHeatmapItem::setAutoDistance(bool value) {
+    if (m_autoDistance == value) return;
+    m_autoDistance = value;
+    refreshEffectiveDistance();
+    emit settingsChanged();
+}
+qint64 RotatedHeatmapItem::effectiveMaxDistance() const { return m_effectiveDistance; }
 bool RotatedHeatmapItem::flipped() const { return m_flipped; }
 void RotatedHeatmapItem::setFlipped(bool value) {
     if (m_flipped == value) return;
     m_flipped = value; emit settingsChanged();
+}
+
+void RotatedHeatmapItem::attachController() {
+    if (m_controller) {
+        connect(m_controller, &HicDataController::viewChanged, this,
+                &RotatedHeatmapItem::refreshEffectiveDistance, Qt::UniqueConnection);
+    }
+    refreshEffectiveDistance();
+}
+
+void RotatedHeatmapItem::geometryChange(const QRectF& newGeometry, const QRectF& oldGeometry) {
+    AnalysisItemBase::geometryChange(newGeometry, oldGeometry);
+    if (newGeometry.size() != oldGeometry.size()) refreshEffectiveDistance();
+}
+
+void RotatedHeatmapItem::refreshEffectiveDistance() {
+    const qint64 next = computeEffectiveDistance();
+    if (next == m_effectiveDistance) return;
+    m_effectiveDistance = next;
+    emit effectiveMaxDistanceChanged();
+    update();
+}
+
+// Rotating the square map by 45 degrees puts the midpoint (binX + binY) / 2 on
+// the horizontal axis and half the separation |binY - binX| / 2 on the vertical
+// one, both at the same base pairs per pixel. So a strip `height` pixels tall
+// reaches a separation of 2 * height / (width / span), and the triangle keeps
+// its right angle at every zoom level. Pinning the vertical axis to a fixed
+// span instead stretched it by the ratio between that span and the view - at
+// the whole-chromosome default that was over a hundred times, which drew every
+// bin as a diamond taller than the strip and filled the pane with one colour.
+qint64 RotatedHeatmapItem::computeEffectiveDistance() const {
+    if (!m_autoDistance) return m_maxDistance;
+    if (!m_controller || width() <= 0.0 || height() <= 0.0) return m_maxDistance;
+    // Nothing is drawn without an intra-chromosomal view, and an unopened map
+    // would otherwise report a span of zero as if it were a real one.
+    if (m_controller->chrX().isEmpty() || m_controller->chrX() != m_controller->chrY())
+        return m_maxDistance;
+    const qint64 span = std::max<qint64>(1, std::max(m_controller->x1(), m_controller->y1()) -
+                                                std::min(m_controller->x0(), m_controller->y0()));
+    const qint64 resolution = std::max(1, m_controller->resolution());
+    const double raw = 2.0 * static_cast<double>(span) * height() / width();
+    const qint64 rounded = static_cast<qint64>(std::llround(raw / resolution)) * resolution;
+    return std::clamp<qint64>(rounded, 2 * resolution, std::max<qint64>(2 * resolution, span));
 }
 
 QSGNode* RotatedHeatmapItem::updatePaintNode(QSGNode* oldNode, UpdatePaintNodeData*) {
@@ -147,9 +209,10 @@ QSGNode* RotatedHeatmapItem::updatePaintNode(QSGNode* oldNode, UpdatePaintNodeDa
     }
     std::vector<contactRecord> records;
     int resolution = std::max(1, m_controller->resolution());
+    const qint64 distance = std::max<qint64>(1, m_effectiveDistance);
     try {
         m_controller->rotatedRecordsSnapshot(
-            records, resolution, m_maxDistance,
+            records, resolution, distance,
             std::clamp(static_cast<int>(std::ceil(width())), 1, 16384),
             std::clamp(static_cast<int>(std::ceil(height())), 1, 16384),
             kMaxRotatedRecords);
@@ -171,13 +234,19 @@ QSGNode* RotatedHeatmapItem::updatePaintNode(QSGNode* oldNode, UpdatePaintNodeDa
     }
     auto* vertices = geometry->vertexDataAsColoredPoint2D();
     int vi = 0;
-    const double halfWidth = std::max(0.5, width() * resolution / span * 0.7);
-    const double binHeight = std::max(0.5, height() * resolution / static_cast<double>(m_maxDistance));
+    // Bin centres form a diamond lattice: stepping to the next separation moves
+    // the midpoint by half a bin. Half-diagonals of half a bin across and a
+    // whole bin up therefore tile the strip exactly, with no overlap and no
+    // seams between neighbours. The one-pixel floor matters at chromosome-wide
+    // zoom, where a bin covers a fraction of a pixel and a diamond that small
+    // rasterises to nothing at all.
+    const double halfWidth = std::max(1.0, width() * resolution / span * 0.5);
+    const double binHeight = std::max(1.0, height() * resolution / static_cast<double>(distance));
     for (const contactRecord& record : records) {
         const double midpoint = (static_cast<double>(record.binX) + record.binY + resolution) * 0.5;
-        const double distance = std::abs(static_cast<double>(record.binY) - record.binX);
+        const double separation = std::abs(static_cast<double>(record.binY) - record.binX);
         const double cx = (midpoint - viewStart) / span * width();
-        double cy = std::clamp(distance / static_cast<double>(m_maxDistance), 0.0, 1.0) * height();
+        double cy = std::clamp(separation / static_cast<double>(distance), 0.0, 1.0) * height();
         if (m_flipped) cy = height() - cy;
         const double vertical = m_flipped ? -binHeight : binHeight;
         const QColor color = colorForValue(record.counts);

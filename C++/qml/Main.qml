@@ -1020,23 +1020,41 @@ ApplicationWindow {
             MenuItem { text: "Open Primary Hi-C..."; onTriggered: openDialog.open() }
             MenuItem { text: "Open Control Hi-C..."; onTriggered: controlDialog.open() }
             Menu {
+                id: recentMapsMenu
                 title: "Open Recent"
+                property var entries: activeController && activeController.recentMapCount > 0
+                                      ? activeController.recentMaps() : []
                 Repeater {
-                    model: activeController ? activeController.recentMaps() : []
+                    model: recentMapsMenu.entries
                     MenuItem {
                         text: modelData
                         onTriggered: activeController.openRecentMap(modelData)
                     }
                 }
+                MenuSeparator { visible: recentMapsMenu.entries.length > 0 }
+                MenuItem {
+                    text: "Clear Recent Files"
+                    enabled: recentMapsMenu.entries.length > 0
+                    onTriggered: activeController.clearRecentMaps()
+                }
             }
             Menu {
+                id: recentControlMapsMenu
                 title: "Open Recent as Control"
+                property var entries: activeController && activeController.recentControlMapCount > 0
+                                      ? activeController.recentControlMaps() : []
                 Repeater {
-                    model: activeController ? activeController.recentControlMaps() : []
+                    model: recentControlMapsMenu.entries
                     MenuItem {
                         text: modelData
                         onTriggered: activeController.openRecentControlMap(modelData)
                     }
+                }
+                MenuSeparator { visible: recentControlMapsMenu.entries.length > 0 }
+                MenuItem {
+                    text: "Clear Recent Control Files"
+                    enabled: recentControlMapsMenu.entries.length > 0
+                    onTriggered: activeController.clearRecentControlMaps()
                 }
             }
             MenuSeparator {}

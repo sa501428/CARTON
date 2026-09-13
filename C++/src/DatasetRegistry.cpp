@@ -537,6 +537,10 @@ void DatasetRegistry::notifyAnnotationChanged(const QString& id) {
     scheduleModelRefresh();
 }
 
+void DatasetRegistry::notifyRecentsChanged() {
+    emit recentsChanged();
+}
+
 QVariantList DatasetRegistry::resources(const QString& kind) const {
     QVariantList values;
     QMutexLocker locker(&m_mutex);

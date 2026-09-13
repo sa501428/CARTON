@@ -224,7 +224,27 @@ Rectangle {
                             onClicked: root.loadControlRequested()
                         }
                     }
-                    Label { text: "RECENT DATASETS"; color: Theme.textMuted; font.pixelSize: Theme.textXs; font.weight: Font.DemiBold }
+                    RowLayout {
+                        Layout.fillWidth: true
+                        Label { text: "RECENT DATASETS"; color: Theme.textMuted; font.pixelSize: Theme.textXs; font.weight: Font.DemiBold }
+                        Item { Layout.fillWidth: true }
+                        AppButton {
+                            text: "Clear"
+                            tonal: true
+                            implicitHeight: 22
+                            leftPadding: 8
+                            rightPadding: 8
+                            font.pixelSize: Theme.textXs
+                            enabled: root.controller && root.controller.recentMapCount > 0
+                            onClicked: root.controller.clearRecents()
+                        }
+                    }
+                    Label {
+                        visible: !root.controller || root.controller.recentMapCount === 0
+                        text: "No recent datasets."
+                        color: Theme.textMuted
+                        font.pixelSize: Theme.textXs
+                    }
                     Repeater {
                         model: root.controller ? root.controller.datasetsModel : null
                         ItemDelegate {

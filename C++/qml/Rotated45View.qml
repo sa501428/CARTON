@@ -50,14 +50,23 @@ Rectangle {
                     Layout.preferredWidth: 100
                 }
                 Label { text: "Maximum distance"; color: Theme.textSecondary; font.pixelSize: Theme.textXs }
+                AppCheckBox {
+                    text: "Auto"
+                    checked: root.tabSession ? root.tabSession.diagonalAutoDistance : true
+                    onToggled: if (root.tabSession) root.tabSession.diagonalAutoDistance = checked
+                }
                 AppTextField {
-                    text: root.tabSession ? String(root.tabSession.diagonalMaxDistance) : "2000000"
+                    // Automatic mode is driven by the strip's own aspect ratio, so
+                    // the field reports what is on screen instead of a stale entry.
+                    readOnly: root.tabSession ? root.tabSession.diagonalAutoDistance : false
+                    enabled: !readOnly
+                    text: root.tabSession ? String(root.tabSession.diagonalEffectiveDistance) : "2000000"
                     validator: DoubleValidator { bottom: 1000; top: 1000000000; decimals: 0 }
-                    onEditingFinished: if (root.tabSession) root.tabSession.diagonalMaxDistance = Number(text)
+                    onEditingFinished: if (root.tabSession && !readOnly) root.tabSession.diagonalMaxDistance = Number(text)
                     Layout.preferredWidth: 130
                 }
                 Label {
-                    text: root.tabSession ? root.formatBp(root.tabSession.diagonalMaxDistance) : ""
+                    text: root.tabSession ? root.formatBp(root.tabSession.diagonalEffectiveDistance) : ""
                     color: Theme.textMuted; font.pixelSize: Theme.textXs
                 }
                 Item { Layout.fillWidth: true }
@@ -136,10 +145,19 @@ Rectangle {
                                 border.color: Theme.borderStrong
                                 clip: true
                                 RotatedHeatmapItem {
+                                    id: diagonalItem
                                     anchors.fill: parent
                                     controller: pane.modelData.controller
+                                    autoDistance: root.tabSession ? root.tabSession.diagonalAutoDistance : true
                                     maxDistance: root.tabSession ? root.tabSession.diagonalMaxDistance : 2000000
                                     flipped: pane.modelData.flipped
+                                    onEffectiveMaxDistanceChanged: {
+                                        annotationCanvas.requestPaint()
+                                        // Panes are kept on one view, so the first
+                                        // one speaks for the tab.
+                                        if (root.tabSession && pane.modelData.index === 0)
+                                            root.tabSession.reportDiagonalDistance(effectiveMaxDistance)
+                                    }
                                 }
                                 Canvas {
                                     id: annotationCanvas
@@ -159,7 +177,7 @@ Rectangle {
                                         var start = Math.min(c.x0, c.y0)
                                         var end = Math.max(c.x1, c.y1)
                                         var span = Math.max(1, end - start)
-                                        var maximum = Math.max(1, root.tabSession.diagonalMaxDistance)
+                                        var maximum = Math.max(1, diagonalItem.effectiveMaxDistance)
                                         var annotations = c.visibleAnnotations()
                                         var seen = ({})
                                         for (var i = 0; i < annotations.length; ++i) {

@@ -36,6 +36,8 @@ class TabSession : public QObject {
     Q_PROPERTY(qint64 windowSize READ windowSize WRITE setWindowSize NOTIFY cellsChanged)
     Q_PROPERTY(int analysisPaneHeight READ analysisPaneHeight WRITE setAnalysisPaneHeight NOTIFY analysisSettingsChanged)
     Q_PROPERTY(qint64 diagonalMaxDistance READ diagonalMaxDistance WRITE setDiagonalMaxDistance NOTIFY analysisSettingsChanged)
+    Q_PROPERTY(bool diagonalAutoDistance READ diagonalAutoDistance WRITE setDiagonalAutoDistance NOTIFY analysisSettingsChanged)
+    Q_PROPERTY(qint64 diagonalEffectiveDistance READ diagonalEffectiveDistance NOTIFY analysisSettingsChanged)
     Q_PROPERTY(qint64 bullseyeCenterX READ bullseyeCenterX WRITE setBullseyeCenterX NOTIFY analysisSettingsChanged)
     Q_PROPERTY(qint64 bullseyeCenterY READ bullseyeCenterY WRITE setBullseyeCenterY NOTIFY analysisSettingsChanged)
     Q_PROPERTY(int bullseyeRadiusBins READ bullseyeRadiusBins WRITE setBullseyeRadiusBins NOTIFY analysisSettingsChanged)
@@ -75,6 +77,8 @@ public:
     qint64 windowSize() const;
     int analysisPaneHeight() const;
     qint64 diagonalMaxDistance() const;
+    bool diagonalAutoDistance() const;
+    qint64 diagonalEffectiveDistance() const;
     qint64 bullseyeCenterX() const;
     qint64 bullseyeCenterY() const;
     int bullseyeRadiusBins() const;
@@ -99,6 +103,7 @@ public:
     void setWindowSize(qint64 value);
     void setAnalysisPaneHeight(int value);
     void setDiagonalMaxDistance(qint64 value);
+    void setDiagonalAutoDistance(bool value);
     void setBullseyeCenterX(qint64 value);
     void setBullseyeCenterY(qint64 value);
     void setBullseyeRadiusBins(int value);
@@ -124,6 +129,10 @@ public:
     Q_INVOKABLE void loadAnnotations(const QUrl& url, const QString& scope = QString());
     Q_INVOKABLE void loadAnnotationResource(const QString& resourceId, const QString& scope = QString());
     Q_INVOKABLE void notifyViewportInteracted(int cellIndex);
+    // The 45-degree strip derives its own vertical reach from its aspect
+    // ratio, so it reports the value back here: the padding around each data
+    // request and the colour range both have to cover the same band.
+    Q_INVOKABLE void reportDiagonalDistance(qint64 value);
     Q_INVOKABLE void setMapFlipped(int mapIndex, bool flipped);
     Q_INVOKABLE void updateBullseyeFromFractions(int cellIndex, double xFraction, double yFraction);
     Q_INVOKABLE QString createVirtual4CTrack(int cellIndex, const QString& name = QString(),
@@ -199,6 +208,9 @@ private:
     void propagateColor(HicDataController* source);
     bool isMultiSourceType() const;
     void startRegionLoad(const RegionLoadRequest& request);
+    void applyDiagonalSettings(HicDataController* controller);
+    void applyDiagonalSettings();
+    void syncNavigationToReference();
 
     Type m_type = Type::Single;
     QString m_title = QStringLiteral("Map");
@@ -223,6 +235,8 @@ private:
     QHash<QString, QVariantMap> m_pendingCellStates;
     int m_analysisPaneHeight = 260;
     qint64 m_diagonalMaxDistance = 2000000;
+    bool m_diagonalAutoDistance = true;
+    qint64 m_diagonalEffectiveDistance = 2000000;
     qint64 m_bullseyeCenterX = 0;
     qint64 m_bullseyeCenterY = 0;
     int m_bullseyeRadiusBins = 12;

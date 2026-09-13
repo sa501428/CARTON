@@ -135,6 +135,10 @@ HicDataController::HicDataController(QObject* parent)
             if (layer.data && layer.data->custom) m_registry->notifyAnnotationChanged(layer.resourceId);
     });
     connect(this, &HicDataController::viewHistoryChanged, this, &HicDataController::refreshBookmarksModel);
+    connect(m_registry, &DatasetRegistry::recentsChanged, this, [this]() {
+        refreshDatasetsModel();
+        emit recentsChanged();
+    });
     connect(m_registry, &DatasetRegistry::cacheStatsChanged, this, [this]() {
         m_cacheLimitMB = m_registry->cacheLimitMB();
         emit cacheStatsChanged();
@@ -756,6 +760,27 @@ QVariantList HicDataController::recentMaps() const {
 
 QVariantList HicDataController::recentControlMaps() const {
     return recentList(QStringLiteral("recentControlMaps"));
+}
+
+int HicDataController::recentMapCount() const {
+    return recentMaps().size();
+}
+
+int HicDataController::recentControlMapCount() const {
+    return recentControlMaps().size();
+}
+
+void HicDataController::clearRecentMaps() {
+    clearRecent(QStringLiteral("recentMaps"));
+}
+
+void HicDataController::clearRecentControlMaps() {
+    clearRecent(QStringLiteral("recentControlMaps"));
+}
+
+void HicDataController::clearRecents() {
+    clearRecentMaps();
+    clearRecentControlMaps();
 }
 
 QVariantList HicDataController::savedLocations() const {
@@ -2645,6 +2670,16 @@ void HicDataController::setAnalysisPaddingBins(int value) {
     scheduleRequest();
 }
 
+void HicDataController::setAutoColorDistanceLimit(qint64 value) {
+    value = std::max<qint64>(0, value);
+    if (m_autoColorDistanceLimit == value) return;
+    m_autoColorDistanceLimit = value;
+    // Snapshotting the loaded records is not cheap, and a pinned range would
+    // discard the result anyway.
+    if (!m_colorMaxAuto) return;
+    updateAutoColorScale(recordsSnapshot(), controlRecordsSnapshot());
+}
+
 void HicDataController::setTrackName(int index, const QString& name) {
     if (index < 0 || index >= static_cast<int>(m_tracks.size())) return;
     m_tracks[static_cast<std::size_t>(index)].name = name;
@@ -3536,7 +3571,15 @@ void HicDataController::addRecent(const QString& group, const QString& path) {
     values.push_front(path);
     while (values.size() > kRecentLimit) values.removeLast();
     settings.setValue(settingsKey() + "/" + group, values);
-    if (group == QStringLiteral("recentMaps")) refreshDatasetsModel();
+    m_registry->notifyRecentsChanged();
+}
+
+void HicDataController::clearRecent(const QString& group) {
+    QSettings settings;
+    const QString key = settingsKey() + "/" + group;
+    if (settings.value(key).toStringList().isEmpty()) return;
+    settings.remove(key);
+    m_registry->notifyRecentsChanged();
 }
 
 void HicDataController::refreshDatasetsModel() {
@@ -3692,12 +3735,19 @@ void HicDataController::updateAutoColorScale(const std::vector<contactRecord>& r
         const HeatmapScaleKind kind = heatmapScaleKind(m_matrixType);
         std::vector<double> sampled;
         sampled.reserve(((records.size() + controlRecords.size()) / 10) + 1);
-        auto sampleRecords = [&sampled, kind](const std::vector<contactRecord>& source) {
-            for (std::size_t i = 0; i < source.size(); i += 10) {
+        // An off-diagonal view has no meaningful distance from the diagonal, so
+        // the band restriction only applies to intra-chromosomal matrices.
+        const qint64 distanceLimit = m_chrX == m_chrY ? m_autoColorDistanceLimit : 0;
+        auto sampleRecords = [&sampled, kind, distanceLimit](const std::vector<contactRecord>& source,
+                                                             std::size_t stride) {
+            for (std::size_t i = 0; i < source.size(); i += stride) {
                 const contactRecord& rec = source[i];
                 // The diagonal dominates every count distribution, so it is
                 // excluded from the quantile as it always was.
                 if (rec.binX == rec.binY || !std::isfinite(rec.counts)) continue;
+                if (distanceLimit > 0 &&
+                    std::abs(static_cast<qint64>(rec.binY) - static_cast<qint64>(rec.binX)) > distanceLimit)
+                    continue;
                 const double value = static_cast<double>(rec.counts);
                 switch (kind) {
                     case HeatmapScaleKind::Ratio:
@@ -3714,8 +3764,14 @@ void HicDataController::updateAutoColorScale(const std::vector<contactRecord>& r
                 }
             }
         };
-        sampleRecords(records);
-        sampleRecords(controlRecords);
+        sampleRecords(records, 10);
+        sampleRecords(controlRecords, 10);
+        // A narrow band holds few enough records that every tenth one can miss
+        // the band entirely, which would collapse the range onto its floor.
+        if (sampled.empty() && distanceLimit > 0) {
+            sampleRecords(records, 1);
+            sampleRecords(controlRecords, 1);
+        }
 
         double extent = 0.0;
         if (!sampled.empty()) {

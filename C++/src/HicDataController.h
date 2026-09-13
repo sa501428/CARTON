@@ -77,6 +77,8 @@ class HicDataController : public QObject {
     Q_PROPERTY(QColor missingValueColor READ missingValueColor WRITE setMissingValueColor NOTIFY colorMapChanged)
     Q_PROPERTY(bool zeroTransparent READ zeroTransparent WRITE setZeroTransparent NOTIFY colorMapChanged)
     Q_PROPERTY(bool minimapEnabled READ minimapEnabled WRITE setMinimapEnabled NOTIFY minimapChanged)
+    Q_PROPERTY(int recentMapCount READ recentMapCount NOTIFY recentsChanged)
+    Q_PROPERTY(int recentControlMapCount READ recentControlMapCount NOTIFY recentsChanged)
     Q_PROPERTY(QAbstractItemModel* datasetsModel READ datasetsModel CONSTANT)
     Q_PROPERTY(QAbstractItemModel* bookmarksModel READ bookmarksModel CONSTANT)
     Q_PROPERTY(QAbstractItemModel* tracksModel READ tracksModel CONSTANT)
@@ -140,6 +142,8 @@ public:
     QColor missingValueColor() const;
     bool zeroTransparent() const;
     bool minimapEnabled() const;
+    int recentMapCount() const;
+    int recentControlMapCount() const;
     QAbstractItemModel* datasetsModel() const;
     QAbstractItemModel* bookmarksModel() const;
     QAbstractItemModel* tracksModel() const;
@@ -164,6 +168,9 @@ public:
     Q_INVOKABLE void clearAnnotations();
     Q_INVOKABLE QVariantList recentMaps() const;
     Q_INVOKABLE QVariantList recentControlMaps() const;
+    Q_INVOKABLE void clearRecentMaps();
+    Q_INVOKABLE void clearRecentControlMaps();
+    Q_INVOKABLE void clearRecents();
     Q_INVOKABLE QVariantList savedLocations() const;
     Q_INVOKABLE QVariantList savedStates() const;
     Q_INVOKABLE QVariantList chromosomeNames() const;
@@ -289,6 +296,11 @@ public:
     void setMinimapEnabled(bool value);
     void setWorkspaceSearch(const QString& value);
     Q_INVOKABLE void setAnalysisPaddingBins(int value);
+    // Restricts the automatic colour range to bins within `value` bp of the
+    // diagonal (0 keeps the whole loaded region). The 45-degree strip only
+    // draws that band, and it sits far above the 95th percentile of a whole
+    // chromosome, so a range sampled from everything saturates every pixel.
+    void setAutoColorDistanceLimit(qint64 value);
 
     std::vector<contactRecord> recordsSnapshot() const;
     std::vector<contactRecord> controlRecordsSnapshot() const;
@@ -325,6 +337,7 @@ signals:
     void cacheStatsChanged();
     void minimapChanged();
     void workspaceSearchChanged();
+    void recentsChanged();
     void similarityCalculationWarning(const QString& matrixType, const QString& label,
                                       int resolution, int visibleBins);
 
@@ -400,6 +413,7 @@ private:
                                                 const std::vector<contactRecord>& control,
                                                 const QString& matrixType) const;
     void addRecent(const QString& group, const QString& path);
+    void clearRecent(const QString& group);
     QVariantList recentList(const QString& group) const;
     QVariantMap currentViewState(const QString& name = QString()) const;
     bool applyViewState(const QVariantMap& state);
@@ -592,6 +606,7 @@ private:
     bool m_interactionActive = false;
     double m_viewportAspectRatio = 1.0;
     int m_analysisPaddingBins = 0;
+    qint64 m_autoColorDistanceLimit = 0;
     QString m_approvedLocalSimilarityMode;
     int m_approvedLocalSimilarityResolution = 0;
     int m_similarityPaddingBins = 64;

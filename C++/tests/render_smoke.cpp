@@ -12,6 +12,8 @@
 #include <QThread>
 #include <QUrl>
 
+#include <algorithm>
+#include <cmath>
 #include <functional>
 
 #include "AnalysisItems.h"
@@ -117,6 +119,76 @@ int main(int argc, char** argv) {
                  "45-degree renderer loads and paints a real Hi-C strip")) {
         return 1;
     }
+
+    delete rotatedItem;
+
+    // The strip used to fill its whole pane with one saturated colour at the
+    // view a freshly opened map lands on. The vertical axis was pinned to a
+    // fixed 2 Mb while the horizontal one spanned a chromosome, so every bin
+    // became a diamond many times taller than the pane. Rotating a square map
+    // by 45 degrees puts the midpoint on one axis and half the separation on
+    // the other at the same base pairs per pixel, so the reach a strip can show
+    // follows from its aspect ratio alone. The software renderer used here
+    // skips custom geometry nodes, so check that reach rather than the pixels.
+    HicDataController defaultController;
+    auto* defaultItem = new RotatedHeatmapItem(window.contentItem());
+    defaultItem->setParentItem(window.contentItem());
+    defaultItem->setWidth(1200);
+    defaultItem->setHeight(200);
+    // Mirrors what TabSession applies for a 45-degree tab.
+    QObject::connect(defaultItem, &RotatedHeatmapItem::effectiveMaxDistanceChanged,
+                     &application, [&defaultController, defaultItem]() {
+        const qint64 distance = defaultItem->effectiveMaxDistance();
+        const qint64 resolution = std::max(1, defaultController.resolution());
+        defaultController.setAnalysisPaddingBins(
+            static_cast<int>(std::clamp<qint64>((distance / 2 + resolution - 1) / resolution + 2, 1, 2000)));
+        defaultController.setAutoColorDistanceLimit(distance);
+    });
+    // This map only carries chromosome 22, so stand in for the whole-chromosome
+    // view a fresh open lands on. The resolution is left to adapt to the span,
+    // exactly as resetView() would pick it.
+    QObject::connect(&defaultController, &HicDataController::metadataChanged,
+                     &application, [&defaultController]() {
+        defaultController.setViewRegion(QStringLiteral("22"), 0, 51304566,
+                                        QStringLiteral("22"), 0, 51304566);
+    });
+    defaultItem->setController(&defaultController);
+    const int frameBeforeDefaultLoad = renderedFrames;
+    defaultController.openFile(QUrl::fromLocalFile(QStringLiteral(CARTON_TEST_HIC_PATH)));
+    if (!require(spinUntil(application, [&]() {
+                     return defaultController.recordCount() > 0 &&
+                            renderedFrames > frameBeforeDefaultLoad;
+                 }, 10000),
+                 "45-degree renderer paints the view a freshly opened map lands on")) {
+        return 1;
+    }
+
+    auto reachMatchesAspect = [defaultItem, &defaultController](const char* message) {
+        const qint64 span = std::max(defaultController.x1(), defaultController.y1()) -
+                            std::min(defaultController.x0(), defaultController.y0());
+        const double expected = 2.0 * static_cast<double>(span) *
+                                defaultItem->height() / defaultItem->width();
+        const double slack = std::max(1.0, static_cast<double>(defaultController.resolution()));
+        return require(std::abs(static_cast<double>(defaultItem->effectiveMaxDistance()) - expected) <= slack,
+                       message);
+    };
+    if (!reachMatchesAspect("the automatic vertical reach follows the strip's aspect ratio")) return 1;
+
+    const qint64 wideReach = defaultItem->effectiveMaxDistance();
+    defaultController.setViewRegion(QStringLiteral("22"), 20000000, 22000000,
+                                    QStringLiteral("22"), 20000000, 22000000);
+    if (!reachMatchesAspect("zooming in shortens the vertical reach with the view")) return 1;
+    if (!require(defaultItem->effectiveMaxDistance() < wideReach / 4,
+                 "a twenty-fold zoom is not drawn at the same separation as the whole chromosome")) {
+        return 1;
+    }
+
+    defaultItem->setAutoDistance(false);
+    defaultItem->setMaxDistance(500000);
+    if (!require(defaultItem->effectiveMaxDistance() == 500000,
+                 "an explicit maximum distance overrides the aspect ratio")) return 1;
+
+    delete defaultItem;
 
     // The track painters read trackRenderBatches from QML, so the parallel
     // numeric arrays have to survive the C++ to JavaScript boundary as

@@ -28,23 +28,39 @@ protected:
 class RotatedHeatmapItem : public AnalysisItemBase {
     Q_OBJECT
     Q_PROPERTY(qint64 maxDistance READ maxDistance WRITE setMaxDistance NOTIFY settingsChanged)
+    Q_PROPERTY(bool autoDistance READ autoDistance WRITE setAutoDistance NOTIFY settingsChanged)
+    // What the strip is actually drawing, which is the explicit maxDistance
+    // unless autoDistance is on. Read it for anything that has to line up with
+    // the pixels: annotation overlays, axis labels, the data request padding.
+    Q_PROPERTY(qint64 effectiveMaxDistance READ effectiveMaxDistance NOTIFY effectiveMaxDistanceChanged)
     Q_PROPERTY(bool flipped READ flipped WRITE setFlipped NOTIFY settingsChanged)
 
 public:
     explicit RotatedHeatmapItem(QQuickItem* parent = nullptr);
     qint64 maxDistance() const;
     void setMaxDistance(qint64 value);
+    bool autoDistance() const;
+    void setAutoDistance(bool value);
+    qint64 effectiveMaxDistance() const;
     bool flipped() const;
     void setFlipped(bool value);
 
 signals:
     void settingsChanged();
+    void effectiveMaxDistanceChanged();
 
 protected:
     QSGNode* updatePaintNode(QSGNode* oldNode, UpdatePaintNodeData*) override;
+    void geometryChange(const QRectF& newGeometry, const QRectF& oldGeometry) override;
 
 private:
+    void attachController();
+    void refreshEffectiveDistance();
+    qint64 computeEffectiveDistance() const;
+
     qint64 m_maxDistance = 2000000;
+    qint64 m_effectiveDistance = 2000000;
+    bool m_autoDistance = true;
     bool m_flipped = false;
 };
 

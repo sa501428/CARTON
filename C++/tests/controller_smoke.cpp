@@ -482,6 +482,19 @@ int main(int argc, char** argv) {
                                         !linkedTarget.resolutions().isEmpty() &&
                                         !linkedSource.busy() && !linkedTarget.busy(); }, 15000),
                  "load Hi-C metadata for navigation tests")) return 1;
+
+    if (!require(linkedSource.recentMapCount() > 0 && linkedTarget.recentMapCount() > 0 &&
+                 linkedTarget.datasetsModel()->rowCount() > 0,
+                 "opening a map records it in every controller's recent list")) return 1;
+    linkedSource.openControlFile(QUrl::fromLocalFile(testHic));
+    if (!require(waitFor([&]() { return linkedSource.recentControlMapCount() > 0; }),
+                 "opening a control map records a recent control entry")) return 1;
+    linkedSource.clearRecents();
+    if (!require(linkedSource.recentMapCount() == 0 && linkedSource.recentControlMapCount() == 0 &&
+                 linkedTarget.recentMapCount() == 0 && linkedTarget.datasetsModel()->rowCount() == 0,
+                 "clearing recents empties the lists in every controller")) return 1;
+    if (!require(waitFor([&]() { return !linkedSource.busy() && !linkedTarget.busy(); }, 15000),
+                 "control map load settles after clearing recents")) return 1;
     QString linkedChromosome = linkedSource.chrX();
     for (const QVariant& chromosome : linkedSource.chromosomeNames()) {
         if (chromosome.toString().contains(QStringLiteral("22"))) {
@@ -509,6 +522,29 @@ int main(int argc, char** argv) {
     linkedSource.goTo(linkedChromosome + QStringLiteral(":999999999"), QString());
     if (!require(linkedSource.x1() <= linkedSource.xChromosomeLength() && linkedSource.x1() > linkedSource.x0(),
                  "locus parsing clamps positions beyond chromosome end safely")) return 1;
+
+    // A 45-degree strip only draws bins near the diagonal, and those sit well
+    // above the 95th percentile of a whole chromosome. Ranging over everything
+    // left every one of them clamped to the top of the ramp, which is what made
+    // the strip a flat block of colour.
+    HicDataController bandController;
+    bandController.openFile(QUrl::fromLocalFile(testHic));
+    if (!require(waitFor([&]() { return !bandController.resolutions().isEmpty(); }, 15000),
+                 "load Hi-C metadata for the near-diagonal color range")) return 1;
+    bandController.setViewRegion(linkedChromosome, 0, 51304566, linkedChromosome, 0, 51304566);
+    if (!require(waitFor([&]() { return bandController.recordCount() > 0 && !bandController.busy(); }, 15000),
+                 "load a whole chromosome for the near-diagonal color range")) return 1;
+    const double wholeMatrixMax = bandController.colorMax();
+    bandController.setAutoColorDistanceLimit(20LL * bandController.resolution());
+    const double nearDiagonalMax = bandController.colorMax();
+    if (!require(wholeMatrixMax > 0.0 && nearDiagonalMax > wholeMatrixMax,
+                 qPrintable(QStringLiteral("the near-diagonal band gets its own color range (%1 -> %2)")
+                                .arg(wholeMatrixMax).arg(nearDiagonalMax)))) {
+        return 1;
+    }
+    bandController.setAutoColorDistanceLimit(0);
+    if (!require(qFuzzyCompare(bandController.colorMax(), wholeMatrixMax),
+                 "clearing the distance limit restores the whole-matrix range")) return 1;
 
     const QString delayedHic = temporary.filePath(QStringLiteral("delayed.hic"));
     const PooledHicMetadataResult failedMetadata = DatasetRegistry::instance()->loadHicMetadata(delayedHic);
