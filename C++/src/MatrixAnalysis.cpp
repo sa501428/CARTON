@@ -185,6 +185,9 @@ DenseMatrix makeDense(const std::vector<contactRecord>& records, int resolution,
                          0.0f);
     matrix.present.assign(matrix.values.size(), false);
     auto assign = [&](qint64 genomeX, qint64 genomeY, float value) {
+        // Signed division truncates toward zero: a padded coordinate just
+        // below the origin would otherwise be assigned to the first bin.
+        if (genomeX < matrix.x0 || genomeY < matrix.y0) return;
         const int x = static_cast<int>((genomeX - matrix.x0) / matrix.resolution);
         const int y = static_cast<int>((genomeY - matrix.y0) / matrix.resolution);
         if (x < 0 || x >= matrix.width || y < 0 || y >= matrix.height) return;
@@ -472,6 +475,37 @@ std::vector<contactRecord> similarity(const std::vector<contactRecord>& records,
         record.binY = static_cast<int32_t>(contextStart + static_cast<qint64>(b) * resolution);
         record.counts = static_cast<float>(value);
         output.push_back(record);
+    }
+    return output;
+}
+
+std::vector<contactRecord> compareRecords(const std::vector<contactRecord>& primary,
+                                           const std::vector<contactRecord>& control,
+                                           const QString& operation) {
+    auto keyFor = [](int32_t x, int32_t y) {
+        return (static_cast<quint64>(static_cast<quint32>(x)) << 32U) | static_cast<quint32>(y);
+    };
+    std::unordered_map<quint64, float> controlByBin;
+    controlByBin.reserve(control.size());
+    for (const auto& record : control) controlByBin[keyFor(record.binX, record.binY)] = record.counts;
+    const bool includeControlOnly = operation == QStringLiteral("diff") || operation == QStringLiteral("logratio");
+    std::vector<contactRecord> output;
+    output.reserve(primary.size() + (includeControlOnly ? control.size() : 0));
+    auto append = [&](int32_t x, int32_t y, double p, double c) {
+        double value;
+        if (operation == QStringLiteral("diff")) value = p - c;
+        else if (operation == QStringLiteral("logratio")) value = std::log2((p + 1.0) / (c + 1.0));
+        else if (operation == QStringLiteral("ratio1")) value = p / (c + 1.0);
+        else value = c == 0.0 ? 0.0 : p / c;
+        output.push_back({x, y, static_cast<float>(value)});
+    };
+    for (const auto& record : primary) {
+        const auto found = controlByBin.find(keyFor(record.binX, record.binY));
+        append(record.binX, record.binY, record.counts, found == controlByBin.end() ? 0.0 : found->second);
+        if (found != controlByBin.end()) controlByBin.erase(found);
+    }
+    if (includeControlOnly) for (const auto& [key, value] : controlByBin) {
+        append(static_cast<int32_t>(key >> 32U), static_cast<int32_t>(key & 0xffffffffU), 0.0, value);
     }
     return output;
 }

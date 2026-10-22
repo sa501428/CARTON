@@ -129,6 +129,7 @@ add_library(carton_core STATIC
     src/GenomicTrackReader.h
     src/HicTileCache.h
     src/HeatmapColorMapping.h
+    src/HeatmapPainting.h
     src/WorkspaceListModel.cpp
     src/WorkspaceListModel.h
     src/MatrixAnalysis.cpp
@@ -212,6 +213,19 @@ if(BUILD_TESTING)
     )
     add_test(NAME carton_core_smoke COMMAND carton_core_smoke)
     set_tests_properties(carton_core_smoke PROPERTIES ENVIRONMENT "QT_QPA_PLATFORM=offscreen")
+
+    add_executable(carton_regressions tests/regressions.cpp)
+    target_link_libraries(carton_regressions PRIVATE carton_core Qt6::Gui)
+    target_compile_definitions(carton_regressions PRIVATE
+        CARTON_TEST_TRANS_PATH="${CMAKE_CURRENT_SOURCE_DIR}/tests/data/trans-v10.hic"
+        CARTON_TEST_ALL_LAST_PATH="${CMAKE_CURRENT_SOURCE_DIR}/tests/data/all-last-v10.hic"
+        CARTON_TEST_HIC_PATH="${CMAKE_CURRENT_SOURCE_DIR}/../igv-main/test/data/hic/test_chr22.hic"
+    )
+    add_test(NAME carton_regressions COMMAND carton_regressions)
+    set_tests_properties(carton_regressions PROPERTIES
+        ENVIRONMENT "QT_QPA_PLATFORM=offscreen"
+        TIMEOUT 60
+    )
 
     add_executable(carton_render_smoke
         tests/render_smoke.cpp

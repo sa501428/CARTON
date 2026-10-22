@@ -286,7 +286,8 @@ QSGNode* BullseyeItem::updatePaintNode(QSGNode* oldNode, UpdatePaintNodeData*) {
                                                   std::max(1, m_controller->resolution()),
                                                   m_centerX, m_centerY, m_radiusBins,
                                                   m_controller->chrX() == m_controller->chrY());
-    geometry->allocate(static_cast<int>(pixels.size() * 6));
+    constexpr int centerSegments = 16;
+    geometry->allocate(static_cast<int>(pixels.size() * 6) + centerSegments * 3);
     auto* vertices = geometry->vertexDataAsColoredPoint2D();
     int vi = 0;
     const double cx = width() * 0.5;
@@ -299,6 +300,16 @@ QSGNode* BullseyeItem::updatePaintNode(QSGNode* oldNode, UpdatePaintNodeData*) {
         const double a0 = pixel.angle - halfAngle;
         const double a1 = pixel.angle + halfAngle;
         const QColor color = pixel.present ? colorForValue(pixel.value) : QColor("#eef0f3");
+        if (pixel.radius < 0.5) {
+            for (int segment = 0; segment < centerSegments; ++segment) {
+                const double start = 2.0 * kPi * segment / centerSegments;
+                const double end = 2.0 * kPi * (segment + 1) / centerSegments;
+                setVertex(vertices[vi++], cx, cy, color);
+                setVertex(vertices[vi++], cx + std::cos(start) * outer, cy + std::sin(start) * outer, color);
+                setVertex(vertices[vi++], cx + std::cos(end) * outer, cy + std::sin(end) * outer, color);
+            }
+            continue;
+        }
         const QPointF p0(cx + std::cos(a0) * inner, cy + std::sin(a0) * inner);
         const QPointF p1(cx + std::cos(a0) * outer, cy + std::sin(a0) * outer);
         const QPointF p2(cx + std::cos(a1) * outer, cy + std::sin(a1) * outer);

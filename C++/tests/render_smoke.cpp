@@ -9,6 +9,7 @@
 #include <QTemporaryDir>
 #include <QQuickWindow>
 #include <QSGRendererInterface>
+#include <QSGGeometryNode>
 #include <QThread>
 #include <QUrl>
 
@@ -20,6 +21,10 @@
 #include "HicDataController.h"
 
 namespace {
+class InspectableBullseye : public BullseyeItem {
+public:
+    QSGNode* buildNode() { return updatePaintNode(nullptr, nullptr); }
+};
 bool spinUntil(QGuiApplication& application, const std::function<bool()>& condition,
                int timeoutMilliseconds = 5000) {
     QElapsedTimer timer;
@@ -242,6 +247,26 @@ int main(int argc, char** argv) {
                                 .arg(outcome.toString())))) {
         return 1;
     }
+
+    // A full 2π annular wedge collapses to a line when represented by just
+    // its endpoints. The center glyph needs a real disk with nonzero area.
+    InspectableBullseye bullseye;
+    bullseye.setController(&trackController);
+    bullseye.setWidth(100);
+    bullseye.setHeight(100);
+    bullseye.setRadiusBins(1);
+    auto* bullseyeNode = static_cast<QSGGeometryNode*>(bullseye.buildNode());
+    const auto* vertices = bullseyeNode->geometry()->vertexDataAsColoredPoint2D();
+    double centerArea = 0.0;
+    for (int i = 0; i + 2 < bullseyeNode->geometry()->vertexCount(); i += 3) {
+        const auto& a = vertices[i];
+        const auto& b = vertices[i + 1];
+        const auto& c = vertices[i + 2];
+        if (std::abs(a.x - 50.0f) < 0.001f && std::abs(a.y - 50.0f) < 0.001f)
+            centerArea += std::abs((b.x - a.x) * (c.y - a.y) - (b.y - a.y) * (c.x - a.x)) / 2.0;
+    }
+    delete bullseyeNode;
+    if (!require(centerArea > 1.0, "bullseye center glyph has visible area")) return 1;
 
     return 0;
 }

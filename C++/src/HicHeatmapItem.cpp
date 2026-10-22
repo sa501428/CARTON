@@ -119,7 +119,7 @@ QSGNode* HicHeatmapItem::updatePaintNode(QSGNode* oldNode, UpdatePaintNodeData*)
         m_controller->renderRecordsSnapshot(records, controlRecords, dataResolution, kMaxRenderedRecords);
     }
     const QString matrixType = m_controller->matrixType();
-    const bool isVsMode = (matrixType == QStringLiteral("vs") || matrixType.endsWith(QStringLiteral("vs"))) && !controlRecords.empty();
+    const bool isVsMode = !m_overviewMode && matrixType.endsWith(QStringLiteral("vs"));
     if (records.empty() && controlRecords.empty()) {
         root->heatmap->geometry()->setVertexCount(0);
         root->heatmap->markDirty(QSGNode::DirtyGeometry);

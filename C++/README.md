@@ -94,6 +94,11 @@ The desktop app supports:
 20. BED/BEDPE-derived pairwise N × N region matrices, with primary/control placement around the diagonal and either split-VS or blank diagonal cells
 21. Versioned workspace import/export for all tab types and pooled resource references
 
+When a map opens, CARTON searches the full chromosome table for a stored `All`
+chromosome, ignoring case and its position in the table. If none exists, it
+opens the first chromosome. Scaled v10 `All` views use the stored coordinate
+range and matching chromosome boundaries.
+
 The default tab is the single-map layout and retains the complete primary-map plus optional-control workflow. Multi-map tabs default to cell-scoped layers; the other layouts expose the scope selector appropriate to their shared axes. Editing a reused annotation layer uses copy-on-write, so the edited tab or cell receives a unique custom resource while the original pooled annotation remains unchanged.
 
 For development and layout smoke testing, the application accepts `--tab-type=single|multi-map|multi-region|map-region|pairwise|rotated-45|bullseye|virtual-4c|processing`, `--regions=<path>`, and `--regions-format=bed|bedpe|bedpe-as-bed`.

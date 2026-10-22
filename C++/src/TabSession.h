@@ -200,6 +200,7 @@ private:
     void applyCellRegion(CellSpec& cell);
     void applyCellMode(CellSpec& cell);
     void openMapForCell(CellSpec& cell);
+    void restorePendingCellState(CellSpec& cell, bool allowMissingControl = false);
     void updateCellModel();
     int mapIndexForCell(int cellIndex) const;
     QList<HicDataController*> targetControllers(const QString& requestedScope) const;

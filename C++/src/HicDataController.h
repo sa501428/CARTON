@@ -326,6 +326,7 @@ signals:
     void filePathChanged();
     void controlFilePathChanged();
     void controlReadyChanged();
+    void controlLoadFinished();
     void metadataChanged();
     void statusChanged();
     void busyChanged();
@@ -404,7 +405,6 @@ private:
     void pushViewHistory();
     void restoreView(const QVariantMap& view);
     bool applyViewportAspectRatio();
-    void orientTileForRequestedAxes(HicTile& tile) const;
     HicTileKey paddedRequestKey(const HicTileKey& visibleKey) const;
     bool loadedKeyCoversCurrentView(const HicTileKey& visibleKey) const;
     void clearLoadedRegion();
@@ -413,9 +413,7 @@ private:
                                                           const std::vector<contactRecord>& control) const;
     std::vector<contactRecord> transformSimilarityLike(const std::vector<contactRecord>& records,
                                                        const QString& matrixType) const;
-    std::vector<contactRecord> mergeRecordPairs(const std::vector<contactRecord>& primary,
-                                                const std::vector<contactRecord>& control,
-                                                const QString& matrixType) const;
+
     void addRecent(const QString& group, const QString& path);
     void clearRecent(const QString& group);
     QVariantList recentList(const QString& group) const;
@@ -512,6 +510,8 @@ private:
     const QVector<Annotation2D>& layerAnnotations(const AnnotationLayer& layer) const;
     void appendTrackLayer(const std::shared_ptr<const PooledTrackData>& data);
     void appendAnnotationLayer(const std::shared_ptr<PooledAnnotationData>& data);
+    void discardPendingTrackLoads();
+    void discardPendingAnnotationLoads();
     void applyTrackRestoreState(int index, const QVariantMap& state);
     void applyAnnotationRestoreState(int index, const QVariantMap& state);
 
@@ -593,13 +593,19 @@ private:
     QQueue<QVariantMap> m_pendingTrackStates;
     QVariantMap m_activeTrackState;
     bool m_trackLoadActive = false;
+    quint64 m_trackLoadGeneration = 0;
+    quint64 m_activeTrackGeneration = 0;
     QQueue<QString> m_pendingAnnotationPaths;
     QQueue<QVariantMap> m_pendingAnnotationStates;
     QVariantMap m_activeAnnotationState;
     bool m_annotationLoadActive = false;
+    quint64 m_annotationLoadGeneration = 0;
+    quint64 m_activeAnnotationGeneration = 0;
     QQueue<QString> m_pendingCytobandPaths;
     QString m_activeCytobandPath;
     bool m_cytobandLoadActive = false;
+    quint64 m_cytobandLoadGeneration = 0;
+    quint64 m_activeCytobandGeneration = 0;
     QVariantMap m_pendingSavedState;
     bool m_deferRequests = false;
     quint64 m_requestSerial = 0;

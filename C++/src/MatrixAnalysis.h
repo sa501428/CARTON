@@ -75,6 +75,12 @@ std::vector<contactRecord> similarity(const std::vector<contactRecord>& records,
                                       qint64 outputY0, qint64 outputY1,
                                       int maximumBins = 1800);
 
+// Compare sparse maps, treating omitted contacts as zero. Undefined plain
+// ratios with a zero denominator are represented as zero (missing data).
+std::vector<contactRecord> compareRecords(const std::vector<contactRecord>& primary,
+                                           const std::vector<contactRecord>& control,
+                                           const QString& operation);
+
 DenseMatrix process(const DenseMatrix& input, const QString& operation,
                     double parameter = 1.0, double threshold = 0.0);
 

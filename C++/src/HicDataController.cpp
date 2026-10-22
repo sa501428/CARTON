@@ -1,6 +1,7 @@
 #include "HicDataController.h"
 #include "GenomicTrackReader.h"
 #include "HeatmapColorMapping.h"
+#include "HeatmapPainting.h"
 #include "MatrixAnalysis.h"
 #include "WorkspaceListModel.h"
 
@@ -36,12 +37,6 @@ constexpr int kRecentLimit = 10;
 constexpr int kSimilarityPromptResolution = 10000;
 constexpr int kMaxSimilarityBins = 1800;
 
-quint64 recordKey(qint64 x, qint64 y) {
-    const quint64 hx = static_cast<quint64>(std::hash<qint64>{}(x));
-    const quint64 hy = static_cast<quint64>(std::hash<qint64>{}(y));
-    return hx ^ (hy + 0x9e3779b97f4a7c15ULL + (hx << 6U) + (hx >> 2U));
-}
-
 // Track/annotation/cytoband files almost always use UCSC-style "chr1" names,
 // while .hic files (especially those produced by older Juicer pipelines) often
 // store bare names like "1". Without this, every 1D overlay silently renders
@@ -57,47 +52,6 @@ QString chromosomeKey(const QString& name) {
 bool chrNamesEqual(const QString& a, const QString& b) {
     if (a.compare(b, Qt::CaseInsensitive) == 0) return true;
     return stripChrPrefix(a).compare(stripChrPrefix(b), Qt::CaseInsensitive) == 0;
-}
-
-void paintHeatmapRecords(QPainter& painter, const QRect& plot,
-                         const std::vector<contactRecord>& records,
-                         const std::vector<contactRecord>& controlRecords,
-                         const QString& chrX, const QString& chrY, const QString& matrixType,
-                         qint64 x0, qint64 x1, qint64 y0, qint64 y1, int resolution,
-                         const HeatmapColorSettings& colors) {
-    const double spanX = std::max<qint64>(1, x1 - x0);
-    const double spanY = std::max<qint64>(1, y1 - y0);
-    const bool splitVs = chrX == chrY && !controlRecords.empty() &&
-                         (matrixType == QStringLiteral("vs") || matrixType.endsWith(QStringLiteral("vs")));
-    const bool mirror = chrX == chrY && !splitVs;
-    const std::size_t total = records.size() + controlRecords.size();
-    const std::size_t stride = std::max<std::size_t>(1, total / 400000U);
-    const int cellWidth = std::max(1, static_cast<int>(std::ceil(std::max(1, resolution) / spanX * plot.width())));
-    const int cellHeight = std::max(1, static_cast<int>(std::ceil(std::max(1, resolution) / spanY * plot.height())));
-    painter.setPen(Qt::NoPen);
-    auto drawRecords = [&](const std::vector<contactRecord>& source, bool control) {
-        for (std::size_t i = 0; i < source.size(); i += stride) {
-            const contactRecord& record = source[i];
-            if (record.binX < x0 || record.binX >= x1 || record.binY < y0 || record.binY >= y1) continue;
-            painter.setBrush(heatmapColorForValue(record.counts, colors));
-            const int drawBinX = splitVs
-                ? (control ? std::min(record.binX, record.binY) : std::max(record.binX, record.binY))
-                : record.binX;
-            const int drawBinY = splitVs
-                ? (control ? std::max(record.binX, record.binY) : std::min(record.binX, record.binY))
-                : record.binY;
-            const int x = plot.left() + static_cast<int>((drawBinX - x0) / spanX * plot.width());
-            const int y = plot.top() + static_cast<int>((drawBinY - y0) / spanY * plot.height());
-            painter.drawRect(x, y, cellWidth, cellHeight);
-            if (mirror && record.binX != record.binY) {
-                const int mirroredX = plot.left() + static_cast<int>((record.binY - x0) / spanX * plot.width());
-                const int mirroredY = plot.top() + static_cast<int>((record.binX - y0) / spanY * plot.height());
-                painter.drawRect(mirroredX, mirroredY, cellWidth, cellHeight);
-            }
-        }
-    };
-    drawRecords(records, false);
-    drawRecords(controlRecords, true);
 }
 
 void paintHeatmapLegend(QPainter& painter, const QRect& legend, const HeatmapColorSettings& colors,
@@ -186,6 +140,7 @@ HicDataController::HicDataController(QObject* parent)
                 : (result.error.isEmpty() ? QStringLiteral("the control map is incompatible with the primary map")
                                           : result.error);
             finishSavedStateRestore(warning);
+            emit controlLoadFinished();
             return;
         }
         if (!m_controlReady && matrixNeedsControl(m_matrixType)) {
@@ -197,11 +152,17 @@ HicDataController::HicDataController(QObject* parent)
             clearLoadedRegion();
             scheduleRequest();
         }
+        emit controlLoadFinished();
     });
 
     connect(&m_trackWatcher, &QFutureWatcher<PooledTrackResult>::finished, this, [this]() {
         const PooledTrackResult pooled = m_trackWatcher.result();
         m_trackLoadActive = false;
+        if (m_activeTrackGeneration != m_trackLoadGeneration) {
+            m_activeTrackState.clear();
+            startNextTrackLoad();
+            return;
+        }
         if (pooled.data) {
             appendTrackLayer(pooled.data);
             if (!m_activeTrackState.isEmpty()) applyTrackRestoreState(m_tracks.size() - 1, m_activeTrackState);
@@ -214,6 +175,11 @@ HicDataController::HicDataController(QObject* parent)
     connect(&m_annotationWatcher, &QFutureWatcher<PooledAnnotationResult>::finished, this, [this]() {
         const PooledAnnotationResult pooled = m_annotationWatcher.result();
         m_annotationLoadActive = false;
+        if (m_activeAnnotationGeneration != m_annotationLoadGeneration) {
+            m_activeAnnotationState.clear();
+            startNextAnnotationLoad();
+            return;
+        }
         if (pooled.data) {
             appendAnnotationLayer(pooled.data);
             if (!m_activeAnnotationState.isEmpty())
@@ -226,7 +192,8 @@ HicDataController::HicDataController(QObject* parent)
 
     connect(&m_cytobandWatcher, &QFutureWatcher<GenomicCytobandReadResult>::finished, this, [this]() {
         m_cytobandLoadActive = false;
-        applyCytobandResult(m_cytobandWatcher.result(), m_activeCytobandPath);
+        if (m_activeCytobandGeneration == m_cytobandLoadGeneration)
+            applyCytobandResult(m_cytobandWatcher.result(), m_activeCytobandPath);
         startNextCytobandLoad();
     });
 
@@ -251,10 +218,8 @@ HicDataController::HicDataController(QObject* parent)
             return;
         }
 
-        orientTileForRequestedAxes(result.tile);
-        if (result.hasControl) {
-            orientTileForRequestedAxes(result.controlTile);
-        }
+        // Straw returns coordinates in the requested axis order for every
+        // file version; transposing again corrupts reversed trans queries.
         std::vector<contactRecord> displayRecords = transformRecordsForDisplay(m_matrixType, result.tile.records,
                                                                                result.hasControl ? result.controlTile.records : std::vector<contactRecord>());
         std::vector<contactRecord> displayControlRecords;
@@ -281,7 +246,7 @@ HicDataController::HicDataController(QObject* parent)
             m_hasLoadedKey = true;
         }
         updateAutoColorScale(m_records, m_controlRecords);
-        if (!result.fromCache) {
+        if (!result.fromCache && matrixNeedsPrimary(m_matrixType)) {
             m_cache->put(std::move(result.tile));
             m_registry->notifyCacheChanged();
         }
@@ -516,6 +481,7 @@ void HicDataController::startNextTrackLoad() {
     const QString path = m_pendingTrackPaths.dequeue();
     m_activeTrackState = m_pendingTrackStates.dequeue();
     m_trackLoadActive = true;
+    m_activeTrackGeneration = m_trackLoadGeneration;
     setStatus(QStringLiteral("Loading 1D track: %1").arg(path));
     m_trackWatcher.setFuture(QtConcurrent::run([registry = m_registry, path]() {
         return registry->loadTrack(path);
@@ -594,6 +560,7 @@ void HicDataController::startNextAnnotationLoad() {
     const QString path = m_pendingAnnotationPaths.dequeue();
     m_activeAnnotationState = m_pendingAnnotationStates.dequeue();
     m_annotationLoadActive = true;
+    m_activeAnnotationGeneration = m_annotationLoadGeneration;
     setStatus(QStringLiteral("Loading 2D annotations: %1").arg(path));
     m_annotationWatcher.setFuture(QtConcurrent::run([registry = m_registry, path]() {
         return registry->loadAnnotations(path);
@@ -674,6 +641,7 @@ void HicDataController::startNextCytobandLoad() {
     if (m_cytobandLoadActive || m_pendingCytobandPaths.isEmpty()) return;
     m_activeCytobandPath = m_pendingCytobandPaths.dequeue();
     m_cytobandLoadActive = true;
+    m_activeCytobandGeneration = m_cytobandLoadGeneration;
     setStatus(QStringLiteral("Loading cytobands: %1").arg(m_activeCytobandPath));
     const QString path = m_activeCytobandPath;
     m_cytobandWatcher.setFuture(QtConcurrent::run([path]() {
@@ -716,6 +684,8 @@ void HicDataController::applyCytobandResult(const GenomicCytobandReadResult& res
 }
 
 void HicDataController::clearCytobands() {
+    ++m_cytobandLoadGeneration;
+    m_pendingCytobandPaths.clear();
     if (m_cytobands.isEmpty()) return;
     m_cytobands.clear();
     emit cytobandsChanged();
@@ -739,12 +709,26 @@ QVariantList HicDataController::visibleCytobands(bool xAxis) const {
     return values;
 }
 
+void HicDataController::discardPendingTrackLoads() {
+    ++m_trackLoadGeneration;
+    m_pendingTrackPaths.clear();
+    m_pendingTrackStates.clear();
+}
+
+void HicDataController::discardPendingAnnotationLoads() {
+    ++m_annotationLoadGeneration;
+    m_pendingAnnotationPaths.clear();
+    m_pendingAnnotationStates.clear();
+}
+
 void HicDataController::clearTracks() {
+    discardPendingTrackLoads();
     m_tracks.clear();
     emit tracksChanged();
 }
 
 void HicDataController::clearAnnotations() {
+    discardPendingAnnotationLoads();
     for (AnnotationLayer& layer : m_annotationLayers) {
         QVector<Annotation2D>& annotations = editableAnnotations(layer);
         layer.undoStack = annotations;
@@ -795,12 +779,15 @@ QVariantList HicDataController::savedStates() const {
 
 QVariantList HicDataController::chromosomeNames() const {
     QVariantList names;
-    if (m_metadata && !m_metadata->chromosomes.empty()) {
-        names.push_back(QStringLiteral("All"));
-    }
     if (!m_metadata) return names;
     for (const chromosome& chr : m_metadata->chromosomes) {
-        if (chr.index > 0) {
+        if (isAllChromosome(QString::fromStdString(chr.name))) {
+            names.push_back(QString::fromStdString(chr.name));
+            break;
+        }
+    }
+    for (const chromosome& chr : m_metadata->chromosomes) {
+        if (!isAllChromosome(QString::fromStdString(chr.name))) {
             names.push_back(QString::fromStdString(chr.name));
         }
     }
@@ -809,17 +796,38 @@ QVariantList HicDataController::chromosomeNames() const {
 
 QVariantList HicDataController::chromosomeBoundaries() const {
     QVariantList values;
-    qint64 offset = 0;
     if (!m_metadata) return values;
-    for (const chromosome& chr : m_metadata->chromosomes) {
-        if (chr.index <= 0) {
-            continue;
+    QStringList sourceBins;
+    QString allVersion;
+    for (const auto& [key, value] : m_metadata->attributes) {
+        if (key == "hicAll.version") allVersion = QString::fromStdString(value);
+        if (key == "hicAll.chromosomeBins") sourceBins = QString::fromStdString(value).split(QLatin1Char(','));
+    }
+    QVector<double> weights;
+    for (const chromosome& chr : m_metadata->chromosomes)
+        if (!isAllChromosome(QString::fromStdString(chr.name))) weights.push_back(chr.length);
+    if (wholeGenomeView() && allVersion == QStringLiteral("1") && sourceBins.size() == weights.size()) {
+        for (int i = 0; i < weights.size(); ++i) {
+            bool ok = false;
+            const double bins = sourceBins[i].toDouble(&ok);
+            if (ok && std::isfinite(bins) && bins >= 0) weights[i] = bins;
         }
+    }
+    const double total = std::accumulate(weights.cbegin(), weights.cend(), 0.0);
+    const qint64 allLength = wholeGenomeView()
+        ? chromosomeLength(isAllChromosome(m_chrX) ? m_chrX : m_chrY) : 0;
+    double offset = 0;
+    int index = 0;
+    for (const chromosome& chr : m_metadata->chromosomes) {
+        if (isAllChromosome(QString::fromStdString(chr.name))) continue;
+        const auto coordinate = [&](double value) {
+            return allLength > 0 && total > 0 ? qRound64(value / total * allLength) : qRound64(value);
+        };
         QVariantMap item;
         item["name"] = QString::fromStdString(chr.name);
-        item["start"] = offset;
-        offset += chr.length;
-        item["end"] = offset;
+        item["start"] = coordinate(offset);
+        offset += weights[index++];
+        item["end"] = coordinate(offset);
         values.push_back(item);
     }
     return values;
@@ -1876,6 +1884,8 @@ QVariantMap HicDataController::sessionState() const {
 }
 
 void HicDataController::restoreSessionState(const QVariantMap& state, bool includeView) {
+    discardPendingTrackLoads();
+    discardPendingAnnotationLoads();
     m_tracks.clear();
     const QVariantList tracks = state.value(QStringLiteral("tracks")).toList();
     for (const QVariant& value : tracks) {
@@ -2017,12 +2027,18 @@ void HicDataController::setWholeGenomeView() {
     if (!m_metadata || m_metadata->chromosomes.empty()) {
         return;
     }
+    const auto all = std::find_if(m_metadata->chromosomes.cbegin(), m_metadata->chromosomes.cend(),
+        [this](const chromosome& chr) { return isAllChromosome(QString::fromStdString(chr.name)); });
+    if (all == m_metadata->chromosomes.cend()) {
+        setStatus(QStringLiteral("This map has no whole-genome chromosome."));
+        return;
+    }
     pushViewHistory();
-    m_chrX = QStringLiteral("All");
-    m_chrY = QStringLiteral("All");
+    m_chrX = QString::fromStdString(all->name);
+    m_chrY = m_chrX;
     m_x0 = 0;
     m_y0 = 0;
-    const qint64 length = genomeLength();
+    const qint64 length = chromosomeLength(m_chrX);
     m_x1 = length;
     m_y1 = length;
     adaptResolutionToSpan(length);
@@ -2145,8 +2161,8 @@ void HicDataController::zoom(double factor, double centerX, double centerY) {
     const qint64 centerGenomeX = m_x0 + static_cast<qint64>(width * centerX);
     const qint64 centerGenomeY = m_y0 + static_cast<qint64>(height * centerY);
 
-    if (!m_xLocusLocked) { m_x0 = centerGenomeX - nextWidth / 2; m_x1 = m_x0 + nextWidth; }
-    if (!m_yLocusLocked) { m_y0 = centerGenomeY - nextHeight / 2; m_y1 = m_y0 + nextHeight; }
+    if (!m_xLocusLocked) { m_x0 = centerGenomeX - qRound64(nextWidth * centerX); m_x1 = m_x0 + nextWidth; }
+    if (!m_yLocusLocked) { m_y0 = centerGenomeY - qRound64(nextHeight * centerY); m_y1 = m_y0 + nextHeight; }
     adaptResolutionToSpan(std::max(nextWidth, nextHeight));
     clampRegion();
     emit viewChanged();
@@ -3257,13 +3273,13 @@ void HicDataController::applyMetadata(const std::shared_ptr<const StrawFileInfo>
         m_resolution = metadata->bpResolutions.front();
     }
     m_norm = QStringLiteral("NONE");
-    for (const chromosome& chr : metadata->chromosomes) {
-        if (chr.index > 0) {
-            m_chrX = QString::fromStdString(chr.name);
-            m_chrY = m_chrX;
-            break;
-        }
-    }
+    // V10 does not reserve chromosome index zero for All. Prefer a stored
+    // All entry wherever it appears, otherwise preserve the file's first entry.
+    const auto all = std::find_if(metadata->chromosomes.cbegin(), metadata->chromosomes.cend(),
+        [this](const chromosome& chr) { return isAllChromosome(QString::fromStdString(chr.name)); });
+    if (all != metadata->chromosomes.cend()) m_chrX = QString::fromStdString(all->name);
+    else if (!metadata->chromosomes.empty()) m_chrX = QString::fromStdString(metadata->chromosomes.front().name);
+    m_chrY = m_chrX;
     resetView();
     emit metadataChanged();
     emit viewChanged();
@@ -3289,17 +3305,18 @@ chromosome HicDataController::chromosomeByName(const QString& name) const {
 }
 
 qint64 HicDataController::chromosomeLength(const QString& name) const {
-    if (isAllChromosome(name)) {
-        return genomeLength();
-    }
-    return chromosomeByName(name).length;
+    // All has its own coordinate system (often scaled in v10). Querying it
+    // with the sum of physical chromosome lengths can exceed its stored bounds.
+    const chromosome chr = chromosomeByName(name);
+    if (isAllChromosome(name) && chr.name.empty()) return genomeLength();
+    return chr.length;
 }
 
 qint64 HicDataController::genomeLength() const {
     qint64 length = 0;
     if (!m_metadata) return std::max<qint64>(m_resolution, length);
     for (const chromosome& chr : m_metadata->chromosomes) {
-        if (chr.index > 0) {
+        if (!isAllChromosome(QString::fromStdString(chr.name))) {
             length += chr.length;
         }
     }
@@ -3337,7 +3354,6 @@ bool HicDataController::controlSupportsCurrentView(QString* reason) const {
                         .arg(QString::fromStdString(m_controlMetadata->genome), m_genomeId));
     }
     const auto hasChromosome = [this](const QString& name) {
-        if (isAllChromosome(name)) return true;
         return std::any_of(m_controlMetadata->chromosomes.cbegin(), m_controlMetadata->chromosomes.cend(),
                            [&name](const chromosome& chr) { return chrNamesEqual(QString::fromStdString(chr.name), name); });
     };
@@ -3523,9 +3539,9 @@ std::vector<contactRecord> HicDataController::transformRecordsForDisplay(const Q
     if (matrixType == QStringLiteral("ratio") || matrixType == QStringLiteral("ratio1") ||
         matrixType == QStringLiteral("logratio") || matrixType == QStringLiteral("diff") ||
         matrixType == QStringLiteral("oeratio")) {
-        return mergeRecordPairs(primary, control, matrixType);
+        return MatrixAnalysis::compareRecords(primary, control, matrixType);
     }
-    if (matrixType == QStringLiteral("logoe") || matrixType == QStringLiteral("explogoe")) {
+    if (matrixType == QStringLiteral("logoe") || matrixType == QStringLiteral("logeovs")) {
         std::vector<contactRecord> out = primary;
         for (contactRecord& record : out) {
             record.counts = record.counts > 0 ? static_cast<float>(std::log(record.counts)) : 0.0f;
@@ -3558,37 +3574,6 @@ std::vector<contactRecord> HicDataController::transformSimilarityLike(
                                       contextStart, contextEnd,
                                       m_x0, m_x1, m_y0, m_y1,
                                       kMaxSimilarityBins);
-}
-
-std::vector<contactRecord> HicDataController::mergeRecordPairs(const std::vector<contactRecord>& primary,
-                                                               const std::vector<contactRecord>& control,
-                                                               const QString& matrixType) const {
-    std::unordered_map<quint64, float> controlByBin;
-    controlByBin.reserve(control.size());
-    for (const contactRecord& record : control) {
-        controlByBin[recordKey(record.binX, record.binY)] = record.counts;
-    }
-    std::vector<contactRecord> out;
-    out.reserve(primary.size());
-    for (contactRecord record : primary) {
-        const auto it = controlByBin.find(recordKey(record.binX, record.binY));
-        if (it == controlByBin.end()) {
-            continue;
-        }
-        const double p = record.counts;
-        const double c = it->second;
-        if (matrixType == QStringLiteral("diff")) {
-            record.counts = static_cast<float>(p - c);
-        } else if (matrixType == QStringLiteral("logratio")) {
-            record.counts = static_cast<float>(std::log2((p + 1.0) / (c + 1.0)));
-        } else if (matrixType == QStringLiteral("ratio1")) {
-            record.counts = static_cast<float>(p / (c + 1.0));
-        } else {
-            record.counts = c == 0.0 ? 0.0f : static_cast<float>(p / c);
-        }
-        out.push_back(record);
-    }
-    return out;
 }
 
 void HicDataController::addRecent(const QString& group, const QString& path) {
@@ -3877,16 +3862,6 @@ void HicDataController::restoreView(const QVariantMap& view) {
     scheduleRequest();
 }
 
-void HicDataController::orientTileForRequestedAxes(HicTile& tile) const {
-    const chromosome xChr = chromosomeByName(QString::fromStdString(tile.key.chrX));
-    const chromosome yChr = chromosomeByName(QString::fromStdString(tile.key.chrY));
-    if (xChr.index > yChr.index) {
-        for (contactRecord& record : tile.records) {
-            std::swap(record.binX, record.binY);
-        }
-    }
-}
-
 HicTileKey HicDataController::paddedRequestKey(const HicTileKey& visibleKey) const {
     HicTileKey key = visibleKey;
     const qint64 resolution = std::max<qint64>(1, key.resolution);
@@ -4092,7 +4067,14 @@ void HicDataController::startTileLoad(const HicTileKey& key, quint64 requestId) 
     const QString controlMatrixType = controlDataMatrixType(m_matrixType);
     const bool needsPrimary = matrixNeedsPrimary(m_matrixType);
     const bool needsControl = matrixNeedsControl(m_matrixType);
-    m_tileWatcher.setFuture(QtConcurrent::run([registry = m_registry, key, requestId, displayMatrixType, controlPath, controlMatrixType, needsPrimary, needsControl]() {
+    const auto controlChromosome = [this](const std::string& name) {
+        if (m_controlMetadata) for (const chromosome& chr : m_controlMetadata->chromosomes)
+            if (chrNamesEqual(QString::fromStdString(chr.name), QString::fromStdString(name))) return chr.name;
+        return name;
+    };
+    const std::string controlChrX = controlChromosome(key.chrX);
+    const std::string controlChrY = controlChromosome(key.chrY);
+    m_tileWatcher.setFuture(QtConcurrent::run([registry = m_registry, key, requestId, displayMatrixType, controlPath, controlMatrixType, needsPrimary, needsControl, controlChrX, controlChrY]() {
         TileResult result;
         result.requestId = requestId;
         result.tile.key = key;
@@ -4113,8 +4095,10 @@ void HicDataController::startTileLoad(const HicTileKey& key, quint64 requestId) 
                 result.controlTile.key = key;
                 result.controlTile.key.filePath = controlPath.toStdString();
                 result.controlTile.key.matrixType = controlMatrixType.toStdString();
-                result.controlTile.records = straw(controlMatrixType.toStdString(), key.norm, controlPath.toStdString(), chrXLoc, chrYLoc,
-                                                   key.unit, key.resolution);
+                const std::string controlXLocation = controlChrX + ":" + std::to_string(key.x0) + ":" + std::to_string(key.x1);
+                const std::string controlYLocation = controlChrY + ":" + std::to_string(key.y0) + ":" + std::to_string(key.y1);
+                result.controlTile.records = straw(controlMatrixType.toStdString(), key.norm, controlPath.toStdString(),
+                                                   controlXLocation, controlYLocation, key.unit, key.resolution);
             }
         } catch (const std::exception& e) {
             result.error = QStringLiteral("Failed to load visible range: %1").arg(e.what());

@@ -4,6 +4,7 @@
 #include <QFileInfo>
 #include <QJsonDocument>
 #include <QSaveFile>
+#include <QTimer>
 #include <QUuid>
 #include <QtConcurrent>
 
@@ -434,11 +435,7 @@ HicDataController* TabSession::createController(const QString& key) {
     connect(controller, &HicDataController::metadataChanged, this, [this, controller]() {
         for (CellSpec& cell : m_cells) if (cell.controller == controller) {
             openMapForCell(cell);
-            const auto pending = m_pendingCellStates.find(cell.key);
-            if (pending != m_pendingCellStates.end()) {
-                controller->restoreSessionState(pending.value(), m_type == Type::Single || m_type == Type::MultiMap);
-                m_pendingCellStates.erase(pending);
-            }
+            restorePendingCellState(cell);
             applyCellRegion(cell);
             applyCellMode(cell);
             break;
@@ -448,6 +445,24 @@ HicDataController* TabSession::createController(const QString& key) {
         // back onto one view once the newcomer is ready rather than only when
         // the user next pans or zooms.
         syncNavigationToReference();
+    });
+    // Primary tiles may still be loading when a control is selected. Retry
+    // after the current callback has finished updating the controller.
+    connect(controller, &HicDataController::busyChanged, this, [this, controller]() {
+        if (controller->busy()) return;
+        QTimer::singleShot(0, controller, [this, controller]() {
+            for (CellSpec& cell : m_cells) if (cell.controller == controller) {
+                openMapForCell(cell);
+                break;
+            }
+        });
+    });
+    connect(controller, &HicDataController::controlLoadFinished, this, [this, controller]() {
+        for (CellSpec& cell : m_cells) if (cell.controller == controller) {
+            restorePendingCellState(cell, true);
+            applyCellMode(cell);
+            break;
+        }
     });
     connect(controller, &HicDataController::controlReadyChanged, this, [this, controller]() {
         for (CellSpec& cell : m_cells) if (cell.controller == controller) {
@@ -566,6 +581,7 @@ void TabSession::rebuildCells() {
     m_activeCellIndex = m_cells.isEmpty() ? -1 : std::clamp(m_activeCellIndex, 0, static_cast<int>(m_cells.size()) - 1);
     for (CellSpec& cell : m_cells) {
         openMapForCell(cell);
+        restorePendingCellState(cell);
         applyCellRegion(cell);
         applyCellMode(cell);
     }
@@ -584,6 +600,19 @@ void TabSession::openMapForCell(CellSpec& cell) {
     if (!map.primaryPath.isEmpty() && cell.controller->chromosomeNames().isEmpty()) return;
     if (!map.controlPath.isEmpty() && cell.controller->controlFilePath() != map.controlPath)
         cell.controller->openControlFile(QUrl::fromUserInput(map.controlPath));
+}
+
+void TabSession::restorePendingCellState(CellSpec& cell, bool allowMissingControl) {
+    if (!cell.controller || cell.mapIndex < 0 || cell.mapIndex >= m_maps.size()) return;
+    const MapSpec& map = m_maps[cell.mapIndex];
+    if (!map.primaryPath.isEmpty() && cell.controller->chromosomeNames().isEmpty()) return;
+    if (!allowMissingControl && !map.controlPath.isEmpty() && !cell.controller->controlReady()) return;
+    const auto pending = m_pendingCellStates.find(cell.key);
+    if (pending == m_pendingCellStates.end()) return;
+    // Restore emits signals; remove the entry first to avoid consuming it again.
+    const QVariantMap state = pending.value();
+    m_pendingCellStates.erase(pending);
+    cell.controller->restoreSessionState(state, m_type == Type::Single || m_type == Type::MultiMap);
 }
 
 void TabSession::applyCellRegion(CellSpec& cell) {
@@ -951,6 +980,7 @@ QVariantMap TabSession::state() const {
 
 bool TabSession::restoreState(const QVariantMap& value) {
     initialize(value.value(QStringLiteral("tabType"), QStringLiteral("single")).toString());
+    m_initializing = true;
     m_title = value.value(QStringLiteral("title"), typeLabel()).toString();
     m_layoutColumns = std::clamp(value.value(QStringLiteral("layoutColumns"), m_layoutColumns).toInt(), 1, 12);
     m_transposed = value.value(QStringLiteral("transposed"), false).toBool();
@@ -986,7 +1016,10 @@ bool TabSession::restoreState(const QVariantMap& value) {
         m_maps[0].controlPath = value.value(QStringLiteral("controlFilePath")).toString();
     }
     const QVariantMap regionState = value.value(QStringLiteral("regions")).toMap();
-    if (!regionState.isEmpty() && !m_regionSet->restoreState(regionState)) return false;
+    if (!regionState.isEmpty() && !m_regionSet->restoreState(regionState)) {
+        m_initializing = false;
+        return false;
+    }
     m_activeCellIndex = value.value(QStringLiteral("activeCellIndex"), 0).toInt();
     const QVariantMap analysis = value.value(QStringLiteral("analysis")).toMap();
     m_analysisPaneHeight = std::clamp(analysis.value(QStringLiteral("paneHeight"), 260).toInt(), 100, 1200);
@@ -1013,6 +1046,7 @@ bool TabSession::restoreState(const QVariantMap& value) {
     m_processingThreshold = std::isfinite(restoredProcessingThreshold)
         ? restoredProcessingThreshold : 0.0;
     m_processingMaximumBins = analysis.value(QStringLiteral("processingMaximumBins"), 512).toInt() > 512 ? 1024 : 512;
+    m_initializing = false;
     rebuildCells();
     emit titleChanged();
     emit structureChanged();
