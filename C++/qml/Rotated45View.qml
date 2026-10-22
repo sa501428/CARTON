@@ -11,20 +11,23 @@ Rectangle {
     color: Theme.appBg
 
     function formatBp(value) {
-        if (value >= 1000000) return (value / 1000000).toFixed(2) + " Mb"
-        if (value >= 1000) return (value / 1000).toFixed(1) + " kb"
-        return Math.round(value) + " bp"
+        if (value >= 1000000)
+            return (value / 1000000).toFixed(2) + " Mb";
+        if (value >= 1000)
+            return (value / 1000).toFixed(1) + " kb";
+        return Math.round(value) + " bp";
     }
 
     function trackHeight(controller, placement) {
-        if (!controller) return 0
-        var count = controller.trackCount
-        var summaries = controller.trackSummaries()
-        var total = 0
+        if (!controller)
+            return 0;
+        var count = controller.trackCount;
+        var summaries = controller.trackSummaries();
+        var total = 0;
         for (var i = 0; i < summaries.length; ++i)
             if (summaries[i].visible && !summaries[i].collapsed && summaries[i].placement === placement)
-                total += Math.max(20, summaries[i].height)
-        return total
+                total += Math.max(20, summaries[i].height);
+        return total;
     }
 
     ColumnLayout {
@@ -33,27 +36,57 @@ Rectangle {
 
         Rectangle {
             Layout.fillWidth: true
-            Layout.preferredHeight: 46
+            implicitHeight: analysisTools.implicitHeight + 16
             color: Theme.surfaceAlt
             border.color: Theme.borderSubtle
-            RowLayout {
-                anchors.fill: parent
+            Flow {
+                id: analysisTools
+                anchors.left: parent.left
+                anchors.right: parent.right
+                anchors.top: parent.top
                 anchors.leftMargin: 10
                 anchors.rightMargin: 10
                 spacing: 8
-                Label { text: "Synchronized diagonal strip"; color: Theme.textPrimary; font.weight: Font.DemiBold }
-                Label { text: "Height"; color: Theme.textSecondary; font.pixelSize: Theme.textXs }
-                SpinBox {
-                    from: 100; to: 1200; stepSize: 20; editable: true
-                    value: root.tabSession ? root.tabSession.analysisPaneHeight : 260
-                    onValueModified: if (root.tabSession) root.tabSession.analysisPaneHeight = value
-                    Layout.preferredWidth: 100
+                Label {
+                    width: Math.min(implicitWidth, analysisTools.width)
+                    wrapMode: Text.WordWrap
+                    text: "Synchronized diagonal strip"
+                    color: Theme.textPrimary
+                    font.weight: Font.DemiBold
                 }
-                Label { text: "Maximum distance"; color: Theme.textSecondary; font.pixelSize: Theme.textXs }
-                AppCheckBox {
-                    text: "Auto"
-                    checked: root.tabSession ? root.tabSession.diagonalAutoDistance : true
-                    onToggled: if (root.tabSession) root.tabSession.diagonalAutoDistance = checked
+                Row {
+                    spacing: 6
+                    Label {
+                        anchors.verticalCenter: parent.verticalCenter
+                        text: "Height"
+                        color: Theme.textSecondary
+                        font.pixelSize: Theme.textXs
+                    }
+                    SpinBox {
+                        from: 100
+                        to: 1200
+                        stepSize: 20
+                        editable: true
+                        value: root.tabSession ? root.tabSession.analysisPaneHeight : 260
+                        onValueModified: if (root.tabSession)
+                            root.tabSession.analysisPaneHeight = value
+                        width: 100
+                    }
+                }
+                Row {
+                    spacing: 6
+                    Label {
+                        anchors.verticalCenter: parent.verticalCenter
+                        text: "Maximum distance"
+                        color: Theme.textSecondary
+                        font.pixelSize: Theme.textXs
+                    }
+                    AppCheckBox {
+                        text: "Auto"
+                        checked: root.tabSession ? root.tabSession.diagonalAutoDistance : true
+                        onToggled: if (root.tabSession)
+                            root.tabSession.diagonalAutoDistance = checked
+                    }
                 }
                 AppTextField {
                     // Automatic mode is driven by the strip's own aspect ratio, so
@@ -61,16 +94,30 @@ Rectangle {
                     readOnly: root.tabSession ? root.tabSession.diagonalAutoDistance : false
                     enabled: !readOnly
                     text: root.tabSession ? String(root.tabSession.diagonalEffectiveDistance) : "2000000"
-                    validator: DoubleValidator { bottom: 1000; top: 1000000000; decimals: 0 }
-                    onEditingFinished: if (root.tabSession && !readOnly) root.tabSession.diagonalMaxDistance = Number(text)
-                    Layout.preferredWidth: 130
+                    validator: DoubleValidator {
+                        bottom: 1000
+                        top: 1000000000
+                        decimals: 0
+                    }
+                    onEditingFinished: if (root.tabSession && !readOnly)
+                        root.tabSession.diagonalMaxDistance = Number(text)
+                    width: 130
                 }
                 Label {
+                    width: Math.min(implicitWidth, analysisTools.width)
+                    wrapMode: Text.WordWrap
                     text: root.tabSession ? root.formatBp(root.tabSession.diagonalEffectiveDistance) : ""
-                    color: Theme.textMuted; font.pixelSize: Theme.textXs
+                    color: Theme.textMuted
+                    font.pixelSize: Theme.textXs
                 }
-                Item { Layout.fillWidth: true }
-                Label { text: "Wheel zooms; drag scrolls all maps"; color: Theme.textMuted; font.pixelSize: Theme.textXs }
+
+                Label {
+                    width: Math.min(implicitWidth, analysisTools.width)
+                    wrapMode: Text.WordWrap
+                    text: "Wheel zooms; drag scrolls all maps"
+                    color: Theme.textMuted
+                    font.pixelSize: Theme.textXs
+                }
             }
         }
 
@@ -84,16 +131,14 @@ Rectangle {
                 spacing: 10
                 padding: 10
                 Repeater {
-                    model: root.tabSession ? root.tabSession.cells : []
+                    model: root.tabSession ? root.tabSession.cellLayout : []
                     Rectangle {
                         id: pane
                         required property var modelData
                         width: parent.width - 20
-                        height: (root.tabSession ? root.tabSession.analysisPaneHeight : 260) + 36 +
-                                root.trackHeight(modelData.controller, "above") +
-                                root.trackHeight(modelData.controller, "below")
+                        height: (root.tabSession ? root.tabSession.analysisPaneHeight : 260) + 36 + root.trackHeight(modelData.controller, "above") + root.trackHeight(modelData.controller, "below")
                         color: Theme.surface
-                        border.color: modelData.selected ? Theme.accent : Theme.border
+                        border.color: (root.tabSession && root.tabSession.activeCellIndex === modelData.index) ? Theme.accent : Theme.border
                         radius: Theme.radiusSm
                         clip: true
 
@@ -105,7 +150,9 @@ Rectangle {
                                 Layout.preferredHeight: 36
                                 color: Theme.surfaceAlt
                                 RowLayout {
-                                    anchors.fill: parent; anchors.leftMargin: 8; anchors.rightMargin: 8
+                                    anchors.fill: parent
+                                    anchors.leftMargin: 8
+                                    anchors.rightMargin: 8
                                     Label {
                                         text: pane.modelData.label
                                         color: Theme.textPrimary
@@ -118,8 +165,7 @@ Rectangle {
                                             required property var modelData
                                             text: modelData.name + (modelData.placement === "below" ? " ↓" : " ↑")
                                             tonal: true
-                                            onClicked: pane.modelData.controller.setTrackPlacement(
-                                                modelData.index, modelData.placement === "below" ? "above" : "below")
+                                            onClicked: pane.modelData.controller.setTrackPlacement(modelData.index, modelData.placement === "below" ? "above" : "below")
                                         }
                                     }
                                     AppCheckBox {
@@ -152,11 +198,11 @@ Rectangle {
                                     maxDistance: root.tabSession ? root.tabSession.diagonalMaxDistance : 2000000
                                     flipped: pane.modelData.flipped
                                     onEffectiveMaxDistanceChanged: {
-                                        annotationCanvas.requestPaint()
+                                        annotationCanvas.requestPaint();
                                         // Panes are kept on one view, so the first
                                         // one speaks for the tab.
                                         if (root.tabSession && pane.modelData.index === 0)
-                                            root.tabSession.reportDiagonalDistance(effectiveMaxDistance)
+                                            root.tabSession.reportDiagonalDistance(effectiveMaxDistance);
                                     }
                                 }
                                 Canvas {
@@ -164,51 +210,59 @@ Rectangle {
                                     anchors.fill: parent
                                     Connections {
                                         target: pane.modelData.controller
-                                        function onAnnotationsChanged() { annotationCanvas.requestPaint() }
-                                        function onViewChanged() { annotationCanvas.requestPaint() }
+                                        function onAnnotationsChanged() {
+                                            annotationCanvas.requestPaint();
+                                        }
+                                        function onViewChanged() {
+                                            annotationCanvas.requestPaint();
+                                        }
                                     }
                                     onWidthChanged: requestPaint()
                                     onHeightChanged: requestPaint()
                                     onPaint: {
-                                        var ctx = getContext("2d")
-                                        ctx.reset()
-                                        var c = pane.modelData.controller
-                                        if (!c || c.chrX !== c.chrY) return
-                                        var start = Math.min(c.x0, c.y0)
-                                        var end = Math.max(c.x1, c.y1)
-                                        var span = Math.max(1, end - start)
-                                        var maximum = Math.max(1, diagonalItem.effectiveMaxDistance)
-                                        var annotations = c.visibleAnnotations()
-                                        var seen = ({})
+                                        var ctx = getContext("2d");
+                                        ctx.reset();
+                                        var c = pane.modelData.controller;
+                                        if (!c || c.chrX !== c.chrY)
+                                            return;
+                                        var start = Math.min(c.x0, c.y0);
+                                        var end = Math.max(c.x1, c.y1);
+                                        var span = Math.max(1, end - start);
+                                        var maximum = Math.max(1, diagonalItem.effectiveMaxDistance);
+                                        var annotations = c.visibleAnnotations();
+                                        var seen = ({});
                                         for (var i = 0; i < annotations.length; ++i) {
-                                            var a = annotations[i]
-                                            var lowX = Math.min(a.x0, a.y0)
-                                            var highX = Math.max(a.x0, a.y0)
-                                            var lowY = Math.min(a.x1, a.y1)
-                                            var highY = Math.max(a.x1, a.y1)
-                                            var key = lowX + ":" + highX + ":" + lowY + ":" + highY
-                                            if (seen[key]) continue
-                                            seen[key] = true
-                                            var mid = (a.x0 + a.x1 + a.y0 + a.y1) / 4
-                                            var distance = Math.abs((a.y0 + a.y1) / 2 - (a.x0 + a.x1) / 2)
-                                            if (distance > maximum) continue
-                                            var px = (mid - start) / span * width
-                                            var py = distance / maximum * height
-                                            if (pane.modelData.flipped) py = height - py
-                                            var halfW = Math.max(3, ((a.x1 - a.x0) + (a.y1 - a.y0)) / 4 / span * width)
-                                            var halfH = Math.max(3, ((a.x1 - a.x0) + (a.y1 - a.y0)) / 2 / maximum * height)
-                                            ctx.strokeStyle = a.color
-                                            ctx.globalAlpha = a.transparent ? 0.45 : 1
-                                            ctx.lineWidth = 1.5
-                                            ctx.beginPath()
-                                            ctx.moveTo(px - halfW, py)
-                                            ctx.lineTo(px, py - halfH)
-                                            ctx.lineTo(px + halfW, py)
-                                            ctx.lineTo(px, py + halfH)
-                                            ctx.closePath()
-                                            ctx.stroke()
+                                            var a = annotations[i];
+                                            var lowX = Math.min(a.x0, a.y0);
+                                            var highX = Math.max(a.x0, a.y0);
+                                            var lowY = Math.min(a.x1, a.y1);
+                                            var highY = Math.max(a.x1, a.y1);
+                                            var key = lowX + ":" + highX + ":" + lowY + ":" + highY;
+                                            if (seen[key])
+                                                continue;
+                                            seen[key] = true;
+                                            var mid = (a.x0 + a.x1 + a.y0 + a.y1) / 4;
+                                            var distance = Math.abs((a.y0 + a.y1) / 2 - (a.x0 + a.x1) / 2);
+                                            if (distance > maximum)
+                                                continue;
+                                            var px = (mid - start) / span * width;
+                                            var py = distance / maximum * height;
+                                            if (pane.modelData.flipped)
+                                                py = height - py;
+                                            var halfW = Math.max(3, ((a.x1 - a.x0) + (a.y1 - a.y0)) / 4 / span * width);
+                                            var halfH = Math.max(3, ((a.x1 - a.x0) + (a.y1 - a.y0)) / 2 / maximum * height);
+                                            ctx.strokeStyle = a.color;
+                                            ctx.globalAlpha = a.transparent ? 0.45 : 1;
+                                            ctx.lineWidth = 1.5;
+                                            ctx.beginPath();
+                                            ctx.moveTo(px - halfW, py);
+                                            ctx.lineTo(px, py - halfH);
+                                            ctx.lineTo(px + halfW, py);
+                                            ctx.lineTo(px, py + halfH);
+                                            ctx.closePath();
+                                            ctx.stroke();
                                         }
-                                        ctx.globalAlpha = 1
+                                        ctx.globalAlpha = 1;
                                     }
                                 }
                                 MouseArea {
@@ -216,38 +270,42 @@ Rectangle {
                                     hoverEnabled: true
                                     acceptedButtons: Qt.LeftButton | Qt.RightButton
                                     property real lastX: 0
-                                    onPressed: function(mouse) {
-                                        root.tabSession.activeCellIndex = pane.modelData.index
-                                        lastX = mouse.x
+                                    onPressed: function (mouse) {
+                                        root.tabSession.activeCellIndex = pane.modelData.index;
+                                        lastX = mouse.x;
                                         if (mouse.button === Qt.RightButton) {
-                                            var fraction = Math.max(0, Math.min(1, mouse.x / Math.max(1, width)))
-                                            root.contextMenuRequested(pane.modelData.controller, fraction, fraction)
-                                            return
+                                            var fraction = Math.max(0, Math.min(1, mouse.x / Math.max(1, width)));
+                                            root.contextMenuRequested(pane.modelData.controller, fraction, fraction);
+                                            return;
                                         }
-                                        if (pane.modelData.controller) pane.modelData.controller.beginInteraction()
+                                        if (pane.modelData.controller)
+                                            pane.modelData.controller.beginInteraction();
                                     }
-                                    onPositionChanged: function(mouse) {
-                                        var c = pane.modelData.controller
-                                        if (!c) return
-                                        var fx = Math.max(0, Math.min(1, mouse.x / Math.max(1, width)))
-                                        root.hoverInfo(c.positionText(fx, fx), true)
+                                    onPositionChanged: function (mouse) {
+                                        var c = pane.modelData.controller;
+                                        if (!c)
+                                            return;
+                                        var fx = Math.max(0, Math.min(1, mouse.x / Math.max(1, width)));
+                                        root.hoverInfo(c.positionText(fx, fx), true);
                                         if (mouse.buttons & Qt.LeftButton) {
-                                            var delta = -(mouse.x - lastX) / Math.max(1, width)
-                                            c.pan(delta, delta)
-                                            lastX = mouse.x
-                                            root.tabSession.notifyViewportInteracted(pane.modelData.index)
+                                            var delta = -(mouse.x - lastX) / Math.max(1, width);
+                                            c.pan(delta, delta);
+                                            lastX = mouse.x;
+                                            root.tabSession.notifyViewportInteracted(pane.modelData.index);
                                         }
                                     }
                                     onExited: root.hoverInfo("", false)
-                                    onReleased: if (pane.modelData.controller) pane.modelData.controller.endInteraction()
-                                    onWheel: function(wheel) {
-                                        var c = pane.modelData.controller
-                                        if (!c) return
-                                        var delta = wheel.angleDelta.y !== 0 ? wheel.angleDelta.y : wheel.pixelDelta.y
-                                        var fx = Math.max(0, Math.min(1, wheel.x / Math.max(1, width)))
-                                        c.zoom(Math.pow(2, delta / 360), fx, fx)
-                                        root.tabSession.notifyViewportInteracted(pane.modelData.index)
-                                        wheel.accepted = true
+                                    onReleased: if (pane.modelData.controller)
+                                        pane.modelData.controller.endInteraction()
+                                    onWheel: function (wheel) {
+                                        var c = pane.modelData.controller;
+                                        if (!c)
+                                            return;
+                                        var delta = wheel.angleDelta.y !== 0 ? wheel.angleDelta.y : wheel.pixelDelta.y;
+                                        var fx = Math.max(0, Math.min(1, wheel.x / Math.max(1, width)));
+                                        c.zoom(Math.pow(2, delta / 360), fx, fx);
+                                        root.tabSession.notifyViewportInteracted(pane.modelData.index);
+                                        wheel.accepted = true;
                                     }
                                 }
                             }

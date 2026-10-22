@@ -53,6 +53,7 @@ class HicDataController : public QObject {
     Q_PROPERTY(int cytobandCount READ cytobandCount NOTIFY cytobandsChanged)
     Q_PROPERTY(bool canUndoView READ canUndoView NOTIFY viewHistoryChanged)
     Q_PROPERTY(bool canRedoView READ canRedoView NOTIFY viewHistoryChanged)
+    Q_PROPERTY(bool canUndoLayerClear READ canUndoLayerClear NOTIFY layerClearUndoChanged)
     Q_PROPERTY(bool resolutionLocked READ resolutionLocked WRITE setResolutionLocked NOTIFY viewChanged)
     Q_PROPERTY(bool xLocusLocked READ xLocusLocked WRITE setXLocusLocked NOTIFY viewChanged)
     Q_PROPERTY(bool yLocusLocked READ yLocusLocked WRITE setYLocusLocked NOTIFY viewChanged)
@@ -166,6 +167,9 @@ public:
     Q_INVOKABLE QVariantList visibleCytobands(bool xAxis) const;
     Q_INVOKABLE void clearTracks();
     Q_INVOKABLE void clearAnnotations();
+    Q_INVOKABLE void clearLayersWithUndo(const QString& kind);
+    Q_INVOKABLE bool undoLayerClear();
+    bool canUndoLayerClear() const;
     Q_INVOKABLE QVariantList recentMaps() const;
     Q_INVOKABLE QVariantList recentControlMaps() const;
     Q_INVOKABLE void clearRecentMaps();
@@ -336,6 +340,7 @@ signals:
     void colorMapChanged();
     void tracksChanged();
     void annotationsChanged();
+    void layerClearUndoChanged();
     void cytobandsChanged();
     void viewHistoryChanged();
     void displayOptionsChanged();
@@ -512,6 +517,7 @@ private:
     void appendAnnotationLayer(const std::shared_ptr<PooledAnnotationData>& data);
     void discardPendingTrackLoads();
     void discardPendingAnnotationLoads();
+    void discardLayerClearUndo();
     void applyTrackRestoreState(int index, const QVariantMap& state);
     void applyAnnotationRestoreState(int index, const QVariantMap& state);
 
@@ -557,6 +563,11 @@ private:
     QVector<AnnotationLayer> m_annotationLayers;
     int m_activeAnnotationLayer = 0;
     QString m_selectedAnnotationId;
+    QString m_layerClearUndoKind;
+    std::vector<TrackLayer> m_clearedTracks;
+    QVector<AnnotationLayer> m_clearedAnnotationLayers;
+    int m_clearedActiveAnnotationLayer = 0;
+    QString m_clearedSelectedAnnotationId;
     bool m_resolutionLocked = false;
     bool m_xLocusLocked = false;
     bool m_yLocusLocked = false;

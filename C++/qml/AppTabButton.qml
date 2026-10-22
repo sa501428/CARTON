@@ -9,11 +9,19 @@ TabButton {
     leftPadding: 16
     rightPadding: 16
     hoverEnabled: true
+    focusPolicy: Qt.StrongFocus
+    Accessible.name: text
     font.family: Theme.fontFamily
     font.pixelSize: Theme.textBase
     font.weight: control.checked ? Font.DemiBold : Font.Medium
 
+    ToolTip.visible: hovered && text.length > 0
+    ToolTip.text: text
+    ToolTip.delay: 450
+
     background: Rectangle {
+        border.width: control.activeFocus ? 1 : 0
+        border.color: Theme.accent
         color: control.hovered && !control.checked ? Theme.surfaceHover : "transparent"
 
         Rectangle {

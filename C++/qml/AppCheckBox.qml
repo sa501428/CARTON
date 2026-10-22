@@ -5,9 +5,11 @@ import Carton
 CheckBox {
     id: control
 
-    implicitHeight: 24
+    implicitHeight: Math.round(30 * Theme.uiScale)
     spacing: 8
     hoverEnabled: true
+    focusPolicy: Qt.StrongFocus
+    Accessible.name: text
     font.family: Theme.fontFamily
     font.pixelSize: Theme.textBase
 
@@ -18,8 +20,8 @@ CheckBox {
         height: 18
         radius: 5
         color: control.checked ? Theme.accent : (control.enabled ? Theme.surface : Theme.surfaceDisabled)
-        border.width: control.checked ? 0 : 1
-        border.color: control.hovered ? Theme.borderStrong : Theme.border
+        border.width: control.activeFocus ? 2 : (control.checked ? 0 : 1)
+        border.color: control.activeFocus ? Theme.accent : (control.hovered ? Theme.borderStrong : Theme.border)
         Behavior on color { ColorAnimation { duration: Theme.reducedMotion ? 0 : Theme.animationFast } }
 
         Text {

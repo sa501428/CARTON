@@ -94,7 +94,16 @@ QString TabSession::typeDisplayName(Type type) {
 QString TabSession::type() const { return typeName(m_type); }
 QString TabSession::typeLabel() const { return typeDisplayName(m_type); }
 QString TabSession::title() const { return m_title; }
-QVariantList TabSession::cells() const { return m_cellModel; }
+QVariantList TabSession::cells() const {
+    QVariantList values = m_cellModel;
+    for (int i = 0; i < values.size(); ++i) {
+        QVariantMap cell = values[i].toMap();
+        cell[QStringLiteral("selected")] = i == m_activeCellIndex;
+        values[i] = cell;
+    }
+    return values;
+}
+QVariantList TabSession::cellLayout() const { return m_cellModel; }
 int TabSession::cellCount() const { return m_cells.size(); }
 int TabSession::mapCount() const { return m_maps.size(); }
 int TabSession::regionCount() const { return m_regionSet->rowCount(); }
@@ -221,7 +230,8 @@ void TabSession::setActiveCellIndex(int value) {
     else value = std::clamp(value, 0, static_cast<int>(m_cells.size()) - 1);
     if (m_activeCellIndex == value) return;
     m_activeCellIndex = value;
-    updateCellModel();
+    // Keep QML Repeater delegates alive through the press that selects a cell.
+    // Their layout model changes only when the cells themselves change.
     emit cellsChanged();
     emit activeCellChanged();
 }
@@ -586,6 +596,7 @@ void TabSession::rebuildCells() {
         applyCellMode(cell);
     }
     updateCellModel();
+    emit cellLayoutChanged();
     emit cellsChanged();
     emit activeCellChanged();
 }
@@ -663,7 +674,6 @@ void TabSession::updateCellModel() {
         item[QStringLiteral("dataRole")] = cell.dataRole;
         item[QStringLiteral("diagonal")] = cell.diagonal;
         item[QStringLiteral("blank")] = cell.blank;
-        item[QStringLiteral("selected")] = index == m_activeCellIndex;
         item[QStringLiteral("flipped")] = cell.mapIndex >= 0 && cell.mapIndex < m_maps.size()
             ? m_maps[cell.mapIndex].flipped : false;
         m_cellModel.push_back(item);
@@ -696,6 +706,7 @@ void TabSession::setControlFile(int cellIndex, const QUrl& url) {
     const int mapIndex = mapIndexForCell(cellIndex);
     m_maps[mapIndex].controlPath = path;
     for (CellSpec& cell : m_cells) if (cell.mapIndex == mapIndex) openMapForCell(cell);
+    emit cellLayoutChanged();
     emit cellsChanged();
 }
 
@@ -840,6 +851,7 @@ void TabSession::setMapFlipped(int mapIndex, bool flipped) {
     if (mapIndex < 0 || mapIndex >= m_maps.size() || m_maps[mapIndex].flipped == flipped) return;
     m_maps[mapIndex].flipped = flipped;
     updateCellModel();
+    emit cellLayoutChanged();
     emit cellsChanged();
 }
 

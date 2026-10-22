@@ -51,6 +51,7 @@ struct PooledAnnotation {
     QColor color = QColor("#111111");
     QMap<QString, QString> attributes;
     bool highlighted = false;
+    bool operator==(const PooledAnnotation&) const = default;
 };
 
 struct PooledAnnotationData {

@@ -3,10 +3,13 @@ import QtQuick.Controls
 import QtQuick.Dialogs
 import QtQuick.Layouts
 import QtQuick.Effects
+import QtCore
 import Carton
 
 ApplicationWindow {
     id: window
+    minimumWidth: 760
+    minimumHeight: 600
     width: 1440
     height: 940
     visible: true
@@ -30,11 +33,23 @@ ApplicationWindow {
     Binding {
         target: Theme
         property: "dark"
-        value: activeController ? activeController.darkMode : true
+        value: window.darkAppearance
     }
-    Binding { target: Theme; property: "uiScale"; value: interfaceScale }
-    Binding { target: Theme; property: "fontScale"; value: fontScale }
-    Binding { target: Theme; property: "reducedMotion"; value: reducedMotion }
+    Binding {
+        target: Theme
+        property: "uiScale"
+        value: window.interfaceScale
+    }
+    Binding {
+        target: Theme
+        property: "fontScale"
+        value: window.fontScale
+    }
+    Binding {
+        target: Theme
+        property: "reducedMotion"
+        value: window.reducedMotion
+    }
 
     property var tabs: []
     property var activeTab: null
@@ -55,73 +70,124 @@ ApplicationWindow {
     property bool minimapVisible: true
     property bool trackPanelsOpen: false
     property bool landscapeMode: false
+    property bool darkAppearance: true
     property real interfaceScale: 1.0
     property real fontScale: 1.0
     property bool reducedMotion: false
     property string toastText: ""
     property string toastKind: "info"
+    property var lastClearedController: null
+    readonly property bool canUndoLayerClear: !!lastClearedController && lastClearedController.canUndoLayerClear
+    function clearLayers(kind) {
+        if (!activeController || (kind !== "tracks" && kind !== "annotations"))
+            return;
+        lastClearedController = activeController;
+        activeController.clearLayersWithUndo(kind);
+        showToast(kind === "tracks" ? "Tracks cleared" : "Annotation features cleared", "undo");
+    }
+    function undoClearLayers() {
+        if (!canUndoLayerClear)
+            return;
+        if (lastClearedController.undoLayerClear())
+            showToast("Cleared layers restored", "success");
+    }
+    function changeDarkMode(value) {
+        darkAppearance = value;
+        for (var t = 0; t < tabs.length; ++t)
+            for (var c = 0; c < tabs[t].cellLayout.length; ++c)
+                if (tabs[t].cellLayout[c].controller)
+                    tabs[t].cellLayout[c].controller.darkMode = value;
+    }
+    function revealInspector() {
+        navigationOpen = true;
+        navigationPanel.showPage(3);
+    }
+    function updateTabTitle(session) {
+        if (!session || !session.automaticTitle)
+            return;
+        var names = [];
+        for (var i = 0; i < session.maps.length; ++i)
+            if (session.maps[i].primaryPath)
+                names.push(session.maps[i].label);
+        if (names.length)
+            session.title = names.slice(0, 2).join(" × ") + (names.length > 2 ? " +" + (names.length - 2) : "");
+    }
+    Settings {
+        category: "interface"
+        property alias darkAppearance: window.darkAppearance
+        property alias interfaceScale: window.interfaceScale
+        property alias fontScale: window.fontScale
+        property alias reducedMotion: window.reducedMotion
+    }
+    onActiveControllerChanged: if (activeController)
+        activeController.darkMode = darkAppearance
     property var bullseyeInspectorCells: []
     property var bullseyeInspectorSource: null
     property real bullseyeInspectorX: 0
     property real bullseyeInspectorY: 0
     property int bullseyeInspectorRadiusBins: 12
     function showToast(message, kind) {
-        toastText = message
-        toastKind = kind || "info"
-        toastTimer.restart()
+        toastText = message;
+        toastKind = kind || "info";
+        toastTimer.restart();
     }
 
     function trackSummary(index) {
         if (!activeController || index < 0 || index >= activeController.trackCount)
-            return null
-        return activeController.trackSummaries()[index]
+            return null;
+        return activeController.trackSummaries()[index];
     }
 
     function openPlotTrackMenu(index) {
-        var summary = trackSummary(index)
-        if (!summary) return
-        pendingTrackIndex = index
-        plotTrackContextMenu.summary = summary
-        plotTrackContextMenu.popup()
+        var summary = trackSummary(index);
+        if (!summary)
+            return;
+        pendingTrackIndex = index;
+        plotTrackContextMenu.summary = summary;
+        plotTrackContextMenu.popup();
     }
 
     function chooseTrackColor(index, negative) {
-        var summary = trackSummary(index)
-        if (!summary) return
-        pendingTrackIndex = index
+        var summary = trackSummary(index);
+        if (!summary)
+            return;
+        pendingTrackIndex = index;
         if (negative) {
-            trackNegativeColorDialog.selectedColor = summary.negativeColor
-            trackNegativeColorDialog.open()
+            trackNegativeColorDialog.selectedColor = summary.negativeColor;
+            trackNegativeColorDialog.open();
         } else {
-            trackPositiveColorDialog.selectedColor = summary.positiveColor
-            trackPositiveColorDialog.open()
+            trackPositiveColorDialog.selectedColor = summary.positiveColor;
+            trackPositiveColorDialog.open();
         }
     }
 
     function openTrackRangeEditor(index) {
-        var summary = trackSummary(index)
-        if (!summary) return
-        pendingTrackIndex = index
-        trackRangeMin.text = String(summary.min)
-        trackRangeMax.text = String(summary.max)
-        trackRangeLog.checked = summary.logScale
-        trackRangeDialog.open()
+        var summary = trackSummary(index);
+        if (!summary)
+            return;
+        pendingTrackIndex = index;
+        trackRangeMin.text = String(summary.min);
+        trackRangeMax.text = String(summary.max);
+        trackRangeLog.checked = summary.logScale;
+        trackRangeDialog.open();
     }
 
     function openTrackBinEditor(index) {
-        var summary = trackSummary(index)
-        if (!summary) return
-        pendingTrackIndex = index
-        trackBinSizeField.text = String(summary.effectiveBinSize)
-        trackBinSizeDialog.open()
+        var summary = trackSummary(index);
+        if (!summary)
+            return;
+        pendingTrackIndex = index;
+        trackBinSizeField.text = String(summary.effectiveBinSize);
+        trackBinSizeDialog.open();
     }
 
     function openTrackHeightEditor(index) {
-        var summary = trackSummary(index)
-        if (!summary) return
-        pendingTrackIndex = index
-        trackHeightField.text = String(summary.height)
-        trackHeightDialog.open()
+        var summary = trackSummary(index);
+        if (!summary)
+            return;
+        pendingTrackIndex = index;
+        trackHeightField.text = String(summary.height);
+        trackHeightDialog.open();
     }
 
     // Lane geometry for the 1D track strip, indexed by track index. Track
@@ -129,42 +195,48 @@ ApplicationWindow {
     // the space available: clamping each lane to a minimum instead used to
     // push the last tracks past the ruler and off the canvas.
     function trackLaneLayout(trackStart, trackEnd) {
-        var lanes = []
-        if (!activeController || !trackPanelsOpen) return lanes
-        var summaries = activeController.trackSummaries()
-        var totalWeight = 0
+        var lanes = [];
+        if (!activeController || !trackPanelsOpen)
+            return lanes;
+        var summaries = activeController.trackSummaries();
+        var totalWeight = 0;
         for (var i = 0; i < summaries.length; ++i) {
             if (summaries[i].visible && !summaries[i].collapsed)
-                totalWeight += Math.max(20, summaries[i].height)
+                totalWeight += Math.max(20, summaries[i].height);
         }
-        if (totalWeight <= 0) return lanes
-        var available = Math.max(0, trackEnd - trackStart)
-        var cursor = trackStart
+        if (totalWeight <= 0)
+            return lanes;
+        var available = Math.max(0, trackEnd - trackStart);
+        var cursor = trackStart;
         for (var j = 0; j < summaries.length; ++j) {
-            if (!summaries[j].visible || summaries[j].collapsed) continue
-            var size = available * Math.max(20, summaries[j].height) / totalWeight
+            if (!summaries[j].visible || summaries[j].collapsed)
+                continue;
+            var size = available * Math.max(20, summaries[j].height) / totalWeight;
             lanes[j] = {
                 start: cursor,
                 size: size,
                 name: summaries[j].name,
                 source: summaries[j].source,
                 warning: summaries[j].warning
-            }
-            cursor += size
+            };
+            cursor += size;
         }
-        return lanes
+        return lanes;
     }
 
     // Canvas has no eliding, so trim to the run available and mark the cut.
     // One extra measureText beats walking the string a character at a time on
     // every repaint.
     function elideCanvasText(ctx, text, maxWidth) {
-        if (!text || maxWidth <= 0) return ""
-        var full = ctx.measureText(text).width
-        if (full <= maxWidth) return text
-        var keep = Math.floor(text.length * maxWidth / full) - 1
-        if (keep < 1) return ""
-        return text.substring(0, keep) + "…"
+        if (!text || maxWidth <= 0)
+            return "";
+        var full = ctx.measureText(text).width;
+        if (full <= maxWidth)
+            return text;
+        var keep = Math.floor(text.length * maxWidth / full) - 1;
+        if (keep < 1)
+            return "";
+        return text.substring(0, keep) + "…";
     }
 
     readonly property bool edgeGuidesActive: hoverActive && (straightEdgeEnabled || diagonalEdgeEnabled)
@@ -172,273 +244,359 @@ ApplicationWindow {
     // The guides live on their own thin overlays so a moving cursor never
     // forces the track strips themselves to repaint.
     function repaintEdgeGuides() {
-        guideCanvas.requestPaint()
-        topTrackGuide.requestPaint()
-        leftTrackGuide.requestPaint()
+        guideCanvas.requestPaint();
+        topTrackGuide.requestPaint();
+        leftTrackGuide.requestPaint();
     }
 
     // A halo in the strip's own background tone under the dashed line, so the
     // guide reads against the panel and against a saturated bar alike, in
     // either theme.
     function strokeEdgeGuide(ctx, x0, y0, x1, y1) {
-        ctx.setLineDash([])
-        ctx.strokeStyle = Theme.surfaceSunken
-        ctx.lineWidth = 3.5
-        ctx.globalAlpha = 0.75
-        ctx.beginPath()
-        ctx.moveTo(x0, y0)
-        ctx.lineTo(x1, y1)
-        ctx.stroke()
-        ctx.globalAlpha = 1
-        ctx.strokeStyle = Theme.guideLine
-        ctx.lineWidth = 1.25
-        ctx.setLineDash([5, 4])
-        ctx.beginPath()
-        ctx.moveTo(x0, y0)
-        ctx.lineTo(x1, y1)
-        ctx.stroke()
-        ctx.setLineDash([])
+        ctx.setLineDash([]);
+        ctx.strokeStyle = Theme.surfaceSunken;
+        ctx.lineWidth = 3.5;
+        ctx.globalAlpha = 0.75;
+        ctx.beginPath();
+        ctx.moveTo(x0, y0);
+        ctx.lineTo(x1, y1);
+        ctx.stroke();
+        ctx.globalAlpha = 1;
+        ctx.strokeStyle = Theme.guideLine;
+        ctx.lineWidth = 1.25;
+        ctx.setLineDash([5, 4]);
+        ctx.beginPath();
+        ctx.moveTo(x0, y0);
+        ctx.lineTo(x1, y1);
+        ctx.stroke();
+        ctx.setLineDash([]);
     }
 
     function trackTooltipText(index) {
-        var summary = trackSummary(index)
-        if (!summary) return ""
-        var lines = [summary.name]
-        if (summary.source && summary.source !== summary.name) lines.push(summary.source)
-        if (summary.warning) lines.push("⚠ " + summary.warning)
-        return lines.join("\n")
+        var summary = trackSummary(index);
+        if (!summary)
+            return "";
+        var lines = [summary.name];
+        if (summary.source && summary.source !== summary.name)
+            lines.push(summary.source);
+        if (summary.warning)
+            lines.push("⚠ " + summary.warning);
+        return lines.join("\n");
     }
 
     function openTrackNameEditor(index) {
-        var summary = trackSummary(index)
-        if (!summary) return
-        pendingTrackIndex = index
-        trackNameField.text = summary.name
-        trackNameSource.text = summary.source
-        trackNameDialog.open()
+        var summary = trackSummary(index);
+        if (!summary)
+            return;
+        pendingTrackIndex = index;
+        trackNameField.text = summary.name;
+        trackNameSource.text = summary.source;
+        trackNameDialog.open();
     }
 
     function trackIndexAtPanelPosition(position, trackStart, trackEnd) {
-        var lanes = trackLaneLayout(trackStart, trackEnd)
+        var lanes = trackLaneLayout(trackStart, trackEnd);
         for (var j = 0; j < lanes.length; ++j) {
             if (lanes[j] && position >= lanes[j].start && position < lanes[j].start + lanes[j].size)
-                return j
+                return j;
         }
-        return -1
+        return -1;
     }
 
     function formatBp(value) {
         if (value >= 1000000000)
-            return (value / 1000000000).toFixed(value >= 10000000000 ? 1 : 2) + "Gb"
+            return (value / 1000000000).toFixed(value >= 10000000000 ? 1 : 2) + "Gb";
         if (value >= 1000000)
-            return (value / 1000000).toFixed(value >= 10000000 ? 1 : 2) + "Mb"
+            return (value / 1000000).toFixed(value >= 10000000 ? 1 : 2) + "Mb";
         if (value >= 1000)
-            return (value / 1000).toFixed(value >= 10000 ? 1 : 2) + "kb"
-        return Math.round(value) + "bp"
+            return (value / 1000).toFixed(value >= 10000 ? 1 : 2) + "kb";
+        return Math.round(value) + "bp";
     }
 
     function colorRangeLower() {
         if (!activeController)
-            return 0
-        var min = Number(activeController.colorMin)
-        var max = Number(activeController.colorMax)
-        var span = Math.max(1, Math.abs(max - min))
-        return min < 0 ? min - span : Math.max(0, min - span)
+            return 0;
+        var min = Number(activeController.colorMin);
+        var max = Number(activeController.colorMax);
+        var span = Math.max(1, Math.abs(max - min));
+        return min < 0 ? min - span : Math.max(0, min - span);
     }
 
     function legendLowColor() {
-        if (!activeController) return "#ffffff"
-        if (activeController.colorMap === "Viridis") return "#440154"
-        if (activeController.colorMap === "Grayscale") return "#ffffff"
-        if (activeController.colorMap === "Blue-White-Red") return "#2166ac"
-        if (activeController.colorMap === "Custom") return activeController.customLowColor
-        return "#ffffff"
+        if (!activeController)
+            return "#ffffff";
+        if (activeController.colorMap === "Viridis")
+            return "#440154";
+        if (activeController.colorMap === "Grayscale")
+            return "#ffffff";
+        if (activeController.colorMap === "Blue-White-Red")
+            return "#2166ac";
+        if (activeController.colorMap === "Custom")
+            return activeController.customLowColor;
+        return "#ffffff";
     }
 
     function legendHighColor() {
-        if (!activeController) return "#d7191c"
-        if (activeController.colorMap === "Viridis") return "#fde725"
-        if (activeController.colorMap === "Grayscale") return "#111827"
-        if (activeController.colorMap === "Blue-White-Red") return "#b2182b"
-        if (activeController.colorMap === "Custom") return activeController.customHighColor
-        return "#d7191c"
+        if (!activeController)
+            return "#d7191c";
+        if (activeController.colorMap === "Viridis")
+            return "#fde725";
+        if (activeController.colorMap === "Grayscale")
+            return "#111827";
+        if (activeController.colorMap === "Blue-White-Red")
+            return "#b2182b";
+        if (activeController.colorMap === "Custom")
+            return activeController.customHighColor;
+        return "#d7191c";
     }
 
     function colorRangeUpper() {
         if (!activeController)
-            return 100
-        var min = Number(activeController.colorMin)
-        var max = Number(activeController.colorMax)
-        var span = Math.max(1, Math.abs(max - min))
-        return max + span
+            return 100;
+        var min = Number(activeController.colorMin);
+        var max = Number(activeController.colorMax);
+        var span = Math.max(1, Math.abs(max - min));
+        return max + span;
     }
 
-    ListModel { id: tabModel }
-    Timer { id: toastTimer; interval: 3200; onTriggered: toastText = "" }
-    Menu {
+    ListModel {
+        id: tabModel
+    }
+    Timer {
+        id: toastTimer
+        interval: 3200
+        onTriggered: toastText = ""
+    }
+    NewTabDialog {
         id: newTabMenu
-        MenuItem { text: "Single map"; onTriggered: addTab("single") }
-        MenuItem { text: "Multi-map"; onTriggered: addTab("multi-map") }
-        MenuItem { text: "Multi-region (BEDPE)"; onTriggered: addTab("multi-region") }
-        MenuItem { text: "Maps × regions"; onTriggered: addTab("map-region") }
-        MenuItem { text: "Pairwise regions"; onTriggered: addTab("pairwise") }
-        MenuSeparator {}
-        MenuItem { text: "45° diagonal heatmaps"; onTriggered: addTab("rotated-45") }
-        MenuItem { text: "SIP bullseye"; onTriggered: addTab("bullseye") }
-        MenuItem { text: "Virtual 4C"; onTriggered: addTab("virtual-4c") }
-        MenuItem { text: "Experimental processing"; onTriggered: addTab("processing") }
+        applicationWindow: window
+        x: (window.width - width) / 2
+        y: Math.max(16, (window.height - height) / 2)
+        onTabChosen: function (type) {
+            addTab(type);
+        }
+    }
+    AppSettingsDialog {
+        id: applicationSettings
+        applicationWindow: window
+        controller: activeController
+        x: (window.width - width) / 2
+        y: Math.max(16, (window.height - height) / 2)
+    }
+    Dialog {
+        id: renameTabDialog
+        x: (window.width - width) / 2
+        y: Math.max(16, (window.height - height) / 2)
+        title: "Rename tab"
+        modal: true
+        standardButtons: Dialog.Ok | Dialog.Cancel
+        background: DialogFrame {}
+        onOpened: {
+            tabNameField.text = activeTab ? activeTab.title : "";
+            tabNameField.forceActiveFocus();
+            tabNameField.selectAll();
+        }
+        onAccepted: if (activeTab && tabNameField.text.trim().length) {
+            activeTab.automaticTitle = false;
+            activeTab.title = tabNameField.text.trim();
+        }
+        AppTextField {
+            id: tabNameField
+            width: 300
+            Accessible.name: "Tab name"
+            onAccepted: renameTabDialog.accept()
+        }
     }
 
     function createTabSession(type) {
-        var session = Qt.createQmlObject("import Carton; TabSession {}", window)
-        session.initialize(type || "single")
-        session.titleChanged.connect(function() {
-            var index = tabs.indexOf(session)
-            if (index >= 0) tabModel.setProperty(index, "title", session.title)
-        })
-        session.activeCellChanged.connect(function() {
+        var session = Qt.createQmlObject("import Carton; TabSession { property bool automaticTitle: true }", window);
+        session.initialize(type || "single");
+        session.titleChanged.connect(function () {
+            var index = tabs.indexOf(session);
+            if (index >= 0)
+                tabModel.setProperty(index, "title", session.title);
+        });
+        session.activeCellChanged.connect(function () {
             if (session === activeTab) {
-                activeController = session.activeController
-                syncControlModels()
-                if (session.type === "single") Qt.callLater(plotFrame.fitControllerToCanvas)
+                activeController = session.activeController;
+                syncControlModels();
+                if (session.type === "single")
+                    Qt.callLater(plotFrame.fitControllerToCanvas);
             }
-        })
-        session.cellsChanged.connect(function() {
+        });
+        session.cellsChanged.connect(function () {
+            for (var c = 0; c < session.cellLayout.length; ++c)
+                if (session.cellLayout[c].controller)
+                    session.cellLayout[c].controller.darkMode = window.darkAppearance;
+            updateTabTitle(session);
             if (session === activeTab) {
-                activeController = session.activeController
-                syncControlModels()
+                activeController = session.activeController;
+                syncControlModels();
             }
-        })
-        session.errorOccurred.connect(function(message) { showToast(message, "error") })
-        return session
+        });
+        session.errorOccurred.connect(function (message) {
+            showToast(message, "error");
+        });
+        for (var c = 0; c < session.cellLayout.length; ++c)
+            if (session.cellLayout[c].controller)
+                session.cellLayout[c].controller.darkMode = window.darkAppearance;
+        return session;
     }
 
     function addTab(type) {
-        var session = createTabSession(type || "single")
-        tabs.push(session)
-        tabs = tabs.slice()
-        tabSerial += 1
-        var initialTitle = session.typeLabel + " " + tabSerial
-        tabModel.append({ "title": initialTitle, "type": session.type })
-        session.title = initialTitle
-        tabBar.currentIndex = tabs.length - 1
-        setActiveTab(tabBar.currentIndex)
+        var session = createTabSession(type || "single");
+        tabs.push(session);
+        tabs = tabs.slice();
+        tabSerial += 1;
+        var initialTitle = session.typeLabel + " " + tabSerial;
+        tabModel.append({
+            "title": initialTitle,
+            "type": session.type
+        });
+        session.title = initialTitle;
+        tabBar.currentIndex = tabs.length - 1;
+        setActiveTab(tabBar.currentIndex);
     }
 
     function closeCurrentTab() {
-        if (tabs.length <= 1)
-            return
-        var index = tabBar.currentIndex
-        var session = tabs[index]
-        tabs.splice(index, 1)
-        tabs = tabs.slice()
-        tabModel.remove(index)
-        session.destroy()
-        tabBar.currentIndex = Math.min(index, tabs.length - 1)
-        setActiveTab(tabBar.currentIndex)
+        closeTab(tabBar.currentIndex);
+    }
+    function closeTab(index) {
+        if (tabs.length <= 1 || index < 0 || index >= tabs.length)
+            return;
+        var selected = tabBar.currentIndex;
+        var session = tabs[index];
+        for (var c = 0; c < session.cellLayout.length; ++c)
+            if (session.cellLayout[c].controller === lastClearedController)
+                lastClearedController = null;
+        tabs.splice(index, 1);
+        tabs = tabs.slice();
+        tabModel.remove(index);
+        session.destroy();
+        tabBar.currentIndex = Math.max(0, Math.min(index < selected ? selected - 1 : selected, tabs.length - 1));
+        setActiveTab(tabBar.currentIndex);
     }
 
     function openBullseyeAt(sourceController, fx, fy) {
-        if (!sourceController) return
-        var sourceTab = activeTab
-        var sourceMaps = sourceTab ? sourceTab.maps : []
-        var resolution = Math.max(1, sourceController.resolution)
-        var centerX = Math.floor((sourceController.x0 + (sourceController.x1 - sourceController.x0) * fx) / resolution) * resolution
-        var centerY = Math.floor((sourceController.y0 + (sourceController.y1 - sourceController.y0) * fy) / resolution) * resolution
-        addTab("bullseye")
-        while (activeTab.mapCount < sourceMaps.length) activeTab.addMap()
-        while (activeTab.mapCount > Math.max(1, sourceMaps.length)) activeTab.removeMap(activeTab.mapCount - 1)
+        if (!sourceController)
+            return;
+        var sourceTab = activeTab;
+        var sourceMaps = sourceTab ? sourceTab.maps : [];
+        var resolution = Math.max(1, sourceController.resolution);
+        var centerX = Math.floor((sourceController.x0 + (sourceController.x1 - sourceController.x0) * fx) / resolution) * resolution;
+        var centerY = Math.floor((sourceController.y0 + (sourceController.y1 - sourceController.y0) * fy) / resolution) * resolution;
+        addTab("bullseye");
+        while (activeTab.mapCount < sourceMaps.length)
+            activeTab.addMap();
+        while (activeTab.mapCount > Math.max(1, sourceMaps.length))
+            activeTab.removeMap(activeTab.mapCount - 1);
         for (var i = 0; i < sourceMaps.length; ++i) {
             if (sourceMaps[i].primaryPath && sourceMaps[i].primaryPath.length > 0)
-                activeTab.setPrimaryFile(i, sourceMaps[i].primaryPath)
+                activeTab.setPrimaryFile(i, sourceMaps[i].primaryPath);
             if (sourceMaps[i].controlPath && sourceMaps[i].controlPath.length > 0)
-                activeTab.setControlFile(i, sourceMaps[i].controlPath)
+                activeTab.setControlFile(i, sourceMaps[i].controlPath);
         }
-        activeTab.bullseyeCenterX = centerX
-        activeTab.bullseyeCenterY = centerY
-        activeTab.bullseyePinned = false
+        activeTab.bullseyeCenterX = centerX;
+        activeTab.bullseyeCenterY = centerY;
+        activeTab.bullseyePinned = false;
     }
 
     function updateBullseyeInspector(sourceController, fx, fy) {
-        if (!sourceController || !bullseyeInspector.visible) return
-        var resolution = Math.max(1, sourceController.resolution)
-        bullseyeInspectorSource = sourceController
-        bullseyeInspectorX = Math.floor((sourceController.x0 + (sourceController.x1 - sourceController.x0) * fx) / resolution) * resolution
-        bullseyeInspectorY = Math.floor((sourceController.y0 + (sourceController.y1 - sourceController.y0) * fy) / resolution) * resolution
+        if (!sourceController || !bullseyeInspector.visible)
+            return;
+        var resolution = Math.max(1, sourceController.resolution);
+        bullseyeInspectorSource = sourceController;
+        bullseyeInspectorX = Math.floor((sourceController.x0 + (sourceController.x1 - sourceController.x0) * fx) / resolution) * resolution;
+        bullseyeInspectorY = Math.floor((sourceController.y0 + (sourceController.y1 - sourceController.y0) * fy) / resolution) * resolution;
     }
 
     function showBullseyeInspector(sourceController, fx, fy) {
-        if (!sourceController || !activeTab) return
-        bullseyeInspectorCells = activeTab.cells
+        if (!sourceController || !activeTab)
+            return;
+        bullseyeInspectorCells = activeTab.cellLayout;
         for (var i = 0; i < bullseyeInspectorCells.length; ++i)
             if (bullseyeInspectorCells[i].controller)
-                bullseyeInspectorCells[i].controller.setAnalysisPaddingBins(bullseyeInspectorRadiusBins + 2)
-        bullseyeInspector.open()
-        updateBullseyeInspector(sourceController, fx, fy)
+                bullseyeInspectorCells[i].controller.setAnalysisPaddingBins(bullseyeInspectorRadiusBins + 2);
+        bullseyeInspector.open();
+        updateBullseyeInspector(sourceController, fx, fy);
     }
 
     function setBullseyeInspectorRadius(value) {
-        bullseyeInspectorRadiusBins = Math.max(1, Math.min(100, Math.round(value)))
+        bullseyeInspectorRadiusBins = Math.max(1, Math.min(100, Math.round(value)));
         for (var i = 0; i < bullseyeInspectorCells.length; ++i)
             if (bullseyeInspectorCells[i].controller)
-                bullseyeInspectorCells[i].controller.setAnalysisPaddingBins(bullseyeInspectorRadiusBins + 2)
+                bullseyeInspectorCells[i].controller.setAnalysisPaddingBins(bullseyeInspectorRadiusBins + 2);
     }
 
     function setActiveTab(index) {
         if (index < 0 || index >= tabs.length)
-            return
-        activeTab = tabs[index]
-        activeController = activeTab.activeController
-        syncControlModels()
-        if (activeTab.type === "single") Qt.callLater(plotFrame.fitControllerToCanvas)
+            return;
+        activeTab = tabs[index];
+        activeController = activeTab.activeController;
+        syncControlModels();
+        if (activeTab.type === "single")
+            Qt.callLater(plotFrame.fitControllerToCanvas);
     }
 
     function syncControlModels() {
         if (!activeController)
-            return
-        navigationPanel.syncControllerModels()
+            return;
+        navigationPanel.syncControllerModels();
+        mapNavigation.syncModels();
     }
 
     function exportWorkspace(url) {
-        var states = []
-        for (var i = 0; i < tabs.length; ++i) states.push(tabs[i].state())
-        if (DatasetRegistry.exportWorkspace(url, states)) showToast("Workspace exported", "success")
-        else showToast("Workspace export failed", "error")
+        var states = [];
+        for (var i = 0; i < tabs.length; ++i)
+            states.push(tabs[i].state());
+        if (DatasetRegistry.exportWorkspace(url, states))
+            showToast("Workspace exported", "success");
+        else
+            showToast("Workspace export failed", "error");
     }
 
     function importWorkspace(url) {
-        var states = DatasetRegistry.importWorkspace(url)
+        var states = DatasetRegistry.importWorkspace(url);
         if (!states || states.length === 0) {
-            showToast("Invalid CARTON workspace", "error")
-            return
+            showToast("Invalid CARTON workspace", "error");
+            return;
         }
-        for (var old = 0; old < tabs.length; ++old) tabs[old].destroy()
-        tabs = []
-        tabModel.clear()
+        for (var old = 0; old < tabs.length; ++old)
+            tabs[old].destroy();
+        tabs = [];
+        tabModel.clear();
         for (var i = 0; i < states.length; ++i) {
-            var session = createTabSession(states[i].tabType || "single")
-            tabs.push(session)
-            tabModel.append({ "title": states[i].title || session.typeLabel, "type": states[i].tabType || "single" })
-            session.restoreState(states[i])
+            var session = createTabSession(states[i].tabType || "single");
+            tabs.push(session);
+            tabModel.append({
+                "title": states[i].title || session.typeLabel,
+                "type": states[i].tabType || "single"
+            });
+            session.automaticTitle = false;
+            session.restoreState(states[i]);
         }
-        tabs = tabs.slice()
-        tabBar.currentIndex = 0
-        setActiveTab(0)
-        showToast("Workspace imported", "success")
+        tabs = tabs.slice();
+        tabBar.currentIndex = 0;
+        setActiveTab(0);
+        showToast("Workspace imported", "success");
     }
 
     Component.onCompleted: {
-        var initialType = "single"
-        var initialRegions = ""
-        var initialRegionFormat = ""
+        var initialType = "single";
+        var initialRegions = "";
+        var initialRegionFormat = "";
         for (var i = 0; i < Qt.application.arguments.length; ++i) {
-            var argument = String(Qt.application.arguments[i])
-            if (argument.indexOf("--tab-type=") === 0) initialType = argument.substring(11)
-            else if (argument.indexOf("--regions=") === 0) initialRegions = argument.substring(10)
-            else if (argument.indexOf("--regions-format=") === 0) initialRegionFormat = argument.substring(17)
+            var argument = String(Qt.application.arguments[i]);
+            if (argument.indexOf("--tab-type=") === 0)
+                initialType = argument.substring(11);
+            else if (argument.indexOf("--regions=") === 0)
+                initialRegions = argument.substring(10);
+            else if (argument.indexOf("--regions-format=") === 0)
+                initialRegionFormat = argument.substring(17);
         }
-        addTab(initialType)
-        if (initialRegions.length > 0 && activeTab) activeTab.loadRegionsAsync(initialRegions, initialRegionFormat)
+        addTab(initialType);
+        if (initialRegions.length > 0 && activeTab)
+            activeTab.loadRegionsAsync(initialRegions, initialRegionFormat);
     }
 
     FileDialog {
@@ -447,7 +605,7 @@ ApplicationWindow {
         nameFilters: ["Hi-C files (*.hic)", "All files (*)"]
         onAccepted: {
             if (activeTab)
-                activeTab.setPrimaryFile(activeTab.activeCellIndex, selectedFile)
+                activeTab.setPrimaryFile(activeTab.activeCellIndex, selectedFile);
         }
     }
 
@@ -457,7 +615,7 @@ ApplicationWindow {
         nameFilters: ["Hi-C files (*.hic)", "All files (*)"]
         onAccepted: {
             if (activeTab)
-                activeTab.setControlFile(activeTab.activeCellIndex, selectedFile)
+                activeTab.setControlFile(activeTab.activeCellIndex, selectedFile);
         }
     }
 
@@ -467,9 +625,9 @@ ApplicationWindow {
         fileMode: FileDialog.OpenFiles
         nameFilters: ["Genomics tracks (*.bed *.bed.gz *.bedgraph *.bedGraph *.bedgraph.gz *.wig *.wig.gz *.bw *.bigWig *.bigwig *.bb *.bigBed *.bigbed *.txt *.tsv)", "All files (*)"]
         onAccepted: if (activeTab) {
-            trackPanelsOpen = true
+            trackPanelsOpen = true;
             for (var i = 0; i < selectedFiles.length; ++i)
-                activeTab.loadTrack(selectedFiles[i], activeTab.layerScope)
+                activeTab.loadTrack(selectedFiles[i], activeTab.layerScope);
         }
     }
 
@@ -480,37 +638,37 @@ ApplicationWindow {
         nameFilters: ["BEDPE annotations (*.bedpe *.txt *.tsv)", "All files (*)"]
         onAccepted: if (activeTab) {
             for (var i = 0; i < selectedFiles.length; ++i)
-                activeTab.loadAnnotations(selectedFiles[i], activeTab.layerScope)
+                activeTab.loadAnnotations(selectedFiles[i], activeTab.layerScope);
         }
     }
 
     FileDialog {
         id: regionDialog
         property string regionFormat: "bedpe"
-        title: regionFormat === "bed" ? "Load BED regions" :
-               (regionFormat === "bedpe-as-bed" ? "Project BEDPE endpoints" : "Load BEDPE regions")
-        nameFilters: regionFormat === "bed" ? ["BED regions (*.bed *.txt *.tsv)", "All files (*)"]
-                                             : ["BEDPE regions (*.bedpe *.txt *.tsv)", "All files (*)"]
-        onAccepted: if (activeTab) activeTab.loadRegionsAsync(selectedFile, regionFormat)
+        title: regionFormat === "bed" ? "Load BED regions" : (regionFormat === "bedpe-as-bed" ? "Project BEDPE endpoints" : "Load BEDPE regions")
+        nameFilters: regionFormat === "bed" ? ["BED regions (*.bed *.txt *.tsv)", "All files (*)"] : ["BEDPE regions (*.bedpe *.txt *.tsv)", "All files (*)"]
+        onAccepted: if (activeTab)
+            activeTab.loadRegionsAsync(selectedFile, regionFormat)
     }
 
     FileDialog {
         id: cytobandDialog
         title: "Load Cytobands"
         nameFilters: ["UCSC cytobands (*.txt *.tsv *.bed)", "All files (*)"]
-        onAccepted: if (activeController) activeController.loadCytobands(selectedFile)
+        onAccepted: if (activeController)
+            activeController.loadCytobands(selectedFile)
     }
 
     FileDialog {
         id: importStateDialog
-        title: "Import CARTON state"
+        title: "Open workspace"
         nameFilters: ["CARTON state (*.json)", "All files (*)"]
         onAccepted: importWorkspace(selectedFile)
     }
 
     FileDialog {
         id: exportStateDialog
-        title: "Export CARTON state"
+        title: "Save workspace"
         fileMode: FileDialog.SaveFile
         defaultSuffix: "json"
         nameFilters: ["CARTON state (*.json)", "All files (*)"]
@@ -523,7 +681,8 @@ ApplicationWindow {
         fileMode: FileDialog.SaveFile
         defaultSuffix: "pdf"
         nameFilters: ["PDF files (*.pdf)", "All files (*)"]
-        onAccepted: if (activeController) activeController.exportFigurePdf(selectedFile, exportWidth.value, exportHeight.value)
+        onAccepted: if (activeController)
+            activeController.exportFigurePdf(selectedFile, exportWidth.value, exportHeight.value)
     }
 
     FileDialog {
@@ -534,9 +693,9 @@ ApplicationWindow {
         nameFilters: ["PNG image (*.png)"]
         onAccepted: if (activeController) {
             if (activeController.exportFigurePng(selectedFile, exportWidth.value, exportHeight.value))
-                showToast("PNG image exported", "success")
+                showToast("PNG image exported", "success");
             else
-                showToast("PNG export failed", "error")
+                showToast("PNG export failed", "error");
         }
     }
 
@@ -548,9 +707,9 @@ ApplicationWindow {
         nameFilters: ["Tab-separated values (*.tsv)", "Comma-separated values (*.csv)"]
         onAccepted: if (activeController) {
             if (activeController.exportVisibleMatrix(selectedFile))
-                showToast("Visible matrix exported", "success")
+                showToast("Visible matrix exported", "success");
             else
-                showToast("Matrix export failed", "error")
+                showToast("Matrix export failed", "error");
         }
     }
 
@@ -560,7 +719,8 @@ ApplicationWindow {
         fileMode: FileDialog.SaveFile
         defaultSuffix: "bedpe"
         nameFilters: ["BEDPE files (*.bedpe)", "All files (*)"]
-        onAccepted: if (activeController && pendingAnnotationLayerExport >= 0) activeController.exportAnnotationLayer(pendingAnnotationLayerExport, selectedFile)
+        onAccepted: if (activeController && pendingAnnotationLayerExport >= 0)
+            activeController.exportAnnotationLayer(pendingAnnotationLayerExport, selectedFile)
     }
 
     Dialog {
@@ -579,15 +739,15 @@ ApplicationWindow {
             }
         }
         onAccepted: if (activeTab) {
-            trackPanelsOpen = true
-            activeTab.loadTrackFromPath(urlField.text, activeTab.layerScope)
+            trackPanelsOpen = true;
+            activeTab.loadTrackFromPath(urlField.text, activeTab.layerScope);
         }
     }
 
     Dialog {
         id: saveNameDialog
         property string mode: "location"
-        title: mode === "state" ? "Save Current State" : "Save Current Location"
+        title: mode === "state" ? "Save Current State" : "Save Bookmark"
         modal: true
         standardButtons: Dialog.Ok | Dialog.Cancel
         width: 360
@@ -600,9 +760,9 @@ ApplicationWindow {
         onAccepted: {
             if (activeController) {
                 if (mode === "state")
-                    activeController.saveCurrentState(saveNameField.text)
+                    activeController.saveCurrentState(saveNameField.text);
                 else
-                    activeController.saveCurrentLocation(saveNameField.text)
+                    activeController.saveCurrentLocation(saveNameField.text);
             }
         }
     }
@@ -619,10 +779,28 @@ ApplicationWindow {
             columns: 2
             rowSpacing: 10
             columnSpacing: 12
-            Label { text: "Width"; color: Theme.textSecondary }
-            SpinBox { id: exportWidth; from: 300; to: 10000; value: 1800; editable: true }
-            Label { text: "Height"; color: Theme.textSecondary }
-            SpinBox { id: exportHeight; from: 300; to: 10000; value: 1800; editable: true }
+            Label {
+                text: "Width"
+                color: Theme.textSecondary
+            }
+            SpinBox {
+                id: exportWidth
+                from: 300
+                to: 10000
+                value: 1800
+                editable: true
+            }
+            Label {
+                text: "Height"
+                color: Theme.textSecondary
+            }
+            SpinBox {
+                id: exportHeight
+                from: 300
+                to: 10000
+                value: 1800
+                editable: true
+            }
         }
         onAccepted: exportPdfDialog.open()
     }
@@ -639,7 +817,8 @@ ApplicationWindow {
             anchors.fill: parent
             text: activeController ? activeController.genomeId : ""
         }
-        onAccepted: if (activeController) activeController.renameGenome(genomeNameField.text)
+        onAccepted: if (activeController)
+            activeController.renameGenome(genomeNameField.text)
     }
 
     Dialog {
@@ -676,10 +855,7 @@ ApplicationWindow {
                 Layout.fillWidth: true
                 wrapMode: Text.WordWrap
                 color: Theme.textPrimary
-                text: similarityWarningDialog.requestedLabel + " at " +
-                      similarityWarningDialog.requestedResolution.toLocaleString() +
-                      " bp is finer than 10 kb and can be expensive chromosome-wide. " +
-                      "Continue using only the visible window plus the context below?"
+                text: similarityWarningDialog.requestedLabel + " at " + similarityWarningDialog.requestedResolution.toLocaleString() + " bp is finer than 10 kb and can be expensive chromosome-wide. " + "Continue using only the visible window plus the context below?"
             }
             RowLayout {
                 Layout.fillWidth: true
@@ -695,28 +871,30 @@ ApplicationWindow {
                     value: 64
                     editable: true
                 }
-                Label { text: "bins"; color: Theme.textSecondary }
+                Label {
+                    text: "bins"
+                    color: Theme.textSecondary
+                }
             }
             Label {
                 Layout.fillWidth: true
                 wrapMode: Text.WordWrap
                 color: Theme.textMuted
                 font.pixelSize: Theme.textXs
-                text: "The calculation remains intrachromosomal and reuses matrix symmetry. " +
-                      "The current visible span is about " +
-                      similarityWarningDialog.visibleBins.toLocaleString() + " bins before context."
+                text: "The calculation remains intrachromosomal and reuses matrix symmetry. " + "The current visible span is about " + similarityWarningDialog.visibleBins.toLocaleString() + " bins before context."
             }
         }
         onAccepted: {
             if (targetController)
-                targetController.confirmLocalSimilarityMode(requestedMode, similarityPaddingBins.value)
+                targetController.confirmLocalSimilarityMode(requestedMode, similarityPaddingBins.value);
         }
         // Without this the dialog's Cancel did nothing at all. The prompt can
         // be raised from a resolution change that has already dropped the
         // loaded region, so dismissing it left the map blank until something
         // else happened to trigger a request.
         onRejected: {
-            if (targetController) targetController.declineLocalSimilarityMode()
+            if (targetController)
+                targetController.declineLocalSimilarityMode();
         }
     }
 
@@ -726,9 +904,9 @@ ApplicationWindow {
         selectedColor: activeController ? activeController.customLowColor : "white"
         onAccepted: {
             if (activeController) {
-                activeController.customLowColor = selectedColor
-                activeController.colorMap = "Custom"
-                syncControlModels()
+                activeController.customLowColor = selectedColor;
+                activeController.colorMap = "Custom";
+                syncControlModels();
             }
         }
     }
@@ -739,9 +917,9 @@ ApplicationWindow {
         selectedColor: activeController ? activeController.customHighColor : "#d7191c"
         onAccepted: {
             if (activeController) {
-                activeController.customHighColor = selectedColor
-                activeController.colorMap = "Custom"
-                syncControlModels()
+                activeController.customHighColor = selectedColor;
+                activeController.colorMap = "Custom";
+                syncControlModels();
             }
         }
     }
@@ -750,15 +928,17 @@ ApplicationWindow {
         id: missingColorDialog
         title: "Missing Value Color"
         selectedColor: activeController ? activeController.missingValueColor : Theme.missingData
-        onAccepted: if (activeController) activeController.missingValueColor = selectedColor
+        onAccepted: if (activeController)
+            activeController.missingValueColor = selectedColor
     }
 
     ColorDialog {
         id: trackPositiveColorDialog
         title: "Track Color"
         onAccepted: {
-            var summary = trackSummary(pendingTrackIndex)
-            if (summary) activeController.setTrackColor(pendingTrackIndex, selectedColor, summary.negativeColor)
+            var summary = trackSummary(pendingTrackIndex);
+            if (summary)
+                activeController.setTrackColor(pendingTrackIndex, selectedColor, summary.negativeColor);
         }
     }
 
@@ -766,8 +946,9 @@ ApplicationWindow {
         id: trackNegativeColorDialog
         title: "Negative Value Color"
         onAccepted: {
-            var summary = trackSummary(pendingTrackIndex)
-            if (summary) activeController.setTrackColor(pendingTrackIndex, summary.positiveColor, selectedColor)
+            var summary = trackSummary(pendingTrackIndex);
+            if (summary)
+                activeController.setTrackColor(pendingTrackIndex, summary.positiveColor, selectedColor);
         }
     }
 
@@ -778,7 +959,7 @@ ApplicationWindow {
         title: "Override Annotation Color"
         onAccepted: {
             if (targetController && layerIndex >= 0)
-                targetController.setAnnotationLayerColor(layerIndex, selectedColor)
+                targetController.setAnnotationLayerColor(layerIndex, selectedColor);
         }
     }
 
@@ -790,14 +971,14 @@ ApplicationWindow {
         standardButtons: Dialog.Ok | Dialog.Cancel
         background: DialogFrame {}
         onAccepted: {
-            var minimum = Number(trackRangeMin.text)
-            var maximum = Number(trackRangeMax.text)
+            var minimum = Number(trackRangeMin.text);
+            var maximum = Number(trackRangeMax.text);
             if (!activeController || pendingTrackIndex < 0 || !isFinite(minimum) || !isFinite(maximum) || maximum <= minimum) {
-                showToast("Track range requires a maximum greater than the minimum", "error")
-                return
+                showToast("Track range requires a maximum greater than the minimum", "error");
+                return;
             }
-            activeController.setTrackRange(pendingTrackIndex, minimum, maximum, trackRangeLog.checked)
-            activeController.setTrackAutoscale(pendingTrackIndex, false)
+            activeController.setTrackRange(pendingTrackIndex, minimum, maximum, trackRangeLog.checked);
+            activeController.setTrackAutoscale(pendingTrackIndex, false);
         }
         ColumnLayout {
             anchors.fill: parent
@@ -805,12 +986,29 @@ ApplicationWindow {
             GridLayout {
                 Layout.fillWidth: true
                 columns: 2
-                Label { text: "Minimum"; color: Theme.textSecondary }
-                AppTextField { id: trackRangeMin; Layout.fillWidth: true; inputMethodHints: Qt.ImhFormattedNumbersOnly }
-                Label { text: "Maximum"; color: Theme.textSecondary }
-                AppTextField { id: trackRangeMax; Layout.fillWidth: true; inputMethodHints: Qt.ImhFormattedNumbersOnly }
+                Label {
+                    text: "Minimum"
+                    color: Theme.textSecondary
+                }
+                AppTextField {
+                    id: trackRangeMin
+                    Layout.fillWidth: true
+                    inputMethodHints: Qt.ImhFormattedNumbersOnly
+                }
+                Label {
+                    text: "Maximum"
+                    color: Theme.textSecondary
+                }
+                AppTextField {
+                    id: trackRangeMax
+                    Layout.fillWidth: true
+                    inputMethodHints: Qt.ImhFormattedNumbersOnly
+                }
             }
-            AppCheckBox { id: trackRangeLog; text: "Log scale" }
+            AppCheckBox {
+                id: trackRangeLog
+                text: "Log scale"
+            }
         }
     }
 
@@ -822,17 +1020,20 @@ ApplicationWindow {
         standardButtons: Dialog.Ok | Dialog.Cancel
         background: DialogFrame {}
         onAccepted: {
-            var value = Math.round(Number(trackBinSizeField.text))
+            var value = Math.round(Number(trackBinSizeField.text));
             if (!activeController || pendingTrackIndex < 0 || !isFinite(value) || value < 1) {
-                showToast("Bin size must be a positive number of base pairs", "error")
-                return
+                showToast("Bin size must be a positive number of base pairs", "error");
+                return;
             }
-            activeController.setTrackBinSize(pendingTrackIndex, value)
+            activeController.setTrackBinSize(pendingTrackIndex, value);
         }
         ColumnLayout {
             anchors.fill: parent
             spacing: 8
-            Label { text: "Bin size (bp)"; color: Theme.textSecondary }
+            Label {
+                text: "Bin size (bp)"
+                color: Theme.textSecondary
+            }
             AppTextField {
                 id: trackBinSizeField
                 Layout.fillWidth: true
@@ -856,20 +1057,28 @@ ApplicationWindow {
         standardButtons: Dialog.Ok | Dialog.Cancel
         background: DialogFrame {}
         onAccepted: {
-            if (!activeController || pendingTrackIndex < 0) return
-            var value = trackNameField.text.trim()
-            if (value.length > 0) activeController.setTrackName(pendingTrackIndex, value)
+            if (!activeController || pendingTrackIndex < 0)
+                return;
+            var value = trackNameField.text.trim();
+            if (value.length > 0)
+                activeController.setTrackName(pendingTrackIndex, value);
         }
         ColumnLayout {
             anchors.fill: parent
             spacing: 8
-            Label { text: "Track name"; color: Theme.textSecondary }
+            Label {
+                text: "Track name"
+                color: Theme.textSecondary
+            }
             AppTextField {
                 id: trackNameField
                 Layout.fillWidth: true
                 onAccepted: trackNameDialog.accept()
             }
-            Label { text: "Source"; color: Theme.textSecondary }
+            Label {
+                text: "Source"
+                color: Theme.textSecondary
+            }
             Label {
                 id: trackNameSource
                 Layout.fillWidth: true
@@ -888,126 +1097,209 @@ ApplicationWindow {
         standardButtons: Dialog.Ok | Dialog.Cancel
         background: DialogFrame {}
         onAccepted: {
-            var value = Math.round(Number(trackHeightField.text))
-            if (!activeController || pendingTrackIndex < 0 || !isFinite(value)) return
-            activeController.setTrackHeight(pendingTrackIndex, value)
+            var value = Math.round(Number(trackHeightField.text));
+            if (!activeController || pendingTrackIndex < 0 || !isFinite(value))
+                return;
+            activeController.setTrackHeight(pendingTrackIndex, value);
         }
         ColumnLayout {
             anchors.fill: parent
             spacing: 8
-            Label { text: "Height (20 px minimum)"; color: Theme.textSecondary }
+            Label {
+                text: "Height (20 px minimum)"
+                color: Theme.textSecondary
+            }
             AppTextField {
                 id: trackHeightField
                 Layout.fillWidth: true
                 inputMethodHints: Qt.ImhDigitsOnly
-                validator: IntValidator { bottom: 20 }
+                validator: IntValidator {
+                    bottom: 20
+                }
             }
         }
     }
 
     Dialog {
         id: colorScaleDialog
-        title: "Heatmap Colors"
+        objectName: "heatmapColorSettings"
+        title: "Heatmap colors and range"
         modal: true
-        width: 340
-        height: 300
+        x: (window.width - width) / 2
+        y: Math.max(16, (window.height - height) / 2)
+        width: Math.min(420, window.width - 40)
+        height: Math.min(580, window.height - 80)
         standardButtons: Dialog.Close
         background: DialogFrame {}
+        Connections {
+            target: activeController
+            function onColorMaxChanged() {
+                if (!colorScaleDialog.visible || !activeController)
+                    return;
+                if (!quickColorMin.activeFocus)
+                    quickColorMin.text = String(activeController.colorMin);
+                if (!quickColorMax.activeFocus)
+                    quickColorMax.text = String(activeController.colorMax);
+            }
+        }
         onOpened: {
-            if (!activeController) return
-            quickColorMap.currentIndex = Math.max(0, quickColorMap.find(activeController.colorMap))
-            quickColorMin.text = activeController.colorMin.toString()
-            quickColorMax.text = activeController.colorMax.toString()
+            if (!activeController)
+                return;
+            quickColorMap.currentIndex = Math.max(0, quickColorMap.find(activeController.colorMap));
+            quickColorMin.text = activeController.colorMin.toString();
+            quickColorMax.text = activeController.colorMax.toString();
         }
 
-        ColumnLayout {
+        ScrollView {
             anchors.fill: parent
-            spacing: 12
+            contentWidth: availableWidth
+            clip: true
+            ColumnLayout {
+                width: parent.width
+                spacing: 12
 
-            Label { text: "Color map"; color: Theme.textSecondary; font.pixelSize: Theme.textSm }
-            AppComboBox {
-                id: quickColorMap
-                Layout.fillWidth: true
-                model: ["White-Red", "Viridis", "Blue-White-Red", "Grayscale", "Custom"]
-                onActivated: if (activeController) activeController.colorMap = currentText
-            }
-
-            GridLayout {
-                Layout.fillWidth: true
-                columns: 2
-                columnSpacing: 10
-                rowSpacing: 6
-                Label { text: "Minimum"; color: Theme.textSecondary; font.pixelSize: Theme.textSm }
-                Label { text: "Maximum"; color: Theme.textSecondary; font.pixelSize: Theme.textSm }
-                AppTextField {
-                    id: quickColorMin
+                Label {
+                    text: "Color map"
+                    color: Theme.textSecondary
+                    font.pixelSize: Theme.textSm
+                }
+                AppComboBox {
+                    id: quickColorMap
                     Layout.fillWidth: true
-                    inputMethodHints: Qt.ImhFormattedNumbersOnly
-                    onEditingFinished: {
-                        var value = Number(text)
-                        if (activeController && isFinite(value)) activeController.colorMin = value
+                    model: ["White-Red", "Viridis", "Blue-White-Red", "Grayscale", "Custom"]
+                    onActivated: if (activeController)
+                        activeController.colorMap = currentText
+                }
+
+                GridLayout {
+                    Layout.fillWidth: true
+                    columns: 2
+                    columnSpacing: 10
+                    rowSpacing: 6
+                    Label {
+                        text: "Minimum"
+                        color: Theme.textSecondary
+                        font.pixelSize: Theme.textSm
+                    }
+                    Label {
+                        text: "Maximum"
+                        color: Theme.textSecondary
+                        font.pixelSize: Theme.textSm
+                    }
+                    AppTextField {
+                        id: quickColorMin
+                        Layout.fillWidth: true
+                        inputMethodHints: Qt.ImhFormattedNumbersOnly
+                        onEditingFinished: {
+                            var value = Number(text);
+                            if (activeController && isFinite(value))
+                                activeController.colorMin = value;
+                        }
+                    }
+                    AppTextField {
+                        id: quickColorMax
+                        Layout.fillWidth: true
+                        inputMethodHints: Qt.ImhFormattedNumbersOnly
+                        onEditingFinished: {
+                            var value = Number(text);
+                            if (activeController && isFinite(value))
+                                activeController.colorMax = value;
+                        }
                     }
                 }
-                AppTextField {
-                    id: quickColorMax
+
+                Label {
+                    text: activeController && activeController.colorMaxAuto ? "Range: Automatic" : "Range: Manual"
+                    color: Theme.accent
+                }
+                RowLayout {
                     Layout.fillWidth: true
-                    inputMethodHints: Qt.ImhFormattedNumbersOnly
-                    onEditingFinished: {
-                        var value = Number(text)
-                        if (activeController && isFinite(value)) activeController.colorMax = value
+                    Label {
+                        text: "Auto percentile"
+                        color: Theme.textSecondary
+                    }
+                    Slider {
+                        Layout.fillWidth: true
+                        from: 50
+                        to: 100
+                        stepSize: 0.5
+                        value: activeController ? activeController.colorPercentile : 95
+                        onMoved: if (activeController)
+                            activeController.colorPercentile = value
+                        Accessible.name: "Automatic color range percentile"
+                    }
+                    Label {
+                        text: activeController ? activeController.colorPercentile.toFixed(1) + "%" : "95%"
+                        color: Theme.textPrimary
                     }
                 }
-            }
+                RowLayout {
+                    AppCheckBox {
+                        text: "Symmetric range"
+                        checked: activeController && activeController.symmetricColorScale
+                        onToggled: if (activeController)
+                            activeController.symmetricColorScale = checked
+                    }
+                    AppCheckBox {
+                        text: "Transparent zero"
+                        checked: activeController && activeController.zeroTransparent
+                        onToggled: if (activeController)
+                            activeController.zeroTransparent = checked
+                    }
+                }
+                // The dialog offered "Custom" in the combo but had no way to pick
+                // the colours it refers to; they were tucked away in a collapsed
+                // sidebar section.
+                Label {
+                    text: "Custom colors"
+                    color: Theme.textSecondary
+                    font.pixelSize: Theme.textSm
+                }
+                RowLayout {
+                    Layout.fillWidth: true
+                    spacing: 8
+                    ColorSwatchButton {
+                        label: "Low"
+                        swatch: activeController ? activeController.customLowColor : "#2166ac"
+                        dimmed: !activeController || activeController.colorMap !== "Custom"
+                        onClicked: lowColorDialog.open()
+                    }
+                    ColorSwatchButton {
+                        label: "High"
+                        swatch: activeController ? activeController.customHighColor : "#b2182b"
+                        dimmed: !activeController || activeController.colorMap !== "Custom"
+                        onClicked: highColorDialog.open()
+                    }
+                    ColorSwatchButton {
+                        label: "Missing"
+                        swatch: activeController ? activeController.missingValueColor : Theme.missingData
+                        onClicked: missingColorDialog.open()
+                    }
+                }
+                Label {
+                    Layout.fillWidth: true
+                    visible: activeController && activeController.colorMap !== "Custom"
+                    text: "Picking a low or high color switches the map to Custom."
+                    color: Theme.textMuted
+                    font.pixelSize: Theme.textXs
+                    wrapMode: Text.WordWrap
+                }
 
-            // The dialog offered "Custom" in the combo but had no way to pick
-            // the colours it refers to; they were tucked away in a collapsed
-            // sidebar section.
-            Label {
-                text: "Custom colors"
-                color: Theme.textSecondary
-                font.pixelSize: Theme.textSm
-            }
-            RowLayout {
-                Layout.fillWidth: true
-                spacing: 8
-                ColorSwatchButton {
-                    label: "Low"
-                    swatch: activeController ? activeController.customLowColor : "#2166ac"
-                    dimmed: !activeController || activeController.colorMap !== "Custom"
-                    onClicked: lowColorDialog.open()
-                }
-                ColorSwatchButton {
-                    label: "High"
-                    swatch: activeController ? activeController.customHighColor : "#b2182b"
-                    dimmed: !activeController || activeController.colorMap !== "Custom"
-                    onClicked: highColorDialog.open()
-                }
-                ColorSwatchButton {
-                    label: "Missing"
-                    swatch: activeController ? activeController.missingValueColor : Theme.missingData
-                    onClicked: missingColorDialog.open()
-                }
-            }
-            Label {
-                Layout.fillWidth: true
-                visible: activeController && activeController.colorMap !== "Custom"
-                text: "Picking a low or high color switches the map to Custom."
-                color: Theme.textMuted
-                font.pixelSize: Theme.textXs
-                wrapMode: Text.WordWrap
-            }
-
-            RowLayout {
-                Layout.fillWidth: true
-                Item { Layout.fillWidth: true }
-                AppButton {
-                    text: "Reset automatic range"
-                    tonal: true
-                    onClicked: {
-                        if (!activeController) return
-                        activeController.resetColorScale()
-                        quickColorMin.text = activeController.colorMin.toString()
-                        quickColorMax.text = activeController.colorMax.toString()
+                RowLayout {
+                    Layout.fillWidth: true
+                    Item {
+                        Layout.fillWidth: true
+                    }
+                    AppButton {
+                        text: "Use automatic range"
+                        tonal: true
+                        onClicked: {
+                            if (!activeController)
+                                return;
+                            activeController.resetColorScale();
+                            quickColorMin.text = activeController.colorMin.toString();
+                            quickColorMax.text = activeController.colorMax.toString();
+                        }
                     }
                 }
             }
@@ -1017,21 +1309,29 @@ ApplicationWindow {
     menuBar: MenuBar {
         Menu {
             title: "File"
-            MenuItem { text: "Open Primary Hi-C..."; onTriggered: openDialog.open() }
-            MenuItem { text: "Open Control Hi-C..."; onTriggered: controlDialog.open() }
+            MenuItem {
+                text: "Open Primary Hi-C...\t" + window.shortcutHint("O")
+                onTriggered: openDialog.open()
+            }
+            MenuItem {
+                text: "Open Control Hi-C..."
+                onTriggered: controlDialog.open()
+            }
             Menu {
                 id: recentMapsMenu
                 title: "Open Recent"
-                property var entries: activeController && activeController.recentMapCount > 0
-                                      ? activeController.recentMaps() : []
+                property var entries: activeController && activeController.recentMapCount > 0 ? activeController.recentMaps() : []
                 Repeater {
                     model: recentMapsMenu.entries
                     MenuItem {
                         text: modelData
-                        onTriggered: activeController.openRecentMap(modelData)
+                        onTriggered: if (activeTab)
+                            activeTab.setPrimaryFile(activeTab.activeCellIndex, modelData)
                     }
                 }
-                MenuSeparator { visible: recentMapsMenu.entries.length > 0 }
+                MenuSeparator {
+                    visible: recentMapsMenu.entries.length > 0
+                }
                 MenuItem {
                     text: "Clear Recent Files"
                     enabled: recentMapsMenu.entries.length > 0
@@ -1041,16 +1341,18 @@ ApplicationWindow {
             Menu {
                 id: recentControlMapsMenu
                 title: "Open Recent as Control"
-                property var entries: activeController && activeController.recentControlMapCount > 0
-                                      ? activeController.recentControlMaps() : []
+                property var entries: activeController && activeController.recentControlMapCount > 0 ? activeController.recentControlMaps() : []
                 Repeater {
                     model: recentControlMapsMenu.entries
                     MenuItem {
                         text: modelData
-                        onTriggered: activeController.openRecentControlMap(modelData)
+                        onTriggered: if (activeTab)
+                            activeTab.setControlFile(activeTab.activeCellIndex, modelData)
                     }
                 }
-                MenuSeparator { visible: recentControlMapsMenu.entries.length > 0 }
+                MenuSeparator {
+                    visible: recentControlMapsMenu.entries.length > 0
+                }
                 MenuItem {
                     text: "Clear Recent Control Files"
                     enabled: recentControlMapsMenu.entries.length > 0
@@ -1058,57 +1360,132 @@ ApplicationWindow {
                 }
             }
             MenuSeparator {}
-            MenuItem { text: "Load 1D Track..."; onTriggered: trackDialog.open() }
-            MenuItem { text: "Load 1D Track from URL..."; onTriggered: urlDialog.open() }
-            MenuItem { text: "Load 2D Annotations..."; onTriggered: annotationDialog.open() }
-            MenuItem { text: "Load Cytobands..."; onTriggered: cytobandDialog.open() }
-            MenuSeparator {}
-            MenuItem { text: "Import State..."; onTriggered: importStateDialog.open() }
-            MenuItem { text: "Export State..."; enabled: !!activeController; onTriggered: exportStateDialog.open() }
-            MenuItem { text: "Export PDF Figure..."; enabled: !!activeController; onTriggered: exportSizeDialog.open() }
-            MenuItem { text: "Export PNG Image..."; enabled: !!activeController; onTriggered: exportPngDialog.open() }
-            MenuItem { text: "Export Visible Matrix..."; enabled: activeController && activeController.recordCount > 0; onTriggered: exportMatrixDialog.open() }
-            MenuSeparator {}
-            Menu {
-                title: "New Tab"
-                MenuItem { text: "Single map"; onTriggered: addTab("single") }
-                MenuItem { text: "Multi-map"; onTriggered: addTab("multi-map") }
-                MenuItem { text: "Multi-region (BEDPE)"; onTriggered: addTab("multi-region") }
-                MenuItem { text: "Maps × regions"; onTriggered: addTab("map-region") }
-                MenuItem { text: "Pairwise regions"; onTriggered: addTab("pairwise") }
-                MenuSeparator {}
-                MenuItem { text: "45° diagonal heatmaps"; onTriggered: addTab("rotated-45") }
-                MenuItem { text: "SIP bullseye"; onTriggered: addTab("bullseye") }
-                MenuItem { text: "Virtual 4C"; onTriggered: addTab("virtual-4c") }
-                MenuItem { text: "Experimental processing"; onTriggered: addTab("processing") }
+            MenuItem {
+                text: "Load 1D Track..."
+                onTriggered: trackDialog.open()
             }
-            MenuItem { text: "Close Tab"; enabled: tabs.length > 1; onTriggered: closeCurrentTab() }
+            MenuItem {
+                text: "Load 1D Track from URL..."
+                onTriggered: urlDialog.open()
+            }
+            MenuItem {
+                text: "Load 2D Annotations..."
+                onTriggered: annotationDialog.open()
+            }
+            MenuItem {
+                text: "Load Cytobands..."
+                onTriggered: cytobandDialog.open()
+            }
             MenuSeparator {}
-            MenuItem { text: "About CARTON"; onTriggered: aboutDialog.open() }
+            MenuItem {
+                text: "Open Workspace..."
+                onTriggered: importStateDialog.open()
+            }
+            MenuItem {
+                text: "Save Workspace As...\t" + window.shortcutHint("S")
+                enabled: !!activeController
+                onTriggered: exportStateDialog.open()
+            }
+            MenuItem {
+                text: "Export PDF Figure..."
+                enabled: !!activeController
+                onTriggered: exportSizeDialog.open()
+            }
+            MenuItem {
+                text: "Export PNG Image..."
+                enabled: !!activeController
+                onTriggered: exportPngDialog.open()
+            }
+            MenuItem {
+                text: "Export Visible Matrix..."
+                enabled: activeController && activeController.recordCount > 0
+                onTriggered: exportMatrixDialog.open()
+            }
+            MenuSeparator {}
+            MenuItem {
+                text: "New Tab…\t" + window.shortcutHint("T")
+                onTriggered: newTabMenu.open()
+            }
+            MenuItem {
+                text: "Rename Tab…"
+                onTriggered: renameTabDialog.open()
+            }
+
+            MenuItem {
+                text: "Close Tab\t" + window.shortcutHint("W")
+                enabled: tabs.length > 1
+                onTriggered: closeCurrentTab()
+            }
+            MenuSeparator {}
+            MenuItem {
+                text: "About CARTON"
+                onTriggered: aboutDialog.open()
+            }
         }
         Menu {
             title: "Navigate"
-            MenuItem { text: "Undo Zoom"; enabled: activeController && activeController.canUndoView; onTriggered: activeController.undoView() }
-            MenuItem { text: "Redo Zoom"; enabled: activeController && activeController.canRedoView; onTriggered: activeController.redoView() }
-            MenuItem { text: "Reset View"; enabled: activeController && activeController.filePath.length > 0; onTriggered: activeController.resetView() }
-            MenuItem { text: "Whole Genome All by All"; enabled: activeController && activeController.filePath.length > 0; onTriggered: activeController.setWholeGenomeView() }
-            MenuItem { text: "Jump to Diagonal"; enabled: activeController && activeController.chrX === activeController.chrY; onTriggered: activeController.jumpToDiagonal(contextFx, contextFy) }
-            MenuItem { text: "Copy Current Position"; enabled: !!activeController; onTriggered: activeController.copyPosition(contextFx, contextFy) }
-            MenuItem { text: "Copy Hover Text"; enabled: hoverText.length > 0; onTriggered: activeController.copyText(hoverText) }
-            MenuItem { text: "Copy Top Position"; enabled: !!activeController; onTriggered: activeController.copyTopPosition(contextFx) }
-            MenuItem { text: "Copy Left Position"; enabled: !!activeController; onTriggered: activeController.copyLeftPosition(contextFy) }
+            MenuItem {
+                text: "Go to Locus…\t" + window.shortcutHint("F")
+                enabled: activeController && activeController.filePath.length > 0
+                onTriggered: mapNavigation.focusLocus()
+            }
+            MenuItem {
+                text: "Back in Navigation\t" + window.shortcutHint("Z")
+                enabled: activeController && activeController.canUndoView
+                onTriggered: activeController.undoView()
+            }
+            MenuItem {
+                text: "Forward in Navigation\t" + (Qt.platform.os === "osx" ? "⌘Shift+Z" : "Ctrl+Y")
+                enabled: activeController && activeController.canRedoView
+                onTriggered: activeController.redoView()
+            }
+            MenuItem {
+                text: "Reset View"
+                enabled: activeController && activeController.filePath.length > 0
+                onTriggered: activeController.resetView()
+            }
+            MenuItem {
+                text: "Whole Genome All by All"
+                enabled: activeController && activeController.filePath.length > 0
+                onTriggered: activeController.setWholeGenomeView()
+            }
+            MenuItem {
+                text: "Jump to Diagonal"
+                enabled: activeController && activeController.chrX === activeController.chrY
+                onTriggered: activeController.jumpToDiagonal(contextFx, contextFy)
+            }
+            MenuItem {
+                text: "Copy Current Position"
+                enabled: !!activeController
+                onTriggered: activeController.copyPosition(contextFx, contextFy)
+            }
+            MenuItem {
+                text: "Copy Hover Text"
+                enabled: hoverText.length > 0
+                onTriggered: activeController.copyText(hoverText)
+            }
+            MenuItem {
+                text: "Copy Top Position"
+                enabled: !!activeController
+                onTriggered: activeController.copyTopPosition(contextFx)
+            }
+            MenuItem {
+                text: "Copy Left Position"
+                enabled: !!activeController
+                onTriggered: activeController.copyLeftPosition(contextFy)
+            }
             MenuSeparator {}
             MenuItem {
-                text: "Save Current Location..."
+                text: "Save Bookmark..."
                 enabled: !!activeController
                 onTriggered: {
-                    saveNameDialog.mode = "location"
-                    saveNameField.text = ""
-                    saveNameDialog.open()
+                    saveNameDialog.mode = "location";
+                    saveNameField.text = "";
+                    saveNameDialog.open();
                 }
             }
             Menu {
-                title: "Restore Saved Location"
+                title: "Bookmarks"
                 Repeater {
                     model: activeController ? activeController.savedLocations() : []
                     MenuItem {
@@ -1118,16 +1495,16 @@ ApplicationWindow {
                 }
             }
             MenuItem {
-                text: "Save Current State..."
+                text: "Save Map View Preset..."
                 enabled: !!activeController
                 onTriggered: {
-                    saveNameDialog.mode = "state"
-                    saveNameField.text = ""
-                    saveNameDialog.open()
+                    saveNameDialog.mode = "state";
+                    saveNameField.text = "";
+                    saveNameDialog.open();
                 }
             }
             Menu {
-                title: "Restore Saved State"
+                title: "Map View Presets"
                 Repeater {
                     model: activeController ? activeController.savedStates() : []
                     MenuItem {
@@ -1139,38 +1516,252 @@ ApplicationWindow {
         }
         Menu {
             title: "Display"
-            MenuItem { text: "Darkula Mode"; checkable: true; checked: activeController && activeController.darkMode; onTriggered: if (activeController) activeController.darkMode = checked }
-            MenuItem { text: "Gridlines"; checkable: true; checked: activeController && activeController.showGridlines; onTriggered: if (activeController) activeController.showGridlines = checked }
-            MenuItem { text: "Axis Endpoints Only"; checkable: true; checked: activeController && activeController.axisEndpointsOnly; onTriggered: if (activeController) activeController.axisEndpointsOnly = checked }
-            MenuItem { text: "Chromosome Context"; checkable: true; checked: activeController && activeController.showChromosomeContext; onTriggered: if (activeController) activeController.showChromosomeContext = checked }
-            MenuItem { text: "Display Tiles"; checkable: true; checked: activeController && activeController.showTilesDebug; onTriggered: if (activeController) activeController.showTilesDebug = checked }
-            MenuItem { text: "Hover Text"; checkable: true; checked: hoverTextVisible; onTriggered: hoverTextVisible = checked }
+            MenuItem {
+                text: "Gridlines"
+                checkable: true
+                checked: activeController && activeController.showGridlines
+                onTriggered: if (activeController)
+                    activeController.showGridlines = checked
+            }
+            MenuItem {
+                text: "Axis Endpoints Only"
+                checkable: true
+                checked: activeController && activeController.axisEndpointsOnly
+                onTriggered: if (activeController)
+                    activeController.axisEndpointsOnly = checked
+            }
+            MenuItem {
+                text: "Chromosome Context"
+                checkable: true
+                checked: activeController && activeController.showChromosomeContext
+                onTriggered: if (activeController)
+                    activeController.showChromosomeContext = checked
+            }
+            MenuItem {
+                text: "Hover Text"
+                checkable: true
+                checked: hoverTextVisible
+                onTriggered: hoverTextVisible = checked
+            }
             MenuSeparator {}
-            MenuItem { text: "Navigation Panel"; checkable: true; checked: navigationOpen; onTriggered: navigationOpen = checked }
-            MenuItem { text: "Fullscreen Visualization"; onTriggered: window.visibility = window.visibility === Window.FullScreen ? Window.Windowed : Window.FullScreen }
+            MenuItem {
+                text: "Navigation Panel"
+                checkable: true
+                checked: navigationOpen
+                onTriggered: navigationOpen = checked
+            }
+            MenuItem {
+                text: "Fullscreen Visualization"
+                onTriggered: window.visibility = window.visibility === Window.FullScreen ? Window.Windowed : Window.FullScreen
+            }
             MenuSeparator {}
-            MenuItem { text: "White-Red"; checkable: true; checked: activeController && activeController.colorMap === "White-Red"; onTriggered: if (activeController) activeController.colorMap = "White-Red" }
-            MenuItem { text: "Viridis"; checkable: true; checked: activeController && activeController.colorMap === "Viridis"; onTriggered: if (activeController) activeController.colorMap = "Viridis" }
-            MenuItem { text: "Blue-White-Red"; checkable: true; checked: activeController && activeController.colorMap === "Blue-White-Red"; onTriggered: if (activeController) activeController.colorMap = "Blue-White-Red" }
-            MenuItem { text: "Grayscale"; checkable: true; checked: activeController && activeController.colorMap === "Grayscale"; onTriggered: if (activeController) activeController.colorMap = "Grayscale" }
-            MenuItem { text: "Change Heatmap Low Color..."; onTriggered: lowColorDialog.open() }
-            MenuItem { text: "Change Heatmap High Color..."; onTriggered: highColorDialog.open() }
+            MenuItem {
+                text: "White-Red"
+                checkable: true
+                checked: activeController && activeController.colorMap === "White-Red"
+                onTriggered: if (activeController)
+                    activeController.colorMap = "White-Red"
+            }
+            MenuItem {
+                text: "Viridis"
+                checkable: true
+                checked: activeController && activeController.colorMap === "Viridis"
+                onTriggered: if (activeController)
+                    activeController.colorMap = "Viridis"
+            }
+            MenuItem {
+                text: "Blue-White-Red"
+                checkable: true
+                checked: activeController && activeController.colorMap === "Blue-White-Red"
+                onTriggered: if (activeController)
+                    activeController.colorMap = "Blue-White-Red"
+            }
+            MenuItem {
+                text: "Grayscale"
+                checkable: true
+                checked: activeController && activeController.colorMap === "Grayscale"
+                onTriggered: if (activeController)
+                    activeController.colorMap = "Grayscale"
+            }
+            MenuItem {
+                text: "Change Heatmap Low Color..."
+                onTriggered: lowColorDialog.open()
+            }
+            MenuItem {
+                text: "Change Heatmap High Color..."
+                onTriggered: highColorDialog.open()
+            }
+        }
+        Menu {
+            title: "Settings"
+            MenuItem {
+                text: "Application Settings…"
+                onTriggered: applicationSettings.open()
+            }
         }
         Menu {
             title: "Layers"
-            MenuItem { text: "Add Annotation Layer"; enabled: !!activeController; onTriggered: activeController.addAnnotationLayer("Layer") }
-            MenuItem { text: "Merge Visible Layers"; enabled: !!activeController; onTriggered: activeController.mergeVisibleAnnotationLayers("Merged") }
+            MenuItem {
+                text: "Add Annotation Layer"
+                enabled: !!activeController
+                onTriggered: activeController.addAnnotationLayer("Layer")
+            }
+            MenuItem {
+                text: "Merge Visible Layers"
+                enabled: !!activeController
+                onTriggered: activeController.mergeVisibleAnnotationLayers("Merged")
+            }
             MenuSeparator {}
-            MenuItem { text: "Clear 1D Tracks"; enabled: activeController && activeController.trackCount > 0; onTriggered: activeController.clearTracks() }
-            MenuItem { text: "Clear 2D Annotations"; enabled: activeController && activeController.annotationCount > 0; onTriggered: activeController.clearAnnotations() }
+            MenuItem {
+                text: "Clear 1D Tracks"
+                enabled: activeController && activeController.trackCount > 0
+                onTriggered: clearLayers("tracks")
+            }
+            MenuItem {
+                text: "Clear 2D Annotations"
+                enabled: activeController && activeController.annotationCount > 0
+                onTriggered: clearLayers("annotations")
+            }
         }
     }
 
+    Shortcut {
+        sequences: [StandardKey.Open]
+        onActivated: openDialog.open()
+    }
+    Shortcut {
+        sequences: [StandardKey.AddTab]
+        onActivated: newTabMenu.open()
+    }
+    Shortcut {
+        sequences: [StandardKey.Close]
+        enabled: tabs.length > 1
+        onActivated: closeCurrentTab()
+    }
+    Shortcut {
+        sequences: [StandardKey.Save]
+        onActivated: exportStateDialog.open()
+    }
+    Shortcut {
+        sequences: [StandardKey.Find]
+        onActivated: mapNavigation.focusLocus()
+    }
+    Shortcut {
+        sequences: [StandardKey.Undo]
+        enabled: activeController && !window.activeFocusItemIsText()
+        onActivated: activeController.undoView()
+    }
+    Shortcut {
+        sequences: [StandardKey.Redo]
+        enabled: activeController && !window.activeFocusItemIsText()
+        onActivated: activeController.redoView()
+    }
+    function activeFocusItemIsText() {
+        var item = activeFocusItem;
+        return item instanceof TextInput || item instanceof TextEdit || item instanceof ComboBox || item instanceof SpinBox;
+    }
+    function shortcutHint(key) {
+        return Qt.platform.os === "osx" ? "⌘" + key : "Ctrl+" + key;
+    }
     Shortcut {
         sequence: "F11"
         onActivated: window.visibility = window.visibility === Window.FullScreen ? Window.Windowed : Window.FullScreen
     }
 
+    Menu {
+        id: tabContextMenu
+        MenuItem {
+            text: "Rename Tab…"
+            onTriggered: renameTabDialog.open()
+        }
+        MenuItem {
+            text: "Close Tab"
+            enabled: tabs.length > 1
+            onTriggered: closeCurrentTab()
+        }
+    }
+    readonly property bool activeMapError: activeController && /failed|cannot|not available|could not|unavailable/i.test(activeController.status)
+    footer: ToolBar {
+        objectName: "workspaceStatusBar"
+        implicitHeight: Theme.controlHeight + 8
+        background: Rectangle {
+            color: Theme.surface
+            border.color: Theme.borderSubtle
+        }
+        RowLayout {
+            anchors.fill: parent
+            anchors.leftMargin: 10
+            anchors.rightMargin: 10
+            BusyIndicator {
+                running: activeController && activeController.busy
+                visible: running
+                Layout.preferredWidth: 24
+                Layout.preferredHeight: 24
+            }
+            Label {
+                Layout.fillWidth: true
+                text: toastText.length ? toastText : (activeController ? activeController.status : "Open a Hi-C map to begin")
+                color: (toastKind === "error" && toastText.length) || (!toastText.length && activeMapError) ? Theme.danger : Theme.textPrimary
+                elide: Text.ElideRight
+                ToolTip.visible: statusHover.hovered
+                ToolTip.text: text
+                HoverHandler {
+                    id: statusHover
+                }
+            }
+            AppButton {
+                text: "Undo clear"
+                visible: window.canUndoLayerClear
+                onClicked: undoClearLayers()
+            }
+            Label {
+                visible: activeController && activeController.resolution > 0
+                text: activeController ? activeController.resolution.toLocaleString(Qt.locale(), 'f', 0) + " bp" : ""
+                color: Theme.textSecondary
+            }
+            AppToolButton {
+                text: "Details"
+                Accessible.name: "Show map and status details"
+                onClicked: statusDetails.open()
+            }
+        }
+    }
+    Popup {
+        id: statusDetails
+        parent: Overlay.overlay
+        x: Math.max(8, window.width - width - 12)
+        y: Math.max(8, window.height - height - 48)
+        width: Math.min(500, window.width - 32)
+        padding: 16
+        background: DialogFrame {}
+        contentItem: ColumnLayout {
+            Label {
+                text: "Map status"
+                color: Theme.textPrimary
+                font.weight: Font.DemiBold
+            }
+            Label {
+                Layout.fillWidth: true
+                text: activeController ? activeController.filePath : "No file loaded"
+                wrapMode: Text.WrapAnywhere
+                color: Theme.textSecondary
+            }
+            Label {
+                Layout.fillWidth: true
+                text: activeController ? activeController.status : ""
+                wrapMode: Text.WordWrap
+                color: Theme.textPrimary
+            }
+            Label {
+                text: activeController ? activeController.genomeId + " · " + activeController.matrixDimensions : ""
+                color: Theme.textSecondary
+            }
+            Label {
+                text: "Cache: " + DatasetRegistry.cacheMemoryMB.toFixed(1) + " MB"
+                color: Theme.textSecondary
+            }
+        }
+    }
     SplitView {
         anchors.fill: parent
         orientation: Qt.Horizontal
@@ -1179,8 +1770,8 @@ ApplicationWindow {
             id: navigationPanel
             visible: navigationOpen
             SplitView.preferredWidth: 340
-            SplitView.minimumWidth: 260
-            SplitView.maximumWidth: 520
+            SplitView.minimumWidth: 300
+            SplitView.maximumWidth: Math.min(520, window.width - 420)
             controller: activeController
             tabSession: activeTab
             landscapeMode: window.landscapeMode
@@ -1192,45 +1783,70 @@ ApplicationWindow {
             applicationFontScale: window.fontScale
             reducedMotion: window.reducedMotion
             onToggleRequested: navigationOpen = false
+            onSettingsRequested: applicationSettings.open()
+            onColorSettingsRequested: colorScaleDialog.open()
+            onClearTracksRequested: clearLayers("tracks")
+            onClearAnnotationsRequested: clearLayers("annotations")
             onOpenDatasetRequested: openDialog.open()
             onLoadControlRequested: controlDialog.open()
             onLoadTrackRequested: trackDialog.open()
             onLoadTrackUrlRequested: urlDialog.open()
             onLoadAnnotationsRequested: annotationDialog.open()
-            onPooledResourceRequested: function(resourceId, kind) {
-                if (!activeTab) return
+            onPooledResourceRequested: function (resourceId, kind) {
+                if (!activeTab)
+                    return;
                 if (kind === "hic")
-                    activeTab.setPrimaryFile(activeTab.activeCellIndex, DatasetRegistry.resourcePath(resourceId))
+                    activeTab.setPrimaryFile(activeTab.activeCellIndex, DatasetRegistry.resourcePath(resourceId));
                 else if (kind === "track")
-                    activeTab.loadTrackResource(resourceId, activeTab.layerScope)
+                    activeTab.loadTrackResource(resourceId, activeTab.layerScope);
                 else if (kind === "annotation")
-                    activeTab.loadAnnotationResource(resourceId, activeTab.layerScope)
+                    activeTab.loadAnnotationResource(resourceId, activeTab.layerScope);
             }
-            onPooledControlRequested: function(resourceId) {
-                if (activeTab) activeTab.setControlFile(activeTab.activeCellIndex, DatasetRegistry.resourcePath(resourceId))
+            onPooledControlRequested: function (resourceId) {
+                if (activeTab)
+                    activeTab.setControlFile(activeTab.activeCellIndex, DatasetRegistry.resourcePath(resourceId));
             }
-            onExportAnnotationRequested: function(index) {
-                pendingAnnotationLayerExport = index
-                exportAnnotationDialog.open()
+            onExportAnnotationRequested: function (index) {
+                pendingAnnotationLayerExport = index;
+                exportAnnotationDialog.open();
             }
-            onAnnotationColorRequested: function(index, currentColor) {
-                annotationLayerColorDialog.targetController = activeController
-                annotationLayerColorDialog.layerIndex = index
-                annotationLayerColorDialog.selectedColor = currentColor
-                annotationLayerColorDialog.open()
+            onAnnotationColorRequested: function (index, currentColor) {
+                annotationLayerColorDialog.targetController = activeController;
+                annotationLayerColorDialog.layerIndex = index;
+                annotationLayerColorDialog.selectedColor = currentColor;
+                annotationLayerColorDialog.open();
             }
-            onTrackMenuRequested: function(index) { openPlotTrackMenu(index) }
-            onTrackBinEditorRequested: function(index) { openTrackBinEditor(index) }
-            onLandscapeModeToggled: function(enabled) {
-                window.landscapeMode = enabled
-                Qt.callLater(plotFrame.fitControllerToCanvas)
+            onTrackNameEditorRequested: function (index) {
+                openTrackNameEditor(index);
             }
-            onHoverTextToggled: function(enabled) { window.hoverTextVisible = enabled }
-            onTrackPanelsToggled: function(enabled) { window.trackPanelsOpen = enabled }
-            onMinimapToggled: function(enabled) { window.minimapVisible = enabled }
-            onInterfaceScaleRequested: function(value) { window.interfaceScale = value }
-            onFontScaleRequested: function(value) { window.fontScale = value }
-            onReducedMotionToggled: function(enabled) { window.reducedMotion = enabled }
+            onTrackMenuRequested: function (index) {
+                openPlotTrackMenu(index);
+            }
+            onTrackBinEditorRequested: function (index) {
+                openTrackBinEditor(index);
+            }
+            onLandscapeModeToggled: function (enabled) {
+                window.landscapeMode = enabled;
+                Qt.callLater(plotFrame.fitControllerToCanvas);
+            }
+            onHoverTextToggled: function (enabled) {
+                window.hoverTextVisible = enabled;
+            }
+            onTrackPanelsToggled: function (enabled) {
+                window.trackPanelsOpen = enabled;
+            }
+            onMinimapToggled: function (enabled) {
+                window.minimapVisible = enabled;
+            }
+            onInterfaceScaleRequested: function (value) {
+                window.interfaceScale = value;
+            }
+            onFontScaleRequested: function (value) {
+                window.fontScale = value;
+            }
+            onReducedMotionToggled: function (enabled) {
+                window.reducedMotion = enabled;
+            }
             onLowColorRequested: lowColorDialog.open()
             onHighColorRequested: highColorDialog.open()
             onMissingColorRequested: missingColorDialog.open()
@@ -1253,10 +1869,13 @@ ApplicationWindow {
                 height: 64
                 topRightRadius: Theme.radiusSm
                 bottomRightRadius: Theme.radiusSm
-                color: handleArea.pressed ? Theme.surfacePressed
-                                          : handleArea.containsMouse ? Theme.surfaceHover : Theme.surface
+                color: handleArea.pressed ? Theme.surfacePressed : handleArea.containsMouse ? Theme.surfaceHover : Theme.surface
                 border.color: Theme.borderStrong
-                Behavior on color { ColorAnimation { duration: Theme.reducedMotion ? 0 : Theme.animationFast } }
+                Behavior on color {
+                    ColorAnimation {
+                        duration: Theme.reducedMotion ? 0 : Theme.animationFast
+                    }
+                }
 
                 Text {
                     anchors.centerIn: parent
@@ -1308,30 +1927,55 @@ ApplicationWindow {
                         Repeater {
                             model: tabModel
                             AppTabButton {
-                                text: model.title
-                                width: Math.max(140, implicitWidth)
+                                id: documentTab
+                                required property int index
+                                required property string title
+                                text: title
+                                width: Math.max(180, Math.min(280, implicitWidth + 24))
+                                contentItem: RowLayout {
+                                    Label {
+                                        text: documentTab.text
+                                        color: documentTab.checked ? Theme.textPrimary : Theme.textSecondary
+                                        elide: Text.ElideMiddle
+                                        Layout.fillWidth: true
+                                    }
+                                    AppToolButton {
+                                        text: "×"
+                                        enabled: tabs.length > 1
+                                        Accessible.name: "Close " + documentTab.text
+                                        onClicked: closeTab(documentTab.index)
+                                    }
+                                }
+                                TapHandler {
+                                    acceptedButtons: Qt.RightButton
+                                    onTapped: {
+                                        tabBar.currentIndex = documentTab.index;
+                                        tabContextMenu.popup();
+                                    }
+                                }
                             }
                         }
                     }
 
                     AppToolButton {
                         text: "+"
+                        Accessible.name: "Create tab"
                         onLightSurface: true
                         contentColor: Theme.textSecondary
                         Layout.preferredWidth: 40
-                        onClicked: newTabMenu.popup()
-                    }
-
-                    AppToolButton {
-                        text: "×"
-                        onLightSurface: true
-                        contentColor: Theme.textSecondary
-                        enabled: tabs.length > 1
-                        Layout.preferredWidth: 40
-                        onClicked: closeCurrentTab()
+                        onClicked: newTabMenu.open()
                     }
                 }
 
+                MapNavigationBar {
+                    id: mapNavigation
+                    objectName: "persistentMapNavigation"
+                    Layout.fillWidth: true
+                    controller: activeController
+                    tabSession: activeTab
+                    onInspectRequested: revealInspector()
+                    onColorsRequested: colorScaleDialog.open()
+                }
                 Rectangle {
                     id: viewportArea
                     Layout.fillWidth: true
@@ -1341,40 +1985,40 @@ ApplicationWindow {
                     Connections {
                         target: activeController
                         function onSimilarityCalculationWarning(matrixType, label, resolution, visibleBins) {
-                            similarityWarningDialog.targetController = activeController
-                            similarityWarningDialog.requestedMode = matrixType
-                            similarityWarningDialog.requestedLabel = label
-                            similarityWarningDialog.requestedResolution = resolution
-                            similarityWarningDialog.visibleBins = visibleBins
-                            similarityWarningDialog.open()
+                            similarityWarningDialog.targetController = activeController;
+                            similarityWarningDialog.requestedMode = matrixType;
+                            similarityWarningDialog.requestedLabel = label;
+                            similarityWarningDialog.requestedResolution = resolution;
+                            similarityWarningDialog.visibleBins = visibleBins;
+                            similarityWarningDialog.open();
                         }
                         function onViewChanged() {
-                            topTrackCanvas.requestPaint()
-                            leftTrackCanvas.requestPaint()
-                            annotationCanvas.requestPaint()
-                            repaintEdgeGuides()
+                            topTrackCanvas.requestPaint();
+                            leftTrackCanvas.requestPaint();
+                            annotationCanvas.requestPaint();
+                            repaintEdgeGuides();
                         }
                         function onTracksChanged() {
-                            topTrackCanvas.requestPaint()
-                            leftTrackCanvas.requestPaint()
+                            topTrackCanvas.requestPaint();
+                            leftTrackCanvas.requestPaint();
                         }
                         function onAnnotationsChanged() {
-                            annotationCanvas.requestPaint()
+                            annotationCanvas.requestPaint();
                         }
                         function onCytobandsChanged() {
-                            topTrackCanvas.requestPaint()
-                            leftTrackCanvas.requestPaint()
+                            topTrackCanvas.requestPaint();
+                            leftTrackCanvas.requestPaint();
                         }
                         function onRecordsChanged() {
-                            annotationCanvas.requestPaint()
+                            annotationCanvas.requestPaint();
                         }
                         function onColorMaxChanged() {
                         }
                         function onDisplayOptionsChanged() {
-                            topTrackCanvas.requestPaint()
-                            leftTrackCanvas.requestPaint()
-                            annotationCanvas.requestPaint()
-                            repaintEdgeGuides()
+                            topTrackCanvas.requestPaint();
+                            leftTrackCanvas.requestPaint();
+                            annotationCanvas.requestPaint();
+                            repaintEdgeGuides();
                         }
                     }
 
@@ -1383,29 +2027,39 @@ ApplicationWindow {
                         property int trackIndex: pendingTrackIndex
                         property var summary: ({})
 
-                        MenuItem { text: plotTrackContextMenu.summary.name || "1D track"; enabled: false }
-                        MenuItem { text: "Rename track…"; onTriggered: openTrackNameEditor(plotTrackContextMenu.trackIndex) }
+                        MenuItem {
+                            text: plotTrackContextMenu.summary.name || "1D track"
+                            enabled: false
+                        }
+                        MenuItem {
+                            text: "Rename track…"
+                            onTriggered: openTrackNameEditor(plotTrackContextMenu.trackIndex)
+                        }
                         MenuSeparator {}
                         Menu {
                             title: "Windowing function"
                             enabled: plotTrackContextMenu.summary.renderMode === "signal"
                             MenuItem {
-                                text: "Minimum"; checkable: true
+                                text: "Minimum"
+                                checkable: true
                                 checked: plotTrackContextMenu.summary.reduction === "min"
                                 onTriggered: activeController.setTrackReduction(plotTrackContextMenu.trackIndex, "min")
                             }
                             MenuItem {
-                                text: "Mean"; checkable: true
+                                text: "Mean"
+                                checkable: true
                                 checked: plotTrackContextMenu.summary.reduction === "mean"
                                 onTriggered: activeController.setTrackReduction(plotTrackContextMenu.trackIndex, "mean")
                             }
                             MenuItem {
-                                text: "Maximum"; checkable: true
+                                text: "Maximum"
+                                checkable: true
                                 checked: plotTrackContextMenu.summary.reduction === "max"
                                 onTriggered: activeController.setTrackReduction(plotTrackContextMenu.trackIndex, "max")
                             }
                             MenuItem {
-                                text: "None"; checkable: true
+                                text: "None"
+                                checkable: true
                                 checked: plotTrackContextMenu.summary.reduction === "none"
                                 onTriggered: activeController.setTrackReduction(plotTrackContextMenu.trackIndex, "none")
                             }
@@ -1420,17 +2074,65 @@ ApplicationWindow {
                                 onTriggered: activeController.setTrackBinSize(plotTrackContextMenu.trackIndex, 0)
                             }
                             MenuSeparator {}
-                            MenuItem { text: "1 kb"; checkable: true; checked: plotTrackContextMenu.summary.binSize === 1000; onTriggered: activeController.setTrackBinSize(plotTrackContextMenu.trackIndex, 1000) }
-                            MenuItem { text: "5 kb"; checkable: true; checked: plotTrackContextMenu.summary.binSize === 5000; onTriggered: activeController.setTrackBinSize(plotTrackContextMenu.trackIndex, 5000) }
-                            MenuItem { text: "10 kb"; checkable: true; checked: plotTrackContextMenu.summary.binSize === 10000; onTriggered: activeController.setTrackBinSize(plotTrackContextMenu.trackIndex, 10000) }
-                            MenuItem { text: "25 kb"; checkable: true; checked: plotTrackContextMenu.summary.binSize === 25000; onTriggered: activeController.setTrackBinSize(plotTrackContextMenu.trackIndex, 25000) }
-                            MenuItem { text: "50 kb"; checkable: true; checked: plotTrackContextMenu.summary.binSize === 50000; onTriggered: activeController.setTrackBinSize(plotTrackContextMenu.trackIndex, 50000) }
-                            MenuItem { text: "100 kb"; checkable: true; checked: plotTrackContextMenu.summary.binSize === 100000; onTriggered: activeController.setTrackBinSize(plotTrackContextMenu.trackIndex, 100000) }
-                            MenuItem { text: "250 kb"; checkable: true; checked: plotTrackContextMenu.summary.binSize === 250000; onTriggered: activeController.setTrackBinSize(plotTrackContextMenu.trackIndex, 250000) }
-                            MenuItem { text: "500 kb"; checkable: true; checked: plotTrackContextMenu.summary.binSize === 500000; onTriggered: activeController.setTrackBinSize(plotTrackContextMenu.trackIndex, 500000) }
-                            MenuItem { text: "1 Mb"; checkable: true; checked: plotTrackContextMenu.summary.binSize === 1000000; onTriggered: activeController.setTrackBinSize(plotTrackContextMenu.trackIndex, 1000000) }
+                            MenuItem {
+                                text: "1 kb"
+                                checkable: true
+                                checked: plotTrackContextMenu.summary.binSize === 1000
+                                onTriggered: activeController.setTrackBinSize(plotTrackContextMenu.trackIndex, 1000)
+                            }
+                            MenuItem {
+                                text: "5 kb"
+                                checkable: true
+                                checked: plotTrackContextMenu.summary.binSize === 5000
+                                onTriggered: activeController.setTrackBinSize(plotTrackContextMenu.trackIndex, 5000)
+                            }
+                            MenuItem {
+                                text: "10 kb"
+                                checkable: true
+                                checked: plotTrackContextMenu.summary.binSize === 10000
+                                onTriggered: activeController.setTrackBinSize(plotTrackContextMenu.trackIndex, 10000)
+                            }
+                            MenuItem {
+                                text: "25 kb"
+                                checkable: true
+                                checked: plotTrackContextMenu.summary.binSize === 25000
+                                onTriggered: activeController.setTrackBinSize(plotTrackContextMenu.trackIndex, 25000)
+                            }
+                            MenuItem {
+                                text: "50 kb"
+                                checkable: true
+                                checked: plotTrackContextMenu.summary.binSize === 50000
+                                onTriggered: activeController.setTrackBinSize(plotTrackContextMenu.trackIndex, 50000)
+                            }
+                            MenuItem {
+                                text: "100 kb"
+                                checkable: true
+                                checked: plotTrackContextMenu.summary.binSize === 100000
+                                onTriggered: activeController.setTrackBinSize(plotTrackContextMenu.trackIndex, 100000)
+                            }
+                            MenuItem {
+                                text: "250 kb"
+                                checkable: true
+                                checked: plotTrackContextMenu.summary.binSize === 250000
+                                onTriggered: activeController.setTrackBinSize(plotTrackContextMenu.trackIndex, 250000)
+                            }
+                            MenuItem {
+                                text: "500 kb"
+                                checkable: true
+                                checked: plotTrackContextMenu.summary.binSize === 500000
+                                onTriggered: activeController.setTrackBinSize(plotTrackContextMenu.trackIndex, 500000)
+                            }
+                            MenuItem {
+                                text: "1 Mb"
+                                checkable: true
+                                checked: plotTrackContextMenu.summary.binSize === 1000000
+                                onTriggered: activeController.setTrackBinSize(plotTrackContextMenu.trackIndex, 1000000)
+                            }
                             MenuSeparator {}
-                            MenuItem { text: "Custom…"; onTriggered: openTrackBinEditor(plotTrackContextMenu.trackIndex) }
+                            MenuItem {
+                                text: "Custom…"
+                                onTriggered: openTrackBinEditor(plotTrackContextMenu.trackIndex)
+                            }
                         }
                         MenuSeparator {}
                         MenuItem {
@@ -1450,13 +2152,13 @@ ApplicationWindow {
                             enabled: plotTrackContextMenu.summary.renderMode === "signal"
                             checkable: true
                             checked: !!plotTrackContextMenu.summary.logScale
-                            onTriggered: activeController.setTrackRange(plotTrackContextMenu.trackIndex,
-                                                                        plotTrackContextMenu.summary.min,
-                                                                        plotTrackContextMenu.summary.max,
-                                                                        checked)
+                            onTriggered: activeController.setTrackRange(plotTrackContextMenu.trackIndex, plotTrackContextMenu.summary.min, plotTrackContextMenu.summary.max, checked)
                         }
                         MenuSeparator {}
-                        MenuItem { text: "Change track color…"; onTriggered: chooseTrackColor(plotTrackContextMenu.trackIndex, false) }
+                        MenuItem {
+                            text: "Change track color…"
+                            onTriggered: chooseTrackColor(plotTrackContextMenu.trackIndex, false)
+                        }
                         MenuItem {
                             text: "Change negative-value color…"
                             enabled: plotTrackContextMenu.summary.renderMode === "signal"
@@ -1464,14 +2166,35 @@ ApplicationWindow {
                         }
                         Menu {
                             title: "Track height"
-                            MenuItem { text: "100 px"; onTriggered: activeController.setTrackHeight(plotTrackContextMenu.trackIndex, 100) }
-                            MenuItem { text: "200 px"; onTriggered: activeController.setTrackHeight(plotTrackContextMenu.trackIndex, 200) }
-                            MenuItem { text: "300 px"; onTriggered: activeController.setTrackHeight(plotTrackContextMenu.trackIndex, 300) }
-                            MenuItem { text: "400 px"; onTriggered: activeController.setTrackHeight(plotTrackContextMenu.trackIndex, 400) }
-                            MenuItem { text: "600 px"; onTriggered: activeController.setTrackHeight(plotTrackContextMenu.trackIndex, 600) }
-                            MenuItem { text: "800 px"; onTriggered: activeController.setTrackHeight(plotTrackContextMenu.trackIndex, 800) }
+                            MenuItem {
+                                text: "100 px"
+                                onTriggered: activeController.setTrackHeight(plotTrackContextMenu.trackIndex, 100)
+                            }
+                            MenuItem {
+                                text: "200 px"
+                                onTriggered: activeController.setTrackHeight(plotTrackContextMenu.trackIndex, 200)
+                            }
+                            MenuItem {
+                                text: "300 px"
+                                onTriggered: activeController.setTrackHeight(plotTrackContextMenu.trackIndex, 300)
+                            }
+                            MenuItem {
+                                text: "400 px"
+                                onTriggered: activeController.setTrackHeight(plotTrackContextMenu.trackIndex, 400)
+                            }
+                            MenuItem {
+                                text: "600 px"
+                                onTriggered: activeController.setTrackHeight(plotTrackContextMenu.trackIndex, 600)
+                            }
+                            MenuItem {
+                                text: "800 px"
+                                onTriggered: activeController.setTrackHeight(plotTrackContextMenu.trackIndex, 800)
+                            }
                             MenuSeparator {}
-                            MenuItem { text: "Custom…"; onTriggered: openTrackHeightEditor(plotTrackContextMenu.trackIndex) }
+                            MenuItem {
+                                text: "Custom…"
+                                onTriggered: openTrackHeightEditor(plotTrackContextMenu.trackIndex)
+                            }
                         }
                         MenuSeparator {}
                         MenuItem {
@@ -1484,8 +2207,14 @@ ApplicationWindow {
                             enabled: activeController && plotTrackContextMenu.trackIndex + 1 < activeController.trackCount
                             onTriggered: activeController.moveTrack(plotTrackContextMenu.trackIndex, plotTrackContextMenu.trackIndex + 1)
                         }
-                        MenuItem { text: "Hide track"; onTriggered: activeController.setTrackVisible(plotTrackContextMenu.trackIndex, false) }
-                        MenuItem { text: "Remove track"; onTriggered: activeController.removeTrack(plotTrackContextMenu.trackIndex) }
+                        MenuItem {
+                            text: "Hide track"
+                            onTriggered: activeController.setTrackVisible(plotTrackContextMenu.trackIndex, false)
+                        }
+                        MenuItem {
+                            text: "Remove track"
+                            onTriggered: activeController.removeTrack(plotTrackContextMenu.trackIndex)
+                        }
                     }
 
                     Menu {
@@ -1543,9 +2272,10 @@ ApplicationWindow {
                             checkable: true
                             checked: straightEdgeEnabled
                             onTriggered: {
-                                straightEdgeEnabled = checked
-                                if (checked) diagonalEdgeEnabled = false
-                                repaintEdgeGuides()
+                                straightEdgeEnabled = checked;
+                                if (checked)
+                                    diagonalEdgeEnabled = false;
+                                repaintEdgeGuides();
                             }
                         }
                         MenuItem {
@@ -1554,9 +2284,10 @@ ApplicationWindow {
                             enabled: activeController && activeController.chrX === activeController.chrY
                             checked: diagonalEdgeEnabled
                             onTriggered: {
-                                diagonalEdgeEnabled = checked
-                                if (checked) straightEdgeEnabled = false
-                                repaintEdgeGuides()
+                                diagonalEdgeEnabled = checked;
+                                if (checked)
+                                    straightEdgeEnabled = false;
+                                repaintEdgeGuides();
                             }
                         }
                         MenuItem {
@@ -1581,12 +2312,12 @@ ApplicationWindow {
                         MenuItem {
                             text: "Clear 1D Tracks"
                             enabled: activeController && activeController.trackCount > 0
-                            onTriggered: activeController.clearTracks()
+                            onTriggered: clearLayers("tracks")
                         }
                         MenuItem {
                             text: "Clear 2D Annotations"
                             enabled: activeController && activeController.annotationCount > 0
-                            onTriggered: activeController.clearAnnotations()
+                            onTriggered: clearLayers("annotations")
                         }
                     }
 
@@ -1604,7 +2335,7 @@ ApplicationWindow {
                         onHeightChanged: aspectRefitTimer.restart()
                         function fitControllerToCanvas() {
                             if (activeController && heatmapHost.width > 0 && heatmapHost.height > 0)
-                                activeController.fitViewToAspectRatio(heatmapHost.width / heatmapHost.height)
+                                activeController.fitViewToAspectRatio(heatmapHost.width / heatmapHost.height);
                         }
                         Timer {
                             id: aspectRefitTimer
@@ -1621,10 +2352,11 @@ ApplicationWindow {
                         // how the strip is divided between lanes.
                         readonly property real trackStripFraction: 0.32
                         property int axisSize: {
-                            if (!activeController || !trackPanelsOpen) return 46
-                            var budget = Math.floor(Math.min(plotFrame.width, plotFrame.height) * trackStripFraction) - axisChrome
-                            var tracks = Math.max(0, Math.min(budget, activeController.visibleTrackHeight))
-                            return Math.max(46, axisChrome + tracks)
+                            if (!activeController || !trackPanelsOpen)
+                                return 46;
+                            var budget = Math.floor(Math.min(plotFrame.width, plotFrame.height) * trackStripFraction) - axisChrome;
+                            var tracks = Math.max(0, Math.min(budget, activeController.visibleTrackHeight));
+                            return Math.max(46, axisChrome + tracks);
                         }
 
                         Rectangle {
@@ -1664,141 +2396,151 @@ ApplicationWindow {
                             readonly property real trackTop: activeController && activeController.showChromosomeContext ? 10 : 2
                             readonly property real trackBottom: height - axisLabelHeight - 0.5 - 3
                             onPaint: {
-                                var ctx = getContext("2d")
-                                ctx.reset()
-                                ctx.fillStyle = Theme.surfaceSunken
-                                ctx.fillRect(0, 0, width, height)
-                                if (!activeController) return
-                                var viewStart = activeController.x0
-                                var span = Math.max(1, activeController.x1 - viewStart)
-                                var axisY = height - axisLabelHeight - 0.5
+                                var ctx = getContext("2d");
+                                ctx.reset();
+                                ctx.fillStyle = Theme.surfaceSunken;
+                                ctx.fillRect(0, 0, width, height);
+                                if (!activeController)
+                                    return;
+                                var viewStart = activeController.x0;
+                                var span = Math.max(1, activeController.x1 - viewStart);
+                                var axisY = height - axisLabelHeight - 0.5;
                                 if (activeController.showChromosomeContext) {
-                                    var xBands = activeController.visibleCytobands(true)
+                                    var xBands = activeController.visibleCytobands(true);
                                     if (xBands.length > 0) {
                                         for (var xb = 0; xb < xBands.length; ++xb) {
-                                            var bx0 = (xBands[xb].start - viewStart) / span * width
-                                            var bx1 = (xBands[xb].end - viewStart) / span * width
-                                            ctx.fillStyle = xBands[xb].color
-                                            ctx.fillRect(Math.max(0, bx0), 0, Math.max(1, bx1 - bx0), 8)
+                                            var bx0 = (xBands[xb].start - viewStart) / span * width;
+                                            var bx1 = (xBands[xb].end - viewStart) / span * width;
+                                            ctx.fillStyle = xBands[xb].color;
+                                            ctx.fillRect(Math.max(0, bx0), 0, Math.max(1, bx1 - bx0), 8);
                                         }
                                     } else {
-                                        ctx.fillStyle = activeController.wholeGenomeView ? Theme.borderStrong : Theme.textMuted
-                                        ctx.fillRect(0, 0, width, 8)
+                                        ctx.fillStyle = activeController.wholeGenomeView ? Theme.borderStrong : Theme.textMuted;
+                                        ctx.fillRect(0, 0, width, 8);
                                     }
                                 }
-                                ctx.strokeStyle = Theme.borderStrong
-                                ctx.beginPath()
-                                ctx.moveTo(0, axisY)
-                                ctx.lineTo(width, axisY)
-                                ctx.stroke()
-                                ctx.font = "11px sans-serif"
-                                ctx.fillStyle = Theme.textSecondary
-                                ctx.textBaseline = "top"
-                                var ticks = activeController.axisEndpointsOnly ? 2 : 5
+                                ctx.strokeStyle = Theme.borderStrong;
+                                ctx.beginPath();
+                                ctx.moveTo(0, axisY);
+                                ctx.lineTo(width, axisY);
+                                ctx.stroke();
+                                ctx.font = "11px sans-serif";
+                                ctx.fillStyle = Theme.textSecondary;
+                                ctx.textBaseline = "top";
+                                var ticks = activeController.axisEndpointsOnly ? 2 : 5;
                                 for (var t = 0; t < ticks; t++) {
-                                    var f = ticks === 1 ? 0 : t / (ticks - 1)
-                                    var tx = f * width
-                                    var label = formatBp(viewStart + f * span)
-                                    ctx.strokeStyle = Theme.borderStrong
-                                    ctx.beginPath()
-                                    ctx.moveTo(tx + 0.5, axisY)
-                                    ctx.lineTo(tx + 0.5, axisY + 5)
-                                    ctx.stroke()
-                                    ctx.textAlign = t === 0 ? "left" : (t === ticks - 1 ? "right" : "center")
-                                    ctx.fillText(label, tx, axisY + 6)
+                                    var f = ticks === 1 ? 0 : t / (ticks - 1);
+                                    var tx = f * width;
+                                    var label = formatBp(viewStart + f * span);
+                                    ctx.strokeStyle = Theme.borderStrong;
+                                    ctx.beginPath();
+                                    ctx.moveTo(tx + 0.5, axisY);
+                                    ctx.lineTo(tx + 0.5, axisY + 5);
+                                    ctx.stroke();
+                                    ctx.textAlign = t === 0 ? "left" : (t === ticks - 1 ? "right" : "center");
+                                    ctx.fillText(label, tx, axisY + 6);
                                 }
-                                if (!trackPanelsOpen) return
-                                var lanes = trackLaneLayout(trackTop, trackBottom)
-                                var batches = activeController.trackRenderBatches(true, Math.max(1, Math.ceil(width)))
-                                var scale = width / span
+                                if (!trackPanelsOpen)
+                                    return;
+                                var lanes = trackLaneLayout(trackTop, trackBottom);
+                                var batches = activeController.trackRenderBatches(true, Math.max(1, Math.ceil(width)));
+                                var scale = width / span;
 
-                                ctx.strokeStyle = Theme.border
+                                ctx.strokeStyle = Theme.border;
                                 for (var li = 0; li < lanes.length; ++li) {
-                                    if (!lanes[li] || lanes[li].start <= trackTop + 1) continue
-                                    ctx.beginPath()
-                                    ctx.moveTo(0, Math.round(lanes[li].start) + 0.5)
-                                    ctx.lineTo(width, Math.round(lanes[li].start) + 0.5)
-                                    ctx.stroke()
+                                    if (!lanes[li] || lanes[li].start <= trackTop + 1)
+                                        continue;
+                                    ctx.beginPath();
+                                    ctx.moveTo(0, Math.round(lanes[li].start) + 0.5);
+                                    ctx.lineTo(width, Math.round(lanes[li].start) + 0.5);
+                                    ctx.stroke();
                                 }
 
                                 for (var b = 0; b < batches.length; ++b) {
-                                    var batch = batches[b]
-                                    var lane = lanes[batch.trackIndex]
-                                    if (!lane || lane.size <= 0) continue
-                                    var laneY = lane.start
-                                    var laneHeight = lane.size
-                                    var count = batch.count
-                                    var starts = batch.starts
-                                    var ends = batch.ends
-                                    var values = batch.values
-                                    var i, px0, px1
+                                    var batch = batches[b];
+                                    var lane = lanes[batch.trackIndex];
+                                    if (!lane || lane.size <= 0)
+                                        continue;
+                                    var laneY = lane.start;
+                                    var laneHeight = lane.size;
+                                    var count = batch.count;
+                                    var starts = batch.starts;
+                                    var ends = batch.ends;
+                                    var values = batch.values;
+                                    var i, px0, px1;
                                     if (batch.kind === "feature") {
-                                        var featureHeight = Math.max(3, Math.min(12, laneHeight * 0.55))
-                                        var featureY = laneY + (laneHeight - featureHeight) * 0.5
-                                        var colors = batch.colors
+                                        var featureHeight = Math.max(3, Math.min(12, laneHeight * 0.55));
+                                        var featureY = laneY + (laneHeight - featureHeight) * 0.5;
+                                        var colors = batch.colors;
                                         for (i = 0; i < count; ++i) {
-                                            px0 = (starts[i] - viewStart) * scale
-                                            px1 = (ends[i] - viewStart) * scale
-                                            if (px1 <= 0 || px0 >= width) continue
-                                            px0 = Math.max(0, px0)
-                                            px1 = Math.min(width, px1)
-                                            ctx.fillStyle = colors[i]
-                                            ctx.fillRect(px0, featureY, Math.max(1, px1 - px0), featureHeight)
+                                            px0 = (starts[i] - viewStart) * scale;
+                                            px1 = (ends[i] - viewStart) * scale;
+                                            if (px1 <= 0 || px0 >= width)
+                                                continue;
+                                            px0 = Math.max(0, px0);
+                                            px1 = Math.min(width, px1);
+                                            ctx.fillStyle = colors[i];
+                                            ctx.fillRect(px0, featureY, Math.max(1, px1 - px0), featureHeight);
                                         }
-                                        continue
+                                        continue;
                                     }
-                                    var range = Math.max(0.000001, batch.max - batch.min)
-                                    var zero = laneY + laneHeight - (0 - batch.min) / range * laneHeight
-                                    zero = Math.max(laneY, Math.min(laneY + laneHeight, zero))
-                                    ctx.strokeStyle = Theme.borderStrong
-                                    ctx.beginPath()
-                                    ctx.moveTo(0, Math.round(zero) + 0.5)
-                                    ctx.lineTo(width, Math.round(zero) + 0.5)
-                                    ctx.stroke()
+                                    var range = Math.max(0.000001, batch.max - batch.min);
+                                    var zero = laneY + laneHeight - (0 - batch.min) / range * laneHeight;
+                                    zero = Math.max(laneY, Math.min(laneY + laneHeight, zero));
+                                    ctx.strokeStyle = Theme.borderStrong;
+                                    ctx.beginPath();
+                                    ctx.moveTo(0, Math.round(zero) + 0.5);
+                                    ctx.lineTo(width, Math.round(zero) + 0.5);
+                                    ctx.stroke();
                                     // One fillStyle per sign rather than one per
                                     // bin: with a dense track the per-bar state
                                     // changes were what made panning stutter.
                                     for (var sign = 0; sign < 2; ++sign) {
-                                        ctx.fillStyle = sign === 0 ? batch.positiveColor : batch.negativeColor
+                                        ctx.fillStyle = sign === 0 ? batch.positiveColor : batch.negativeColor;
                                         for (i = 0; i < count; ++i) {
-                                            var value = values[i]
-                                            if ((value < 0) !== (sign === 1)) continue
-                                            px0 = (starts[i] - viewStart) * scale
-                                            px1 = (ends[i] - viewStart) * scale
-                                            if (px1 <= 0 || px0 >= width) continue
-                                            px0 = Math.max(0, px0)
-                                            px1 = Math.min(width, px1)
-                                            var valueY = laneY + laneHeight - (value - batch.min) / range * laneHeight
-                                            valueY = Math.max(laneY, Math.min(laneY + laneHeight, valueY))
-                                            var barHeight = Math.abs(valueY - zero)
+                                            var value = values[i];
+                                            if ((value < 0) !== (sign === 1))
+                                                continue;
+                                            px0 = (starts[i] - viewStart) * scale;
+                                            px1 = (ends[i] - viewStart) * scale;
+                                            if (px1 <= 0 || px0 >= width)
+                                                continue;
+                                            px0 = Math.max(0, px0);
+                                            px1 = Math.min(width, px1);
+                                            var valueY = laneY + laneHeight - (value - batch.min) / range * laneHeight;
+                                            valueY = Math.max(laneY, Math.min(laneY + laneHeight, valueY));
+                                            var barHeight = Math.abs(valueY - zero);
                                             if (barHeight < 1) {
                                                 // An empty bin must not paint a
                                                 // phantom bar along the baseline.
-                                                if (value === 0) continue
-                                                barHeight = 1
+                                                if (value === 0)
+                                                    continue;
+                                                barHeight = 1;
                                             }
-                                            ctx.fillRect(px0, Math.min(zero, valueY), Math.max(1, px1 - px0), barHeight)
+                                            ctx.fillRect(px0, Math.min(zero, valueY), Math.max(1, px1 - px0), barHeight);
                                         }
                                     }
                                 }
 
                                 // Names last so they sit above the bars, on a
                                 // scrim rather than directly on the signal.
-                                ctx.font = "10px sans-serif"
-                                ctx.textAlign = "left"
-                                ctx.textBaseline = "top"
+                                ctx.font = "10px sans-serif";
+                                ctx.textAlign = "left";
+                                ctx.textBaseline = "top";
                                 for (var ni = 0; ni < lanes.length; ++ni) {
-                                    var named = lanes[ni]
-                                    if (!named || named.size < 14) continue
-                                    var label = elideCanvasText(ctx, named.name, Math.max(0, width - 12))
-                                    if (label.length === 0) continue
-                                    var labelWidthPx = ctx.measureText(label).width
-                                    ctx.globalAlpha = 0.78
-                                    ctx.fillStyle = Theme.surfaceSunken
-                                    ctx.fillRect(2, named.start + 1, labelWidthPx + 7, 13)
-                                    ctx.globalAlpha = 1
-                                    ctx.fillStyle = named.warning ? Theme.danger : Theme.textSecondary
-                                    ctx.fillText(label, 5, named.start + 2)
+                                    var named = lanes[ni];
+                                    if (!named || named.size < 14)
+                                        continue;
+                                    var label = elideCanvasText(ctx, named.name, Math.max(0, width - 12));
+                                    if (label.length === 0)
+                                        continue;
+                                    var labelWidthPx = ctx.measureText(label).width;
+                                    ctx.globalAlpha = 0.78;
+                                    ctx.fillStyle = Theme.surfaceSunken;
+                                    ctx.fillRect(2, named.start + 1, labelWidthPx + 7, 13);
+                                    ctx.globalAlpha = 1;
+                                    ctx.fillStyle = named.warning ? Theme.danger : Theme.textSecondary;
+                                    ctx.fillText(label, 5, named.start + 2);
                                 }
                             }
                             MouseArea {
@@ -1809,25 +2551,28 @@ ApplicationWindow {
                                 cursorShape: Qt.PointingHandCursor
                                 property int hoveredTrack: -1
                                 function trackAt(y) {
-                                    return trackIndexAtPanelPosition(y, topTrackCanvas.trackTop, topTrackCanvas.trackBottom)
+                                    return trackIndexAtPanelPosition(y, topTrackCanvas.trackTop, topTrackCanvas.trackBottom);
                                 }
-                                onPositionChanged: function(mouse) { hoveredTrack = trackAt(mouse.y) }
+                                onPositionChanged: function (mouse) {
+                                    hoveredTrack = trackAt(mouse.y);
+                                }
                                 onExited: hoveredTrack = -1
                                 ToolTip.visible: containsMouse && hoveredTrack >= 0 && ToolTip.text.length > 0
                                 ToolTip.delay: 350
                                 ToolTip.text: hoveredTrack >= 0 ? trackTooltipText(hoveredTrack) : ""
-                                onPressed: function(mouse) {
-                                    var index = trackAt(mouse.y)
+                                onPressed: function (mouse) {
+                                    var index = trackAt(mouse.y);
                                     if (index >= 0 && mouse.button === Qt.RightButton) {
-                                        openPlotTrackMenu(index)
-                                        mouse.accepted = true
-                                        return
+                                        openPlotTrackMenu(index);
+                                        mouse.accepted = true;
+                                        return;
                                     }
-                                    mouse.accepted = index >= 0
+                                    mouse.accepted = index >= 0;
                                 }
-                                onDoubleClicked: function(mouse) {
-                                    var index = trackAt(mouse.y)
-                                    if (index >= 0 && mouse.button === Qt.LeftButton) openTrackNameEditor(index)
+                                onDoubleClicked: function (mouse) {
+                                    var index = trackAt(mouse.y);
+                                    if (index >= 0 && mouse.button === Qt.LeftButton)
+                                        openTrackNameEditor(index);
                                 }
                             }
                         }
@@ -1847,11 +2592,11 @@ ApplicationWindow {
                             onWidthChanged: requestPaint()
                             onHeightChanged: requestPaint()
                             onPaint: {
-                                var ctx = getContext("2d")
-                                ctx.reset()
-                                if (!edgeGuidesActive || !trackPanelsOpen) return
-                                strokeEdgeGuide(ctx, hoverPlotX, topTrackCanvas.trackTop,
-                                                hoverPlotX, topTrackCanvas.trackBottom)
+                                var ctx = getContext("2d");
+                                ctx.reset();
+                                if (!edgeGuidesActive || !trackPanelsOpen)
+                                    return;
+                                strokeEdgeGuide(ctx, hoverPlotX, topTrackCanvas.trackTop, hoverPlotX, topTrackCanvas.trackBottom);
                             }
                         }
 
@@ -1865,150 +2610,159 @@ ApplicationWindow {
                             readonly property real trackLeft: activeController && activeController.showChromosomeContext ? 10 : 2
                             readonly property real trackRight: width - 0.5 - axisLabelWidth - 2
                             onPaint: {
-                                var ctx = getContext("2d")
-                                ctx.reset()
-                                ctx.fillStyle = Theme.surfaceSunken
-                                ctx.fillRect(0, 0, width, height)
-                                if (!activeController) return
-                                var viewStart = activeController.y0
-                                var span = Math.max(1, activeController.y1 - viewStart)
+                                var ctx = getContext("2d");
+                                ctx.reset();
+                                ctx.fillStyle = Theme.surfaceSunken;
+                                ctx.fillRect(0, 0, width, height);
+                                if (!activeController)
+                                    return;
+                                var viewStart = activeController.y0;
+                                var span = Math.max(1, activeController.y1 - viewStart);
                                 // Labels sit rotated in the strip next to the
                                 // ruler. They used to be drawn at x = 2, on top
                                 // of the first lane, while this reservation was
                                 // taken out of the other end of the strip.
-                                var axisX = width - 0.5
+                                var axisX = width - 0.5;
                                 if (activeController.showChromosomeContext) {
-                                    var yBands = activeController.visibleCytobands(false)
+                                    var yBands = activeController.visibleCytobands(false);
                                     if (yBands.length > 0) {
                                         for (var yb = 0; yb < yBands.length; ++yb) {
-                                            var by0 = (yBands[yb].start - viewStart) / span * height
-                                            var by1 = (yBands[yb].end - viewStart) / span * height
-                                            ctx.fillStyle = yBands[yb].color
-                                            ctx.fillRect(0, Math.max(0, by0), 8, Math.max(1, by1 - by0))
+                                            var by0 = (yBands[yb].start - viewStart) / span * height;
+                                            var by1 = (yBands[yb].end - viewStart) / span * height;
+                                            ctx.fillStyle = yBands[yb].color;
+                                            ctx.fillRect(0, Math.max(0, by0), 8, Math.max(1, by1 - by0));
                                         }
                                     } else {
-                                        ctx.fillStyle = activeController.wholeGenomeView ? Theme.borderStrong : Theme.textMuted
-                                        ctx.fillRect(0, 0, 8, height)
+                                        ctx.fillStyle = activeController.wholeGenomeView ? Theme.borderStrong : Theme.textMuted;
+                                        ctx.fillRect(0, 0, 8, height);
                                     }
                                 }
-                                ctx.strokeStyle = Theme.borderStrong
-                                ctx.beginPath()
-                                ctx.moveTo(axisX, 0)
-                                ctx.lineTo(axisX, height)
-                                ctx.stroke()
-                                ctx.font = "11px sans-serif"
-                                ctx.fillStyle = Theme.textSecondary
-                                ctx.textBaseline = "bottom"
-                                var ticks = activeController.axisEndpointsOnly ? 2 : 5
+                                ctx.strokeStyle = Theme.borderStrong;
+                                ctx.beginPath();
+                                ctx.moveTo(axisX, 0);
+                                ctx.lineTo(axisX, height);
+                                ctx.stroke();
+                                ctx.font = "11px sans-serif";
+                                ctx.fillStyle = Theme.textSecondary;
+                                ctx.textBaseline = "bottom";
+                                var ticks = activeController.axisEndpointsOnly ? 2 : 5;
                                 for (var t = 0; t < ticks; t++) {
-                                    var f = ticks === 1 ? 0 : t / (ticks - 1)
-                                    var ty = f * height
-                                    var label = formatBp(viewStart + f * span)
-                                    ctx.strokeStyle = Theme.borderStrong
-                                    ctx.beginPath()
-                                    ctx.moveTo(axisX - 5, ty + 0.5)
-                                    ctx.lineTo(axisX, ty + 0.5)
-                                    ctx.stroke()
-                                    ctx.save()
-                                    ctx.translate(axisX - 5, ty)
-                                    ctx.rotate(-Math.PI / 2)
-                                    ctx.textAlign = t === 0 ? "right" : (t === ticks - 1 ? "left" : "center")
-                                    ctx.fillText(label, 0, 0)
-                                    ctx.restore()
+                                    var f = ticks === 1 ? 0 : t / (ticks - 1);
+                                    var ty = f * height;
+                                    var label = formatBp(viewStart + f * span);
+                                    ctx.strokeStyle = Theme.borderStrong;
+                                    ctx.beginPath();
+                                    ctx.moveTo(axisX - 5, ty + 0.5);
+                                    ctx.lineTo(axisX, ty + 0.5);
+                                    ctx.stroke();
+                                    ctx.save();
+                                    ctx.translate(axisX - 5, ty);
+                                    ctx.rotate(-Math.PI / 2);
+                                    ctx.textAlign = t === 0 ? "right" : (t === ticks - 1 ? "left" : "center");
+                                    ctx.fillText(label, 0, 0);
+                                    ctx.restore();
                                 }
-                                ctx.textBaseline = "alphabetic"
-                                if (!trackPanelsOpen) return
-                                var lanes = trackLaneLayout(trackLeft, trackRight)
-                                var batches = activeController.trackRenderBatches(false, Math.max(1, Math.ceil(height)))
-                                var scale = height / span
+                                ctx.textBaseline = "alphabetic";
+                                if (!trackPanelsOpen)
+                                    return;
+                                var lanes = trackLaneLayout(trackLeft, trackRight);
+                                var batches = activeController.trackRenderBatches(false, Math.max(1, Math.ceil(height)));
+                                var scale = height / span;
 
-                                ctx.strokeStyle = Theme.border
+                                ctx.strokeStyle = Theme.border;
                                 for (var li = 0; li < lanes.length; ++li) {
-                                    if (!lanes[li] || lanes[li].start <= trackLeft + 1) continue
-                                    ctx.beginPath()
-                                    ctx.moveTo(Math.round(lanes[li].start) + 0.5, 0)
-                                    ctx.lineTo(Math.round(lanes[li].start) + 0.5, height)
-                                    ctx.stroke()
+                                    if (!lanes[li] || lanes[li].start <= trackLeft + 1)
+                                        continue;
+                                    ctx.beginPath();
+                                    ctx.moveTo(Math.round(lanes[li].start) + 0.5, 0);
+                                    ctx.lineTo(Math.round(lanes[li].start) + 0.5, height);
+                                    ctx.stroke();
                                 }
 
                                 for (var b = 0; b < batches.length; ++b) {
-                                    var batch = batches[b]
-                                    var lane = lanes[batch.trackIndex]
-                                    if (!lane || lane.size <= 0) continue
-                                    var laneX = lane.start
-                                    var laneWidth = lane.size
-                                    var count = batch.count
-                                    var starts = batch.starts
-                                    var ends = batch.ends
-                                    var values = batch.values
-                                    var i, py0, py1
+                                    var batch = batches[b];
+                                    var lane = lanes[batch.trackIndex];
+                                    if (!lane || lane.size <= 0)
+                                        continue;
+                                    var laneX = lane.start;
+                                    var laneWidth = lane.size;
+                                    var count = batch.count;
+                                    var starts = batch.starts;
+                                    var ends = batch.ends;
+                                    var values = batch.values;
+                                    var i, py0, py1;
                                     if (batch.kind === "feature") {
-                                        var featureWidth = Math.max(3, Math.min(12, laneWidth * 0.55))
-                                        var featureX = laneX + (laneWidth - featureWidth) * 0.5
-                                        var colors = batch.colors
+                                        var featureWidth = Math.max(3, Math.min(12, laneWidth * 0.55));
+                                        var featureX = laneX + (laneWidth - featureWidth) * 0.5;
+                                        var colors = batch.colors;
                                         for (i = 0; i < count; ++i) {
-                                            py0 = (starts[i] - viewStart) * scale
-                                            py1 = (ends[i] - viewStart) * scale
-                                            if (py1 <= 0 || py0 >= height) continue
-                                            py0 = Math.max(0, py0)
-                                            py1 = Math.min(height, py1)
-                                            ctx.fillStyle = colors[i]
-                                            ctx.fillRect(featureX, py0, featureWidth, Math.max(1, py1 - py0))
+                                            py0 = (starts[i] - viewStart) * scale;
+                                            py1 = (ends[i] - viewStart) * scale;
+                                            if (py1 <= 0 || py0 >= height)
+                                                continue;
+                                            py0 = Math.max(0, py0);
+                                            py1 = Math.min(height, py1);
+                                            ctx.fillStyle = colors[i];
+                                            ctx.fillRect(featureX, py0, featureWidth, Math.max(1, py1 - py0));
                                         }
-                                        continue
+                                        continue;
                                     }
-                                    var range = Math.max(0.000001, batch.max - batch.min)
-                                    var zero = laneX + (0 - batch.min) / range * laneWidth
-                                    zero = Math.max(laneX, Math.min(laneX + laneWidth, zero))
-                                    ctx.strokeStyle = Theme.borderStrong
-                                    ctx.beginPath()
-                                    ctx.moveTo(Math.round(zero) + 0.5, 0)
-                                    ctx.lineTo(Math.round(zero) + 0.5, height)
-                                    ctx.stroke()
+                                    var range = Math.max(0.000001, batch.max - batch.min);
+                                    var zero = laneX + (0 - batch.min) / range * laneWidth;
+                                    zero = Math.max(laneX, Math.min(laneX + laneWidth, zero));
+                                    ctx.strokeStyle = Theme.borderStrong;
+                                    ctx.beginPath();
+                                    ctx.moveTo(Math.round(zero) + 0.5, 0);
+                                    ctx.lineTo(Math.round(zero) + 0.5, height);
+                                    ctx.stroke();
                                     for (var sign = 0; sign < 2; ++sign) {
-                                        ctx.fillStyle = sign === 0 ? batch.positiveColor : batch.negativeColor
+                                        ctx.fillStyle = sign === 0 ? batch.positiveColor : batch.negativeColor;
                                         for (i = 0; i < count; ++i) {
-                                            var value = values[i]
-                                            if ((value < 0) !== (sign === 1)) continue
-                                            py0 = (starts[i] - viewStart) * scale
-                                            py1 = (ends[i] - viewStart) * scale
-                                            if (py1 <= 0 || py0 >= height) continue
-                                            py0 = Math.max(0, py0)
-                                            py1 = Math.min(height, py1)
-                                            var valueX = laneX + (value - batch.min) / range * laneWidth
-                                            valueX = Math.max(laneX, Math.min(laneX + laneWidth, valueX))
-                                            var barWidth = Math.abs(valueX - zero)
+                                            var value = values[i];
+                                            if ((value < 0) !== (sign === 1))
+                                                continue;
+                                            py0 = (starts[i] - viewStart) * scale;
+                                            py1 = (ends[i] - viewStart) * scale;
+                                            if (py1 <= 0 || py0 >= height)
+                                                continue;
+                                            py0 = Math.max(0, py0);
+                                            py1 = Math.min(height, py1);
+                                            var valueX = laneX + (value - batch.min) / range * laneWidth;
+                                            valueX = Math.max(laneX, Math.min(laneX + laneWidth, valueX));
+                                            var barWidth = Math.abs(valueX - zero);
                                             if (barWidth < 1) {
-                                                if (value === 0) continue
-                                                barWidth = 1
+                                                if (value === 0)
+                                                    continue;
+                                                barWidth = 1;
                                             }
-                                            ctx.fillRect(Math.min(zero, valueX), py0, barWidth, Math.max(1, py1 - py0))
+                                            ctx.fillRect(Math.min(zero, valueX), py0, barWidth, Math.max(1, py1 - py0));
                                         }
                                     }
                                 }
 
                                 // Rotated to read bottom-to-top along the lane,
                                 // anchored at the foot of the strip.
-                                ctx.font = "10px sans-serif"
+                                ctx.font = "10px sans-serif";
                                 for (var ni = 0; ni < lanes.length; ++ni) {
-                                    var named = lanes[ni]
-                                    if (!named || named.size < 15) continue
-                                    ctx.save()
-                                    ctx.translate(named.start + 2, height - 4)
-                                    ctx.rotate(-Math.PI / 2)
-                                    ctx.textAlign = "left"
-                                    ctx.textBaseline = "top"
-                                    var label = elideCanvasText(ctx, named.name, Math.max(0, height - 12))
+                                    var named = lanes[ni];
+                                    if (!named || named.size < 15)
+                                        continue;
+                                    ctx.save();
+                                    ctx.translate(named.start + 2, height - 4);
+                                    ctx.rotate(-Math.PI / 2);
+                                    ctx.textAlign = "left";
+                                    ctx.textBaseline = "top";
+                                    var label = elideCanvasText(ctx, named.name, Math.max(0, height - 12));
                                     if (label.length > 0) {
-                                        var labelLengthPx = ctx.measureText(label).width
-                                        ctx.globalAlpha = 0.78
-                                        ctx.fillStyle = Theme.surfaceSunken
-                                        ctx.fillRect(-3, -1, labelLengthPx + 6, 13)
-                                        ctx.globalAlpha = 1
-                                        ctx.fillStyle = named.warning ? Theme.danger : Theme.textSecondary
-                                        ctx.fillText(label, 0, 0)
+                                        var labelLengthPx = ctx.measureText(label).width;
+                                        ctx.globalAlpha = 0.78;
+                                        ctx.fillStyle = Theme.surfaceSunken;
+                                        ctx.fillRect(-3, -1, labelLengthPx + 6, 13);
+                                        ctx.globalAlpha = 1;
+                                        ctx.fillStyle = named.warning ? Theme.danger : Theme.textSecondary;
+                                        ctx.fillText(label, 0, 0);
                                     }
-                                    ctx.restore()
+                                    ctx.restore();
                                 }
                             }
                             MouseArea {
@@ -2019,25 +2773,28 @@ ApplicationWindow {
                                 cursorShape: Qt.PointingHandCursor
                                 property int hoveredTrack: -1
                                 function trackAt(x) {
-                                    return trackIndexAtPanelPosition(x, leftTrackCanvas.trackLeft, leftTrackCanvas.trackRight)
+                                    return trackIndexAtPanelPosition(x, leftTrackCanvas.trackLeft, leftTrackCanvas.trackRight);
                                 }
-                                onPositionChanged: function(mouse) { hoveredTrack = trackAt(mouse.x) }
+                                onPositionChanged: function (mouse) {
+                                    hoveredTrack = trackAt(mouse.x);
+                                }
                                 onExited: hoveredTrack = -1
                                 ToolTip.visible: containsMouse && hoveredTrack >= 0 && ToolTip.text.length > 0
                                 ToolTip.delay: 350
                                 ToolTip.text: hoveredTrack >= 0 ? trackTooltipText(hoveredTrack) : ""
-                                onPressed: function(mouse) {
-                                    var index = trackAt(mouse.x)
+                                onPressed: function (mouse) {
+                                    var index = trackAt(mouse.x);
                                     if (index >= 0 && mouse.button === Qt.RightButton) {
-                                        openPlotTrackMenu(index)
-                                        mouse.accepted = true
-                                        return
+                                        openPlotTrackMenu(index);
+                                        mouse.accepted = true;
+                                        return;
                                     }
-                                    mouse.accepted = index >= 0
+                                    mouse.accepted = index >= 0;
                                 }
-                                onDoubleClicked: function(mouse) {
-                                    var index = trackAt(mouse.x)
-                                    if (index >= 0 && mouse.button === Qt.LeftButton) openTrackNameEditor(index)
+                                onDoubleClicked: function (mouse) {
+                                    var index = trackAt(mouse.x);
+                                    if (index >= 0 && mouse.button === Qt.LeftButton)
+                                        openTrackNameEditor(index);
                                 }
                             }
                         }
@@ -2056,11 +2813,11 @@ ApplicationWindow {
                             onWidthChanged: requestPaint()
                             onHeightChanged: requestPaint()
                             onPaint: {
-                                var ctx = getContext("2d")
-                                ctx.reset()
-                                if (!edgeGuidesActive || !trackPanelsOpen) return
-                                strokeEdgeGuide(ctx, leftTrackCanvas.trackLeft, hoverPlotY,
-                                                leftTrackCanvas.trackRight, hoverPlotY)
+                                var ctx = getContext("2d");
+                                ctx.reset();
+                                if (!edgeGuidesActive || !trackPanelsOpen)
+                                    return;
+                                strokeEdgeGuide(ctx, leftTrackCanvas.trackLeft, hoverPlotY, leftTrackCanvas.trackRight, hoverPlotY);
                             }
                         }
 
@@ -2081,72 +2838,73 @@ ApplicationWindow {
                                 id: annotationCanvas
                                 anchors.fill: parent
                                 onPaint: {
-                                    var ctx = getContext("2d")
-                                    ctx.reset()
-                                    if (!activeController) return
-                                    var annotations = activeController.visibleAnnotations()
-                                    var spanX = Math.max(1, activeController.x1 - activeController.x0)
-                                    var spanY = Math.max(1, activeController.y1 - activeController.y0)
-                                    var scaleX = width / spanX
-                                    var scaleY = height / spanY
+                                    var ctx = getContext("2d");
+                                    ctx.reset();
+                                    if (!activeController)
+                                        return;
+                                    var annotations = activeController.visibleAnnotations();
+                                    var spanX = Math.max(1, activeController.x1 - activeController.x0);
+                                    var spanY = Math.max(1, activeController.y1 - activeController.y0);
+                                    var scaleX = width / spanX;
+                                    var scaleY = height / spanY;
                                     if (activeController.showGridlines) {
-                                        ctx.strokeStyle = Theme.gridline
-                                        ctx.lineWidth = 1
-                                        var gridSteps = 10
+                                        ctx.strokeStyle = Theme.gridline;
+                                        ctx.lineWidth = 1;
+                                        var gridSteps = 10;
                                         for (var g = 1; g < gridSteps; g++) {
-                                            var gx = width * g / gridSteps
-                                            var gy = height * g / gridSteps
-                                            ctx.beginPath()
-                                            ctx.moveTo(gx, 0)
-                                            ctx.lineTo(gx, height)
-                                            ctx.moveTo(0, gy)
-                                            ctx.lineTo(width, gy)
-                                            ctx.stroke()
+                                            var gx = width * g / gridSteps;
+                                            var gy = height * g / gridSteps;
+                                            ctx.beginPath();
+                                            ctx.moveTo(gx, 0);
+                                            ctx.lineTo(gx, height);
+                                            ctx.moveTo(0, gy);
+                                            ctx.lineTo(width, gy);
+                                            ctx.stroke();
                                         }
                                     }
                                     if (activeController.wholeGenomeView) {
-                                        var boundaries = activeController.chromosomeBoundaries()
-                                        ctx.strokeStyle = Theme.boundaryLine
-                                        ctx.lineWidth = 1.2
+                                        var boundaries = activeController.chromosomeBoundaries();
+                                        ctx.strokeStyle = Theme.boundaryLine;
+                                        ctx.lineWidth = 1.2;
                                         for (var b = 0; b < boundaries.length; b++) {
-                                            var bx = (boundaries[b].end - activeController.x0) * scaleX
-                                            var by = (boundaries[b].end - activeController.y0) * scaleY
-                                            ctx.beginPath()
-                                            ctx.moveTo(bx, 0)
-                                            ctx.lineTo(bx, height)
-                                            ctx.moveTo(0, by)
-                                            ctx.lineTo(width, by)
-                                            ctx.stroke()
+                                            var bx = (boundaries[b].end - activeController.x0) * scaleX;
+                                            var by = (boundaries[b].end - activeController.y0) * scaleY;
+                                            ctx.beginPath();
+                                            ctx.moveTo(bx, 0);
+                                            ctx.lineTo(bx, height);
+                                            ctx.moveTo(0, by);
+                                            ctx.lineTo(width, by);
+                                            ctx.stroke();
                                         }
                                     }
                                     if (activeController.showTilesDebug) {
-                                        ctx.strokeStyle = Theme.tileDebugLine
-                                        ctx.lineWidth = 1
-                                        var tileCount = 8
+                                        ctx.strokeStyle = Theme.tileDebugLine;
+                                        ctx.lineWidth = 1;
+                                        var tileCount = 8;
                                         for (var tt = 0; tt <= tileCount; tt++) {
-                                            var tx = width * tt / tileCount
-                                            var ty = height * tt / tileCount
-                                            ctx.beginPath()
-                                            ctx.moveTo(tx, 0)
-                                            ctx.lineTo(tx, height)
-                                            ctx.moveTo(0, ty)
-                                            ctx.lineTo(width, ty)
-                                            ctx.stroke()
+                                            var tx = width * tt / tileCount;
+                                            var ty = height * tt / tileCount;
+                                            ctx.beginPath();
+                                            ctx.moveTo(tx, 0);
+                                            ctx.lineTo(tx, height);
+                                            ctx.moveTo(0, ty);
+                                            ctx.lineTo(width, ty);
+                                            ctx.stroke();
                                         }
                                     }
-                                    ctx.lineWidth = 1.5
+                                    ctx.lineWidth = 1.5;
                                     for (var i = 0; i < annotations.length; i++) {
-                                        var a = annotations[i]
-                                        var x = (a.x0 - activeController.x0) * scaleX
-                                        var y = (a.y0 - activeController.y0) * scaleY
-                                        var w = Math.max(a.enlarged ? 6 : 2, (a.x1 - a.x0) * scaleX)
-                                        var h = Math.max(a.enlarged ? 6 : 2, (a.y1 - a.y0) * scaleY)
-                                        ctx.globalAlpha = a.transparent ? 0.45 : 1.0
-                                        ctx.strokeStyle = a.color
-                                        ctx.strokeRect(x, y, w, h)
+                                        var a = annotations[i];
+                                        var x = (a.x0 - activeController.x0) * scaleX;
+                                        var y = (a.y0 - activeController.y0) * scaleY;
+                                        var w = Math.max(a.enlarged ? 6 : 2, (a.x1 - a.x0) * scaleX);
+                                        var h = Math.max(a.enlarged ? 6 : 2, (a.y1 - a.y0) * scaleY);
+                                        ctx.globalAlpha = a.transparent ? 0.45 : 1.0;
+                                        ctx.strokeStyle = a.color;
+                                        ctx.strokeRect(x, y, w, h);
                                         if (w > 7 && h > 7)
-                                            ctx.strokeRect(x + 1, y + 1, w - 2, h - 2)
-                                        ctx.globalAlpha = 1.0
+                                            ctx.strokeRect(x + 1, y + 1, w - 2, h - 2);
+                                        ctx.globalAlpha = 1.0;
                                     }
                                 }
                             }
@@ -2156,40 +2914,41 @@ ApplicationWindow {
                                 anchors.fill: parent
                                 z: 10
                                 onPaint: {
-                                    var ctx = getContext("2d")
-                                    ctx.reset()
-                                    if (!hoverActive) return
-                                    ctx.strokeStyle = "#000000"
-                                    ctx.lineWidth = 1.25
-                                    ctx.setLineDash([5, 4])
+                                    var ctx = getContext("2d");
+                                    ctx.reset();
+                                    if (!hoverActive)
+                                        return;
+                                    ctx.strokeStyle = "#000000";
+                                    ctx.lineWidth = 1.25;
+                                    ctx.setLineDash([5, 4]);
                                     if (straightEdgeEnabled) {
-                                        ctx.beginPath()
-                                        ctx.moveTo(hoverPlotX, 0)
-                                        ctx.lineTo(hoverPlotX, height)
-                                        ctx.moveTo(0, hoverPlotY)
-                                        ctx.lineTo(width, hoverPlotY)
-                                        ctx.stroke()
+                                        ctx.beginPath();
+                                        ctx.moveTo(hoverPlotX, 0);
+                                        ctx.lineTo(hoverPlotX, height);
+                                        ctx.moveTo(0, hoverPlotY);
+                                        ctx.lineTo(width, hoverPlotY);
+                                        ctx.stroke();
                                     }
                                     if (diagonalEdgeEnabled && activeController && activeController.chrX === activeController.chrY) {
-                                        var spanX = Math.max(1, activeController.x1 - activeController.x0)
-                                        var spanY = Math.max(1, activeController.y1 - activeController.y0)
-                                        var genomeX = activeController.x0 + hoverPlotX / Math.max(1, width) * spanX
-                                        var genomeY = activeController.y0 + hoverPlotY / Math.max(1, height) * spanY
-                                        var scaleY = height / spanY
-                                        var delta = genomeY - genomeX
-                                        var reflectedDelta = -delta
-                                        var sum = genomeX + genomeY
-                                        ctx.beginPath()
+                                        var spanX = Math.max(1, activeController.x1 - activeController.x0);
+                                        var spanY = Math.max(1, activeController.y1 - activeController.y0);
+                                        var genomeX = activeController.x0 + hoverPlotX / Math.max(1, width) * spanX;
+                                        var genomeY = activeController.y0 + hoverPlotY / Math.max(1, height) * spanY;
+                                        var scaleY = height / spanY;
+                                        var delta = genomeY - genomeX;
+                                        var reflectedDelta = -delta;
+                                        var sum = genomeX + genomeY;
+                                        ctx.beginPath();
                                         // y = x + delta, then its true reflection y = x - delta
                                         // across the genomic Hi-C diagonal y = x.
-                                        ctx.moveTo(0, (activeController.x0 + delta - activeController.y0) * scaleY)
-                                        ctx.lineTo(width, (activeController.x1 + delta - activeController.y0) * scaleY)
-                                        ctx.moveTo(0, (activeController.x0 + reflectedDelta - activeController.y0) * scaleY)
-                                        ctx.lineTo(width, (activeController.x1 + reflectedDelta - activeController.y0) * scaleY)
+                                        ctx.moveTo(0, (activeController.x0 + delta - activeController.y0) * scaleY);
+                                        ctx.lineTo(width, (activeController.x1 + delta - activeController.y0) * scaleY);
+                                        ctx.moveTo(0, (activeController.x0 + reflectedDelta - activeController.y0) * scaleY);
+                                        ctx.lineTo(width, (activeController.x1 + reflectedDelta - activeController.y0) * scaleY);
                                         // The perpendicular through the cursor and reflected cursor.
-                                        ctx.moveTo(0, (sum - activeController.x0 - activeController.y0) * scaleY)
-                                        ctx.lineTo(width, (sum - activeController.x1 - activeController.y0) * scaleY)
-                                        ctx.stroke()
+                                        ctx.moveTo(0, (sum - activeController.x0 - activeController.y0) * scaleY);
+                                        ctx.lineTo(width, (sum - activeController.x1 - activeController.y0) * scaleY);
+                                        ctx.stroke();
                                     }
                                 }
                             }
@@ -2209,26 +2968,43 @@ ApplicationWindow {
                                 Accessible.name: "Matrix color scale from " + (activeController ? activeController.colorMin : 0) + " to " + (activeController ? activeController.colorMax : 0)
 
                                 Label {
-                                    anchors.top: parent.top; anchors.horizontalCenter: parent.horizontalCenter; anchors.topMargin: 6
+                                    anchors.top: parent.top
+                                    anchors.horizontalCenter: parent.horizontalCenter
+                                    anchors.topMargin: 6
                                     text: activeController ? Number(activeController.colorMax).toPrecision(3) : ""
-                                    color: "white"; font.pixelSize: Theme.textXs
+                                    color: "white"
+                                    font.pixelSize: Theme.textXs
                                 }
                                 Rectangle {
                                     anchors.horizontalCenter: parent.horizontalCenter
-                                    anchors.top: parent.top; anchors.topMargin: 25
-                                    width: 14; height: 92
+                                    anchors.top: parent.top
+                                    anchors.topMargin: 25
+                                    width: 14
+                                    height: 92
                                     border.color: Qt.rgba(1, 1, 1, 0.28)
                                     gradient: Gradient {
                                         orientation: Gradient.Vertical
-                                        GradientStop { position: 0; color: legendHighColor() }
-                                        GradientStop { position: activeController && activeController.colorMin < 0 && activeController.colorMax > 0 ? 0.5 : 1; color: "white" }
-                                        GradientStop { position: 1; color: legendLowColor() }
+                                        GradientStop {
+                                            position: 0
+                                            color: legendHighColor()
+                                        }
+                                        GradientStop {
+                                            position: activeController && activeController.colorMin < 0 && activeController.colorMax > 0 ? 0.5 : 1
+                                            color: "white"
+                                        }
+                                        GradientStop {
+                                            position: 1
+                                            color: legendLowColor()
+                                        }
                                     }
                                 }
                                 Label {
-                                    anchors.bottom: parent.bottom; anchors.horizontalCenter: parent.horizontalCenter; anchors.bottomMargin: 6
+                                    anchors.bottom: parent.bottom
+                                    anchors.horizontalCenter: parent.horizontalCenter
+                                    anchors.bottomMargin: 6
                                     text: activeController ? Number(activeController.colorMin).toPrecision(3) : ""
-                                    color: "white"; font.pixelSize: Theme.textXs
+                                    color: "white"
+                                    font.pixelSize: Theme.textXs
                                 }
                                 MouseArea {
                                     id: legendMouseArea
@@ -2237,9 +3013,9 @@ ApplicationWindow {
                                     hoverEnabled: true
                                     cursorShape: Qt.PointingHandCursor
                                     Accessible.name: "Open heatmap color settings"
-                                    onClicked: function(mouse) {
-                                        colorScaleDialog.open()
-                                        mouse.accepted = true
+                                    onClicked: function (mouse) {
+                                        colorScaleDialog.open();
+                                        mouse.accepted = true;
                                     }
                                 }
                                 ToolTip.visible: legendMouseArea.containsMouse
@@ -2260,8 +3036,16 @@ ApplicationWindow {
                                     id: loadingRow
                                     anchors.centerIn: parent
                                     spacing: 6
-                                    BusyIndicator { running: parent.parent.visible; Layout.preferredWidth: 16; Layout.preferredHeight: 16 }
-                                    Label { text: "Refining view"; color: "white"; font.pixelSize: Theme.textXs }
+                                    BusyIndicator {
+                                        running: parent.parent.visible
+                                        Layout.preferredWidth: 16
+                                        Layout.preferredHeight: 16
+                                    }
+                                    Label {
+                                        text: "Refining view"
+                                        color: "white"
+                                        font.pixelSize: Theme.textXs
+                                    }
                                 }
                             }
 
@@ -2277,7 +3061,7 @@ ApplicationWindow {
                             MouseArea {
                                 id: interactionArea
                                 Accessible.name: "Interactive Hi-C contact matrix"
-                                Accessible.description: "Click to zoom, drag to pan, use the wheel to zoom, Alt-drag to select a region, and Shift-drag to add an annotation"
+                                Accessible.description: "Double-click or use the wheel to zoom. Pan by dragging; Alt-drag zooms a region; Shift-drag adds an annotation. The toolbar selects the drag tool."
                                 anchors.fill: parent
                                 hoverEnabled: true
                                 acceptedButtons: Qt.LeftButton | Qt.RightButton
@@ -2297,139 +3081,141 @@ ApplicationWindow {
                                     repeat: false
                                     onTriggered: {
                                         if (activeController && interactionArea.containsMouse)
-                                            hoverText = activeController.positionText(interactionArea.pendingHoverFx, interactionArea.pendingHoverFy)
+                                            hoverText = activeController.positionText(interactionArea.pendingHoverFx, interactionArea.pendingHoverFy);
                                     }
                                 }
 
                                 function clamp01(v) {
-                                    return Math.max(0, Math.min(1, v))
+                                    return Math.max(0, Math.min(1, v));
                                 }
 
                                 function fractionX(px) {
-                                    return clamp01(px / Math.max(1, width))
+                                    return clamp01(px / Math.max(1, width));
                                 }
 
                                 function fractionY(py) {
-                                    return clamp01(py / Math.max(1, height))
+                                    return clamp01(py / Math.max(1, height));
                                 }
 
                                 function updateHover(mouse) {
                                     if (!activeController) {
-                                        hoverText = ""
-                                        hoverActive = false
-                                        return
+                                        hoverText = "";
+                                        hoverActive = false;
+                                        return;
                                     }
-                                    hoverPlotX = mouse.x
-                                    hoverPlotY = mouse.y
-                                    hoverActive = true
-                                    contextFx = fractionX(mouse.x)
-                                    contextFy = fractionY(mouse.y)
-                                    pendingHoverFx = contextFx
-                                    pendingHoverFy = contextFy
-                                    updateBullseyeInspector(activeController, contextFx, contextFy)
+                                    hoverPlotX = mouse.x;
+                                    hoverPlotY = mouse.y;
+                                    hoverActive = true;
+                                    contextFx = fractionX(mouse.x);
+                                    contextFy = fractionY(mouse.y);
+                                    pendingHoverFx = contextFx;
+                                    pendingHoverFy = contextFy;
+                                    updateBullseyeInspector(activeController, contextFx, contextFy);
                                     if (!hoverValueTimer.running)
-                                        hoverValueTimer.start()
-                                    repaintEdgeGuides()
+                                        hoverValueTimer.start();
+                                    repaintEdgeGuides();
                                 }
 
-                                onPressed: function(mouse) {
-                                    if (!activeController) return
-                                    updateHover(mouse)
-                                    if (mouse.button === Qt.RightButton) {
-                                        heatmapMenu.popup()
-                                        return
-                                    }
-                                    lastX = mouse.x
-                                    lastY = mouse.y
-                                    startX = mouse.x
-                                    startY = mouse.y
-                                    moved = false
-                                    selecting = (mouse.modifiers & Qt.AltModifier) !== 0
-                                    annotating = (mouse.modifiers & Qt.ShiftModifier) !== 0
-                                    if (selecting || annotating) {
-                                        selectionRect.x = mouse.x
-                                        selectionRect.y = mouse.y
-                                        selectionRect.width = 0
-                                        selectionRect.height = 0
-                                        selectionRect.visible = true
-                                        selectionRect.border.color = annotating ? Theme.warn : Theme.accent
-                                        selectionRect.color = annotating
-                                            ? Qt.rgba(Theme.warn.r, Theme.warn.g, Theme.warn.b, 0.16)
-                                            : Qt.rgba(Theme.accent.r, Theme.accent.g, Theme.accent.b, 0.16)
-                                    } else {
-                                        activeController.beginInteraction()
-                                    }
-                                }
-
-                                onPositionChanged: function(mouse) {
-                                    updateHover(mouse)
-                                    if (!activeController || !(mouse.buttons & Qt.LeftButton))
-                                        return
-                                    if (Math.abs(mouse.x - startX) > 4 || Math.abs(mouse.y - startY) > 4)
-                                        moved = true
-                                    if (selecting || annotating) {
-                                        selectionRect.x = Math.min(startX, mouse.x)
-                                        selectionRect.y = Math.min(startY, mouse.y)
-                                        selectionRect.width = Math.abs(mouse.x - startX)
-                                        selectionRect.height = Math.abs(mouse.y - startY)
-                                    } else {
-                                        activeController.pan(-(mouse.x - lastX) / Math.max(1, width),
-                                                             -(mouse.y - lastY) / Math.max(1, height))
-                                        lastX = mouse.x
-                                        lastY = mouse.y
-                                    }
-                                }
-
-                                onReleased: function(mouse) {
+                                onPressed: function (mouse) {
                                     if (!activeController)
-                                        return
+                                        return;
+                                    updateHover(mouse);
+                                    if (mouse.button === Qt.RightButton) {
+                                        heatmapMenu.popup();
+                                        return;
+                                    }
+                                    lastX = mouse.x;
+                                    lastY = mouse.y;
+                                    startX = mouse.x;
+                                    startY = mouse.y;
+                                    moved = false;
+                                    var tool = InteractionState.toolForModifiers(mouse.modifiers);
+                                    selecting = tool === "zoom";
+                                    annotating = tool === "annotate";
+                                    if (selecting || annotating) {
+                                        selectionRect.x = mouse.x;
+                                        selectionRect.y = mouse.y;
+                                        selectionRect.width = 0;
+                                        selectionRect.height = 0;
+                                        selectionRect.visible = true;
+                                        selectionRect.border.color = annotating ? Theme.warn : Theme.accent;
+                                        selectionRect.color = annotating ? Qt.rgba(Theme.warn.r, Theme.warn.g, Theme.warn.b, 0.16) : Qt.rgba(Theme.accent.r, Theme.accent.g, Theme.accent.b, 0.16);
+                                    } else {
+                                        activeController.beginInteraction();
+                                    }
+                                }
+
+                                onPositionChanged: function (mouse) {
+                                    updateHover(mouse);
+                                    if (!activeController || !(mouse.buttons & Qt.LeftButton))
+                                        return;
+                                    if (Math.abs(mouse.x - startX) > 4 || Math.abs(mouse.y - startY) > 4)
+                                        moved = true;
+                                    if (selecting || annotating) {
+                                        selectionRect.x = Math.min(startX, mouse.x);
+                                        selectionRect.y = Math.min(startY, mouse.y);
+                                        selectionRect.width = Math.abs(mouse.x - startX);
+                                        selectionRect.height = Math.abs(mouse.y - startY);
+                                    } else {
+                                        activeController.pan(-(mouse.x - lastX) / Math.max(1, width), -(mouse.y - lastY) / Math.max(1, height));
+                                        lastX = mouse.x;
+                                        lastY = mouse.y;
+                                    }
+                                }
+
+                                onReleased: function (mouse) {
+                                    if (!activeController)
+                                        return;
                                     if ((selecting || annotating) && mouse.button === Qt.LeftButton) {
-                                        selectionRect.visible = false
+                                        selectionRect.visible = false;
                                         if (Math.abs(mouse.x - startX) > 8 && Math.abs(mouse.y - startY) > 8) {
                                             if (annotating)
-                                                activeController.addAnnotationFromFractions(fractionX(startX), fractionY(startY),
-                                                                                           fractionX(mouse.x), fractionY(mouse.y))
+                                                activeController.addAnnotationFromFractions(fractionX(startX), fractionY(startY), fractionX(mouse.x), fractionY(mouse.y));
                                             else
-                                                activeController.zoomToFractions(fractionX(startX), fractionY(startY),
-                                                                                fractionX(mouse.x), fractionY(mouse.y))
+                                                activeController.zoomToFractions(fractionX(startX), fractionY(startY), fractionX(mouse.x), fractionY(mouse.y));
                                         } else {
-                                            activeController.selectAnnotationAt(fractionX(mouse.x), fractionY(mouse.y))
+                                            activeController.selectAnnotationAt(fractionX(mouse.x), fractionY(mouse.y));
                                         }
-                                        selecting = false
-                                        annotating = false
+                                        selecting = false;
+                                        annotating = false;
                                     } else if (mouse.button === Qt.LeftButton) {
-                                        activeController.endInteraction()
+                                        activeController.endInteraction();
                                         if (!moved) {
-                                            activeController.selectAnnotationAt(fractionX(mouse.x), fractionY(mouse.y))
-                                            activeController.zoom(2.0, fractionX(mouse.x), fractionY(mouse.y))
+                                            activeController.selectAnnotationAt(fractionX(mouse.x), fractionY(mouse.y));
                                         }
                                     }
                                 }
 
-                                onCanceled: {
-                                    selectionRect.visible = false
-                                    selecting = false
-                                    annotating = false
-                                    hoverActive = false
+                                onDoubleClicked: function (mouse) {
                                     if (activeController)
-                                        activeController.endInteraction()
+                                        activeController.zoom(2.0, fractionX(mouse.x), fractionY(mouse.y));
+                                }
+                                onCanceled: {
+                                    selectionRect.visible = false;
+                                    selecting = false;
+                                    annotating = false;
+                                    hoverActive = false;
+                                    if (activeController)
+                                        activeController.endInteraction();
                                 }
 
                                 onExited: {
-                                    hoverText = ""
-                                    hoverActive = false
-                                    repaintEdgeGuides()
+                                    hoverText = "";
+                                    hoverActive = false;
+                                    repaintEdgeGuides();
                                 }
-                                cursorShape: (selecting || annotating || straightEdgeEnabled || diagonalEdgeEnabled) ? Qt.CrossCursor : Qt.OpenHandCursor
+                                cursorShape: (InteractionState.tool !== "pan" || selecting || annotating || straightEdgeEnabled || diagonalEdgeEnabled) ? Qt.CrossCursor : Qt.OpenHandCursor
                                 preventStealing: true
                                 propagateComposedEvents: false
-                                onWheel: function(wheel) {
-                                    if (!activeController) return
-                                    var delta = wheel.angleDelta.y !== 0 ? wheel.angleDelta.y : wheel.pixelDelta.y
-                                    if (delta === 0) return
-                                    var factor = Math.pow(2.0, delta / 360.0)
-                                    activeController.zoom(factor, fractionX(wheel.x), fractionY(wheel.y))
-                                    wheel.accepted = true
+                                onWheel: function (wheel) {
+                                    if (!activeController)
+                                        return;
+                                    var delta = wheel.angleDelta.y !== 0 ? wheel.angleDelta.y : wheel.pixelDelta.y;
+                                    if (delta === 0)
+                                        return;
+                                    var factor = Math.pow(2.0, delta / 360.0);
+                                    activeController.zoom(factor, fractionX(wheel.x), fractionY(wheel.y));
+                                    wheel.accepted = true;
                                 }
                             }
 
@@ -2462,8 +3248,7 @@ ApplicationWindow {
                     Rectangle {
                         id: minimapFrame
                         z: 80
-                        visible: (!activeTab || activeTab.type === "single") && minimapVisible && activeController && activeController.filePath.length > 0 &&
-                                 activeController.xChromosomeLength > 0 && activeController.yChromosomeLength > 0
+                        visible: (!activeTab || activeTab.type === "single") && minimapVisible && activeController && activeController.filePath.length > 0 && activeController.xChromosomeLength > 0 && activeController.yChromosomeLength > 0
                         anchors.top: parent.top
                         anchors.right: parent.right
                         anchors.topMargin: 12
@@ -2515,28 +3300,24 @@ ApplicationWindow {
                                     anchors.fill: parent
                                     visible: activeController && activeController.chrX === activeController.chrY
                                     onPaint: {
-                                        var ctx = getContext("2d")
-                                        ctx.reset()
-                                        ctx.strokeStyle = Theme.boundaryLine
-                                        ctx.lineWidth = 1
-                                        ctx.beginPath()
-                                        ctx.moveTo(0, 0)
-                                        ctx.lineTo(width, height)
-                                        ctx.stroke()
+                                        var ctx = getContext("2d");
+                                        ctx.reset();
+                                        ctx.strokeStyle = Theme.boundaryLine;
+                                        ctx.lineWidth = 1;
+                                        ctx.beginPath();
+                                        ctx.moveTo(0, 0);
+                                        ctx.lineTo(width, height);
+                                        ctx.stroke();
                                     }
                                 }
 
                                 Rectangle {
                                     id: minimapViewportBox
                                     visible: !!activeController
-                                    x: activeController ? Math.min(parent.width - width,
-                                           Math.max(0, activeController.x0 / Math.max(1, activeController.xChromosomeLength) * parent.width)) : 0
-                                    y: activeController ? Math.min(parent.height - height,
-                                           Math.max(0, activeController.y0 / Math.max(1, activeController.yChromosomeLength) * parent.height)) : 0
-                                    width: activeController ? Math.max(8, (activeController.x1 - activeController.x0) /
-                                           Math.max(1, activeController.xChromosomeLength) * parent.width) : 8
-                                    height: activeController ? Math.max(8, (activeController.y1 - activeController.y0) /
-                                            Math.max(1, activeController.yChromosomeLength) * parent.height) : 8
+                                    x: activeController ? Math.min(parent.width - width, Math.max(0, activeController.x0 / Math.max(1, activeController.xChromosomeLength) * parent.width)) : 0
+                                    y: activeController ? Math.min(parent.height - height, Math.max(0, activeController.y0 / Math.max(1, activeController.yChromosomeLength) * parent.height)) : 0
+                                    width: activeController ? Math.max(8, (activeController.x1 - activeController.x0) / Math.max(1, activeController.xChromosomeLength) * parent.width) : 8
+                                    height: activeController ? Math.max(8, (activeController.y1 - activeController.y0) / Math.max(1, activeController.yChromosomeLength) * parent.height) : 8
                                     color: Qt.rgba(0.45, 0.52, 1.0, 0.16)
                                     border.color: Theme.accent
                                     border.width: 2
@@ -2550,25 +3331,29 @@ ApplicationWindow {
                                     property real dragOffsetY: minimapViewportBox.height / 2
 
                                     function moveViewport(mouse) {
-                                        if (!activeController) return
-                                        var centerX = (mouse.x - dragOffsetX + minimapViewportBox.width / 2) / Math.max(1, width)
-                                        var centerY = (mouse.y - dragOffsetY + minimapViewportBox.height / 2) / Math.max(1, height)
-                                        activeController.centerViewAtFractions(centerX, centerY)
+                                        if (!activeController)
+                                            return;
+                                        var centerX = (mouse.x - dragOffsetX + minimapViewportBox.width / 2) / Math.max(1, width);
+                                        var centerY = (mouse.y - dragOffsetY + minimapViewportBox.height / 2) / Math.max(1, height);
+                                        activeController.centerViewAtFractions(centerX, centerY);
                                     }
 
-                                    onPressed: function(mouse) {
-                                        var inside = mouse.x >= minimapViewportBox.x && mouse.x <= minimapViewportBox.x + minimapViewportBox.width &&
-                                                     mouse.y >= minimapViewportBox.y && mouse.y <= minimapViewportBox.y + minimapViewportBox.height
-                                        dragOffsetX = inside ? mouse.x - minimapViewportBox.x : minimapViewportBox.width / 2
-                                        dragOffsetY = inside ? mouse.y - minimapViewportBox.y : minimapViewportBox.height / 2
-                                        if (activeController) activeController.beginInteraction()
-                                        moveViewport(mouse)
+                                    onPressed: function (mouse) {
+                                        var inside = mouse.x >= minimapViewportBox.x && mouse.x <= minimapViewportBox.x + minimapViewportBox.width && mouse.y >= minimapViewportBox.y && mouse.y <= minimapViewportBox.y + minimapViewportBox.height;
+                                        dragOffsetX = inside ? mouse.x - minimapViewportBox.x : minimapViewportBox.width / 2;
+                                        dragOffsetY = inside ? mouse.y - minimapViewportBox.y : minimapViewportBox.height / 2;
+                                        if (activeController)
+                                            activeController.beginInteraction();
+                                        moveViewport(mouse);
                                     }
-                                    onPositionChanged: function(mouse) {
-                                        if (mouse.buttons & Qt.LeftButton) moveViewport(mouse)
+                                    onPositionChanged: function (mouse) {
+                                        if (mouse.buttons & Qt.LeftButton)
+                                            moveViewport(mouse);
                                     }
-                                    onReleased: if (activeController) activeController.endInteraction()
-                                    onCanceled: if (activeController) activeController.endInteraction()
+                                    onReleased: if (activeController)
+                                        activeController.endInteraction()
+                                    onCanceled: if (activeController)
+                                        activeController.endInteraction()
                                 }
                             }
                             Label {
@@ -2581,10 +3366,8 @@ ApplicationWindow {
                         }
                     }
 
-                    // Zoom and colour-scale controls also live in the
-                    // workspace panel, but that panel is scrollable and often
-                    // hidden, so the two adjustments made constantly during
-                    // navigation float over the map as well.
+                    // Optional shortcuts beside the plot; detailed color
+                    // editing is shared with the legend and map toolbar.
                     Rectangle {
                         id: quickControls
                         z: 110
@@ -2594,32 +3377,21 @@ ApplicationWindow {
                         anchors.rightMargin: 12
                         anchors.bottomMargin: 12
                         width: quickControlsRow.implicitWidth + 12
-                        height: 34
+                        height: Theme.controlHeight + 12
                         radius: Theme.radiusMd
                         color: Theme.surfaceAlt
                         border.color: Theme.borderStrong
                         // Dimmed until pointed at so the controls never compete
                         // with the map they sit on top of.
                         opacity: quickControlsHover.hovered ? 1.0 : 0.82
-                        Behavior on opacity { NumberAnimation { duration: Theme.reducedMotion ? 0 : Theme.animationFast } }
-
-                        HoverHandler { id: quickControlsHover }
-
-                        component QuickControlButton: AppToolButton {
-                            onLightSurface: !Theme.dark
-                            contentColor: Theme.textSecondary
-                            leftPadding: 4
-                            rightPadding: 4
-                            Layout.preferredWidth: Math.max(26, implicitContentWidth + 8)
-                            Layout.preferredHeight: 26
-                            ToolTip.visible: hovered
-                            ToolTip.text: Accessible.name
+                        Behavior on opacity {
+                            NumberAnimation {
+                                duration: Theme.reducedMotion ? 0 : Theme.animationFast
+                            }
                         }
 
-                        component QuickControlDivider: Rectangle {
-                            Layout.preferredWidth: 1
-                            Layout.preferredHeight: 18
-                            color: Theme.border
+                        HoverHandler {
+                            id: quickControlsHover
                         }
 
                         RowLayout {
@@ -2645,6 +3417,11 @@ ApplicationWindow {
 
                             QuickControlDivider {}
 
+                            Label {
+                                text: "Color range"
+                                color: Theme.textSecondary
+                                font.pixelSize: Theme.textSm
+                            }
                             QuickControlButton {
                                 text: "½×"
                                 Accessible.name: "Halve the colour scale maximum (brighter map)"
@@ -2669,30 +3446,47 @@ ApplicationWindow {
                         anchors.fill: parent
                         visible: activeTab && activeTab.type !== "single"
                         tabSession: activeTab
-                        onLoadRegionsRequested: function(format) {
-                            regionDialog.regionFormat = format
-                            regionDialog.open()
+                        onLoadRegionsRequested: function (format) {
+                            regionDialog.regionFormat = format;
+                            regionDialog.open();
                         }
-                        onHoverInfo: function(text, active) {
-                            hoverText = text
-                            hoverActive = active
+                        onHoverInfo: function (text, active) {
+                            hoverText = text;
+                            hoverActive = active;
                         }
-                        onToastRequested: function(text, kind) { showToast(text, kind) }
-                        onContextMenuRequested: function(controller, xFraction, yFraction) {
-                            activeController = controller
-                            contextFx = xFraction
-                            contextFy = yFraction
-                            heatmapMenu.popup()
+                        onToastRequested: function (text, kind) {
+                            showToast(text, kind);
                         }
-                        onBullseyeHover: function(controller, xFraction, yFraction) {
-                            updateBullseyeInspector(controller, xFraction, yFraction)
+                        onContextMenuRequested: function (controller, xFraction, yFraction) {
+                            activeController = controller;
+                            contextFx = xFraction;
+                            contextFy = yFraction;
+                            heatmapMenu.popup();
+                        }
+                        onBullseyeHover: function (controller, xFraction, yFraction) {
+                            updateBullseyeInspector(controller, xFraction, yFraction);
                         }
                     }
-
                 }
             }
         }
+    }
 
+    component QuickControlButton: AppToolButton {
+        onLightSurface: !Theme.dark
+        contentColor: Theme.textSecondary
+        leftPadding: 4
+        rightPadding: 4
+        Layout.preferredWidth: Math.max(Theme.controlHeight, implicitContentWidth + 12)
+        Layout.preferredHeight: Theme.controlHeight
+        ToolTip.visible: hovered
+        ToolTip.text: Accessible.name
+    }
+
+    component QuickControlDivider: Rectangle {
+        Layout.preferredWidth: 1
+        Layout.preferredHeight: 18
+        color: Theme.border
     }
 
     Popup {
@@ -2708,9 +3502,8 @@ ApplicationWindow {
         closePolicy: Popup.CloseOnEscape
         onClosed: {
             for (var i = 0; i < bullseyeInspectorCells.length; ++i)
-                if (bullseyeInspectorCells[i].controller &&
-                        (!activeTab || (activeTab.type !== "bullseye" && activeTab.type !== "rotated-45")))
-                    bullseyeInspectorCells[i].controller.setAnalysisPaddingBins(0)
+                if (bullseyeInspectorCells[i].controller && (!activeTab || (activeTab.type !== "bullseye" && activeTab.type !== "rotated-45")))
+                    bullseyeInspectorCells[i].controller.setAnalysisPaddingBins(0);
         }
         background: Rectangle {
             color: Theme.surface
@@ -2725,30 +3518,48 @@ ApplicationWindow {
                 Layout.preferredHeight: 42
                 color: Theme.surfaceAlt
                 RowLayout {
-                    anchors.fill: parent; anchors.leftMargin: 10; anchors.rightMargin: 8; spacing: 8
-                    Label { text: "Live SIP bullseye"; color: Theme.textPrimary; font.weight: Font.DemiBold }
+                    anchors.fill: parent
+                    anchors.leftMargin: 10
+                    anchors.rightMargin: 8
+                    spacing: 8
                     Label {
-                        text: bullseyeInspectorSource
-                            ? bullseyeInspectorSource.chrX + ":" + bullseyeInspectorX + " × " +
-                              bullseyeInspectorSource.chrY + ":" + bullseyeInspectorY
-                            : ""
-                        color: Theme.textMuted; font.pixelSize: Theme.textXs; Layout.fillWidth: true; elide: Text.ElideMiddle
+                        text: "Live SIP bullseye"
+                        color: Theme.textPrimary
+                        font.weight: Font.DemiBold
                     }
-                    Label { text: "Bins"; color: Theme.textSecondary; font.pixelSize: Theme.textXs }
+                    Label {
+                        text: bullseyeInspectorSource ? bullseyeInspectorSource.chrX + ":" + bullseyeInspectorX + " × " + bullseyeInspectorSource.chrY + ":" + bullseyeInspectorY : ""
+                        color: Theme.textMuted
+                        font.pixelSize: Theme.textXs
+                        Layout.fillWidth: true
+                        elide: Text.ElideMiddle
+                    }
+                    Label {
+                        text: "Bins"
+                        color: Theme.textSecondary
+                        font.pixelSize: Theme.textXs
+                    }
                     SpinBox {
-                        from: 1; to: 100
+                        from: 1
+                        to: 100
                         value: bullseyeInspectorRadiusBins
                         onValueModified: setBullseyeInspectorRadius(value)
                         Layout.preferredWidth: 84
                     }
-                    Label { text: "bp"; color: Theme.textSecondary; font.pixelSize: Theme.textXs }
+                    Label {
+                        text: "bp"
+                        color: Theme.textSecondary
+                        font.pixelSize: Theme.textXs
+                    }
                     AppTextField {
-                        text: String(bullseyeInspectorRadiusBins *
-                                     Math.max(1, bullseyeInspectorSource ? bullseyeInspectorSource.resolution : 1))
-                        validator: DoubleValidator { bottom: 1; decimals: 0 }
+                        text: String(bullseyeInspectorRadiusBins * Math.max(1, bullseyeInspectorSource ? bullseyeInspectorSource.resolution : 1))
+                        validator: DoubleValidator {
+                            bottom: 1
+                            decimals: 0
+                        }
                         onEditingFinished: {
-                            var resolution = Math.max(1, bullseyeInspectorSource ? bullseyeInspectorSource.resolution : 1)
-                            setBullseyeInspectorRadius(Number(text) / resolution)
+                            var resolution = Math.max(1, bullseyeInspectorSource ? bullseyeInspectorSource.resolution : 1);
+                            setBullseyeInspectorRadius(Number(text) / resolution);
                         }
                         Layout.preferredWidth: 96
                     }
@@ -2756,22 +3567,26 @@ ApplicationWindow {
                         text: "Pin to tab"
                         tonal: true
                         onClicked: {
-                            var source = bullseyeInspectorSource
-                            var fx = source ? (bullseyeInspectorX - source.x0) / Math.max(1, source.x1 - source.x0) : 0.5
-                            var fy = source ? (bullseyeInspectorY - source.y0) / Math.max(1, source.y1 - source.y0) : 0.5
-                            bullseyeInspector.close()
-                            openBullseyeAt(source, fx, fy)
+                            var source = bullseyeInspectorSource;
+                            var fx = source ? (bullseyeInspectorX - source.x0) / Math.max(1, source.x1 - source.x0) : 0.5;
+                            var fy = source ? (bullseyeInspectorY - source.y0) / Math.max(1, source.y1 - source.y0) : 0.5;
+                            bullseyeInspector.close();
+                            openBullseyeAt(source, fx, fy);
                             if (activeTab) {
-                                activeTab.bullseyeRadiusBins = bullseyeInspectorRadiusBins
-                                activeTab.bullseyePinned = true
+                                activeTab.bullseyeRadiusBins = bullseyeInspectorRadiusBins;
+                                activeTab.bullseyePinned = true;
                             }
                         }
                     }
-                    AppToolButton { text: "×"; onClicked: bullseyeInspector.close() }
+                    AppToolButton {
+                        text: "×"
+                        onClicked: bullseyeInspector.close()
+                    }
                 }
             }
             ScrollView {
-                Layout.fillWidth: true; Layout.fillHeight: true
+                Layout.fillWidth: true
+                Layout.fillHeight: true
                 clip: true
                 contentHeight: availableHeight
                 Row {
@@ -2782,15 +3597,16 @@ ApplicationWindow {
                         model: bullseyeInspectorCells
                         Rectangle {
                             required property var modelData
-                            width: Math.max(260, (bullseyeInspector.width - 32) /
-                                            Math.min(2, Math.max(1, bullseyeInspectorCells.length)))
+                            width: Math.max(260, (bullseyeInspector.width - 32) / Math.min(2, Math.max(1, bullseyeInspectorCells.length)))
                             height: parent.height - 16
                             color: "white"
                             border.color: Theme.border
                             ColumnLayout {
-                                anchors.fill: parent; spacing: 0
+                                anchors.fill: parent
+                                spacing: 0
                                 Label {
-                                    Layout.fillWidth: true; Layout.preferredHeight: 28
+                                    Layout.fillWidth: true
+                                    Layout.preferredHeight: 28
                                     text: modelData.label
                                     color: Theme.textPrimary
                                     horizontalAlignment: Text.AlignHCenter
@@ -2798,7 +3614,8 @@ ApplicationWindow {
                                     elide: Text.ElideMiddle
                                 }
                                 BullseyeItem {
-                                    Layout.fillWidth: true; Layout.fillHeight: true
+                                    Layout.fillWidth: true
+                                    Layout.fillHeight: true
                                     controller: modelData.controller
                                     centerX: bullseyeInspectorX
                                     centerY: bullseyeInspectorY
@@ -2809,31 +3626,6 @@ ApplicationWindow {
                     }
                 }
             }
-        }
-    }
-
-    Rectangle {
-        id: toast
-        z: 1000
-        visible: toastText.length > 0
-        anchors.horizontalCenter: parent.horizontalCenter
-        anchors.bottom: parent.bottom
-        anchors.bottomMargin: 48
-        width: Math.min(520, toastLabel.implicitWidth + 44)
-        height: 40
-        radius: Theme.radiusSm
-        color: Theme.surfaceAlt
-        border.color: toastKind === "error" ? Theme.danger : toastKind === "success" ? Theme.success : Theme.borderStrong
-        RowLayout {
-            anchors.fill: parent
-            anchors.leftMargin: 12
-            anchors.rightMargin: 12
-            spacing: 8
-            Rectangle {
-                Layout.preferredWidth: 7; Layout.preferredHeight: 7; radius: 4
-                color: toastKind === "error" ? Theme.danger : toastKind === "success" ? Theme.success : Theme.accent
-            }
-            Label { id: toastLabel; text: toastText; color: Theme.textPrimary; font.pixelSize: Theme.textSm; Layout.fillWidth: true }
         }
     }
 }

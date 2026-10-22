@@ -467,24 +467,17 @@ PooledAnnotationResult DatasetRegistry::createCustomAnnotations(const QString& n
 PooledAnnotationResult DatasetRegistry::restoreCustomAnnotations(const QString& resourceId, const QString& name,
                                                                  const QVector<PooledAnnotation>& annotations) {
     if (resourceId.isEmpty()) return createCustomAnnotations(name, annotations);
-    {
-        QMutexLocker locker(&m_mutex);
-        const auto existing = m_annotations.constFind(resourceId);
-        if (existing != m_annotations.cend() && existing.value()->custom) {
-            existing.value()->name = name.trimmed().isEmpty() ? existing.value()->name : name.trimmed();
-            existing.value()->annotations = annotations;
-            auto summary = m_summaries.find(resourceId);
-            if (summary != m_summaries.end()) {
-                summary->name = existing.value()->name;
-                summary->itemCount = annotations.size();
-                scheduleModelRefresh();
-            }
-            return {resourceId, QString(), existing.value()};
-        }
-    }
+    QMutexLocker locker(&m_mutex);
+    const auto existing = m_annotations.constFind(resourceId);
+    if (existing != m_annotations.cend() && existing.value()->custom &&
+        existing.value()->annotations == annotations)
+        return {resourceId, QString(), existing.value()};
 
+    // A workspace may contain an older snapshot of a resource still displayed
+    // in another tab. Restore it into its own resource rather than modifying
+    // the annotations every existing consumer shares.
     PooledAnnotationResult result;
-    result.id = resourceId.startsWith(QStringLiteral("annotation:custom:"))
+    result.id = existing == m_annotations.cend() && resourceId.startsWith(QStringLiteral("annotation:custom:"))
         ? resourceId
         : QStringLiteral("annotation:custom:%1").arg(QUuid::createUuid().toString(QUuid::WithoutBraces));
     auto data = std::make_shared<PooledAnnotationData>();
@@ -493,28 +486,9 @@ PooledAnnotationResult DatasetRegistry::restoreCustomAnnotations(const QString& 
     data->source = result.id;
     data->custom = true;
     data->annotations = annotations;
-    {
-        QMutexLocker locker(&m_mutex);
-        const auto existing = m_annotations.constFind(result.id);
-        if (existing != m_annotations.cend()) {
-            if (existing.value()->custom) {
-                existing.value()->name = data->name;
-                existing.value()->annotations = annotations;
-                result.data = existing.value();
-                auto summary = m_summaries.find(result.id);
-                if (summary != m_summaries.end()) {
-                    summary->name = data->name;
-                    summary->itemCount = annotations.size();
-                    scheduleModelRefresh();
-                }
-            }
-            else result.error = QStringLiteral("Resource ID already belongs to a non-custom annotation: %1").arg(result.id);
-            return result;
-        }
-        m_annotations.insert(result.id, data);
-        recordResourceLocked({result.id, QStringLiteral("annotation"), data->name, data->source,
-                              data->annotations.size(), true});
-    }
+    m_annotations.insert(result.id, data);
+    recordResourceLocked({result.id, QStringLiteral("annotation"), data->name, data->source,
+                          data->annotations.size(), true});
     result.data = data;
     return result;
 }

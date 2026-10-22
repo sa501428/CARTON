@@ -42,7 +42,7 @@ ComboBox {
         required property var modelData
         required property int index
         width: control.width
-        height: 30
+        height: Theme.controlHeight
         highlighted: control.highlightedIndex === index
         background: Rectangle {
             color: parent.highlighted ? Theme.accentSoft : "transparent"
@@ -54,6 +54,7 @@ ComboBox {
             font.pixelSize: Theme.textBase
             color: Theme.textPrimary
             verticalAlignment: Text.AlignVCenter
+            elide: Text.ElideRight
             leftPadding: 8
         }
     }

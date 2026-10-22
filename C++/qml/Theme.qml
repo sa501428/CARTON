@@ -35,7 +35,7 @@ QtObject {
     // Text
     readonly property color textPrimary: dark ? "#eef0f4" : "#13161c"
     readonly property color textSecondary: dark ? "#9aa4b5" : "#5b6472"
-    readonly property color textMuted: dark ? "#6d7686" : "#8991a0"
+    readonly property color textMuted: dark ? "#939fb1" : "#626c7b"
     readonly property color textDisabled: dark ? "#454b58" : "#b7bcc5"
 
     // Accent (indigo)
@@ -79,7 +79,7 @@ QtObject {
     readonly property int space16: 16
     readonly property int space20: 20
     readonly property int space24: 24
-    readonly property int controlHeight: Math.round(32 * uiScale)
+    readonly property int controlHeight: Math.round(36 * uiScale)
     readonly property int sidebarWidth: 272
     readonly property int inspectorWidth: 336
     readonly property int trackHeaderHeight: 28

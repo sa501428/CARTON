@@ -17,6 +17,7 @@ class TabSession : public QObject {
     Q_PROPERTY(QString typeLabel READ typeLabel NOTIFY structureChanged)
     Q_PROPERTY(QString title READ title WRITE setTitle NOTIFY titleChanged)
     Q_PROPERTY(QVariantList cells READ cells NOTIFY cellsChanged)
+    Q_PROPERTY(QVariantList cellLayout READ cellLayout NOTIFY cellLayoutChanged)
     Q_PROPERTY(QVariantList maps READ maps NOTIFY cellsChanged)
     Q_PROPERTY(int cellCount READ cellCount NOTIFY cellsChanged)
     Q_PROPERTY(int mapCount READ mapCount NOTIFY cellsChanged)
@@ -58,6 +59,7 @@ public:
     QString typeLabel() const;
     QString title() const;
     QVariantList cells() const;
+    QVariantList cellLayout() const;
     QVariantList maps() const;
     int cellCount() const;
     int mapCount() const;
@@ -148,6 +150,7 @@ public:
 signals:
     void structureChanged();
     void cellsChanged();
+    void cellLayoutChanged();
     void activeCellChanged();
     void titleChanged();
     void layerScopeChanged();

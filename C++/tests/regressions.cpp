@@ -73,6 +73,47 @@ int main(int argc, char** argv) {
     check(cleared.cytobandCount() == 0, "clearing cytobands cancels an active result");
     cleared.loadTrackFromPath(track);
     check(waitFor([&]() { return cleared.trackCount() == 1; }), "track loading recovers after clearing");
+    cleared.clearLayersWithUndo(QStringLiteral("tracks"));
+    check(cleared.trackCount() == 0 && cleared.canUndoLayerClear(), "track clear retains an undo snapshot");
+    cleared.loadAnnotationsFromPath(loops);
+    check(waitFor([&]() { return cleared.annotationCount() == 1; }), "unrelated annotations load after clearing tracks");
+    check(cleared.undoLayerClear() && cleared.trackCount() == 1 && cleared.annotationCount() == 1,
+          "undo track clear preserves annotations added after the clear");
+    cleared.clearLayersWithUndo(QStringLiteral("tracks"));
+    cleared.loadTrackFromPath(track);
+    check(waitFor([&]() { return cleared.trackCount() == 1; }), "new tracks load after an undoable clear");
+    check(!cleared.canUndoLayerClear() && !cleared.undoLayerClear() && cleared.trackCount() == 1,
+          "new track changes invalidate stale clear undo");
+
+    PooledAnnotation feature;
+    feature.id = QStringLiteral("shared-feature");
+    feature.chr1 = feature.chr2 = QStringLiteral("chr22");
+    feature.end1 = feature.end2 = 1000;
+    const auto pooled = DatasetRegistry::instance()->createCustomAnnotations(QStringLiteral("Shared layer"), {feature});
+    HicDataController annotationUndo;
+    annotationUndo.loadAnnotationResource(pooled.id);
+    annotationUndo.clearLayersWithUndo(QStringLiteral("annotations"));
+    check(annotationUndo.annotationCount() == 0 && pooled.data->annotations.size() == 1,
+          "undoable clear detaches annotations from their shared source");
+    check(annotationUndo.undoLayerClear() && annotationUndo.annotationCount() == 1 && pooled.data->annotations.size() == 1,
+          "annotation clear undo restores the original layers without changing other consumers");
+    const auto unchanged = DatasetRegistry::instance()->restoreCustomAnnotations(pooled.id, QStringLiteral("Shared layer"), {feature});
+    check(unchanged.data == pooled.data, "unchanged restored annotations retain pooling");
+    feature.end1 = 2000;
+    const auto restoredAnnotations = DatasetRegistry::instance()->restoreCustomAnnotations(pooled.id, QStringLiteral("Restored snapshot"), {feature});
+    check(restoredAnnotations.data && restoredAnnotations.id != pooled.id && pooled.data->annotations.front().end1 == 1000 &&
+          restoredAnnotations.data->annotations.front().end1 == 2000,
+          "restoring an older annotation snapshot cannot overwrite another tab's shared annotations");
+
+    TabSession selection;
+    selection.initialize(QStringLiteral("multi-map"));
+    selection.addMap();
+    int layoutChanges = 0;
+    QObject::connect(&selection, &TabSession::cellLayoutChanged, &selection, [&]() { ++layoutChanges; });
+    selection.setActiveCellIndex(0);
+    selection.setActiveCellIndex(1);
+    check(layoutChanges == 0 && selection.cells()[1].toMap().value(QStringLiteral("selected")).toBool(),
+          "selecting a map updates selection without rebuilding viewport delegates");
     HicDataController replaced;
     replaced.loadTrackFromPath(track);
     replaced.loadAnnotationsFromPath(loops);

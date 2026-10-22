@@ -20,148 +20,46 @@ Rectangle {
     color: Theme.appBg
 
     function cellAt(row, column) {
-        if (!tabSession) return null
-        var values = tabSession.cells
+        if (!tabSession)
+            return null;
+        var values = tabSession.cellLayout;
         for (var i = 0; i < values.length; ++i)
-            if (values[i].row === row && values[i].column === column) return values[i]
-        return null
+            if (values[i].row === row && values[i].column === column)
+                return values[i];
+        return null;
     }
 
     ColumnLayout {
         anchors.fill: parent
         spacing: 0
 
-        Rectangle {
+        WorkspaceLayoutBar {
             Layout.fillWidth: true
-            Layout.preferredHeight: 46
-            color: Theme.surfaceAlt
-            border.color: Theme.borderSubtle
-            RowLayout {
-                anchors.fill: parent
-                anchors.leftMargin: 10
-                anchors.rightMargin: 10
-                spacing: 8
-                Label {
-                    text: root.tabSession ? root.tabSession.typeLabel : "Tab"
-                    color: Theme.textPrimary
-                    font.pixelSize: Theme.textSm
-                    font.weight: Font.DemiBold
-                }
-                Label {
-                    visible: root.tabSession && root.tabSession.regionCount > 0
-                    text: root.tabSession.regionCount + " regions"
-                    color: Theme.textMuted
-                    font.pixelSize: Theme.textXs
-                }
-                AppButton {
-                    visible: root.tabSession && (root.tabSession.type === "multi-map" || root.tabSession.type === "map-region" ||
-                             root.tabSession.type === "rotated-45" || root.tabSession.type === "bullseye" ||
-                             root.tabSession.type === "virtual-4c" || root.tabSession.type === "processing")
-                    text: "+ Map"
-                    tonal: true
-                    onClicked: root.tabSession.addMap()
-                }
-                AppButton {
-                    visible: root.tabSession && (root.tabSession.type === "multi-map" || root.tabSession.type === "map-region" ||
-                             root.tabSession.type === "rotated-45" || root.tabSession.type === "bullseye" ||
-                             root.tabSession.type === "virtual-4c" || root.tabSession.type === "processing") &&
-                             root.tabSession.mapCount > 1
-                    text: "− Map"
-                    tonal: true
-                    onClicked: {
-                        var cells = root.tabSession.cells
-                        var active = root.tabSession.activeCellIndex
-                        root.tabSession.removeMap(active >= 0 && active < cells.length ? cells[active].mapIndex : root.tabSession.mapCount - 1)
-                    }
-                }
-                AppButton {
-                    visible: root.tabSession && (root.tabSession.type === "multi-region" || root.tabSession.type === "map-region")
-                    text: "Load BEDPE"
-                    tonal: true
-                    onClicked: root.loadRegionsRequested("bedpe")
-                }
-                AppButton {
-                    visible: root.tabSession && root.tabSession.type === "pairwise"
-                    text: "Load BED"
-                    tonal: true
-                    onClicked: root.loadRegionsRequested("bed")
-                }
-                AppButton {
-                    visible: root.tabSession && root.tabSession.type === "pairwise"
-                    text: "Project BEDPE"
-                    tonal: true
-                    onClicked: root.loadRegionsRequested("bedpe-as-bed")
-                }
-                Label {
-                    visible: root.tabSession && (root.tabSession.type === "multi-region" || root.tabSession.type === "map-region" || root.tabSession.type === "pairwise")
-                    text: "Window"
-                    color: Theme.textSecondary
-                    font.pixelSize: Theme.textXs
-                }
-                SpinBox {
-                    visible: root.tabSession && (root.tabSession.type === "multi-region" || root.tabSession.type === "map-region" || root.tabSession.type === "pairwise")
-                    from: 1000
-                    to: 1000000000
-                    stepSize: 100000
-                    editable: true
-                    value: root.tabSession ? Math.min(to, root.tabSession.windowSize) : 2000000
-                    onValueModified: if (root.tabSession) root.tabSession.windowSize = value
-                    Layout.preferredWidth: 132
-                }
-                AppCheckBox {
-                    visible: root.tabSession && root.tabSession.type === "map-region"
-                    text: "Transpose"
-                    checked: root.tabSession && root.tabSession.transposed
-                    onToggled: if (root.tabSession) root.tabSession.transposed = checked
-                }
-                AppComboBox {
-                    visible: root.tabSession && root.tabSession.type === "pairwise"
-                    model: ["Split diagonal", "Blank diagonal"]
-                    currentIndex: root.tabSession && root.tabSession.diagonalMode === "blank" ? 1 : 0
-                    onActivated: if (root.tabSession) root.tabSession.diagonalMode = currentIndex === 1 ? "blank" : "split"
-                    Layout.preferredWidth: 138
-                }
-                Item { Layout.fillWidth: true }
-                AppCheckBox {
-                    visible: root.tabSession && (root.tabSession.type === "multi-map" || root.tabSession.type === "map-region" ||
-                             root.tabSession.type === "rotated-45" || root.tabSession.type === "bullseye" ||
-                             root.tabSession.type === "virtual-4c" || root.tabSession.type === "processing")
-                    text: "Link loci"
-                    checked: root.tabSession && root.tabSession.linkNavigation
-                    onToggled: if (root.tabSession) root.tabSession.linkNavigation = checked
-                }
-                AppCheckBox {
-                    visible: root.tabSession && root.tabSession.cellCount > 1
-                    text: "Cursor"
-                    checked: root.tabSession && root.tabSession.linkCrosshair
-                    onToggled: if (root.tabSession) root.tabSession.linkCrosshair = checked
-                }
-                AppCheckBox {
-                    visible: root.tabSession && root.tabSession.cellCount > 1
-                    text: "Scale"
-                    checked: root.tabSession && root.tabSession.linkColorScale
-                    onToggled: if (root.tabSession) root.tabSession.linkColorScale = checked
-                }
-                Label { text: "Layer target"; color: Theme.textSecondary; font.pixelSize: Theme.textXs }
-                AppComboBox {
-                    model: ["Default", "Tab", "Map", "Region", "Cell"]
-                    currentIndex: root.tabSession ? Math.max(0, model.map(function(v) { return v.toLowerCase() }).indexOf(root.tabSession.layerScope)) : 0
-                    onActivated: if (root.tabSession) root.tabSession.layerScope = currentText.toLowerCase()
-                    Layout.preferredWidth: 104
-                }
-                Label {
-                    visible: root.tabSession && (root.tabSession.type === "multi-map" || root.tabSession.type === "multi-region")
-                    text: "Columns"
-                    color: Theme.textSecondary
-                    font.pixelSize: Theme.textXs
-                }
-                AppComboBox {
-                    visible: root.tabSession && (root.tabSession.type === "multi-map" || root.tabSession.type === "multi-region")
-                    model: ["1", "2", "3", "4", "5", "6", "7", "8"]
-                    currentIndex: root.tabSession ? Math.max(0, Math.min(7, root.tabSession.layoutColumns - 1)) : 1
-                    onActivated: if (root.tabSession) root.tabSession.layoutColumns = Number(currentText)
-                    Layout.preferredWidth: 72
-                }
+            tabSession: root.tabSession
+            onLoadRegionsRequested: function (format) {
+                root.loadRegionsRequested(format);
+            }
+        }
+        RowLayout {
+            visible: root.tabSession && ["multi-region", "map-region", "pairwise"].indexOf(root.tabSession.type) >= 0
+            Layout.fillWidth: true
+            Layout.margins: 8
+            Label {
+                text: "Region window (bp)"
+                color: Theme.textSecondary
+            }
+            SpinBox {
+                from: 1000
+                to: 1000000000
+                stepSize: 100000
+                editable: true
+                value: root.tabSession ? root.tabSession.windowSize : 2000000
+                onValueModified: if (root.tabSession)
+                    root.tabSession.windowSize = value
+                Accessible.name: "Region window in base pairs"
+            }
+            Item {
+                Layout.fillWidth: true
             }
         }
 
@@ -169,13 +67,19 @@ Rectangle {
             Layout.fillWidth: true
             Layout.fillHeight: true
             sourceComponent: {
-                if (!root.tabSession) return galleryComponent
-                if (root.tabSession.type === "pairwise") return pairwiseComponent
-                if (root.tabSession.type === "rotated-45") return rotatedComponent
-                if (root.tabSession.type === "bullseye") return bullseyeComponent
-                if (root.tabSession.type === "virtual-4c") return virtual4CComponent
-                if (root.tabSession.type === "processing") return processingComponent
-                return galleryComponent
+                if (!root.tabSession)
+                    return galleryComponent;
+                if (root.tabSession.type === "pairwise")
+                    return pairwiseComponent;
+                if (root.tabSession.type === "rotated-45")
+                    return rotatedComponent;
+                if (root.tabSession.type === "bullseye")
+                    return bullseyeComponent;
+                if (root.tabSession.type === "virtual-4c")
+                    return virtual4CComponent;
+                if (root.tabSession.type === "processing")
+                    return processingComponent;
+                return galleryComponent;
             }
         }
     }
@@ -184,9 +88,11 @@ Rectangle {
         id: rotatedComponent
         Rotated45View {
             tabSession: root.tabSession
-            onHoverInfo: function(text, active) { root.hoverInfo(text, active) }
-            onContextMenuRequested: function(controller, xFraction, yFraction) {
-                root.contextMenuRequested(controller, xFraction, yFraction)
+            onHoverInfo: function (text, active) {
+                root.hoverInfo(text, active);
+            }
+            onContextMenuRequested: function (controller, xFraction, yFraction) {
+                root.contextMenuRequested(controller, xFraction, yFraction);
             }
         }
     }
@@ -195,9 +101,11 @@ Rectangle {
         id: bullseyeComponent
         BullseyeView {
             tabSession: root.tabSession
-            onHoverInfo: function(text, active) { root.hoverInfo(text, active) }
-            onContextMenuRequested: function(controller, xFraction, yFraction) {
-                root.contextMenuRequested(controller, xFraction, yFraction)
+            onHoverInfo: function (text, active) {
+                root.hoverInfo(text, active);
+            }
+            onContextMenuRequested: function (controller, xFraction, yFraction) {
+                root.contextMenuRequested(controller, xFraction, yFraction);
             }
         }
     }
@@ -206,10 +114,14 @@ Rectangle {
         id: virtual4CComponent
         Virtual4CView {
             tabSession: root.tabSession
-            onHoverInfo: function(text, active) { root.hoverInfo(text, active) }
-            onToastRequested: function(text, kind) { root.toastRequested(text, kind) }
-            onContextMenuRequested: function(controller, xFraction, yFraction) {
-                root.contextMenuRequested(controller, xFraction, yFraction)
+            onHoverInfo: function (text, active) {
+                root.hoverInfo(text, active);
+            }
+            onToastRequested: function (text, kind) {
+                root.toastRequested(text, kind);
+            }
+            onContextMenuRequested: function (controller, xFraction, yFraction) {
+                root.contextMenuRequested(controller, xFraction, yFraction);
             }
         }
     }
@@ -218,9 +130,11 @@ Rectangle {
         id: processingComponent
         ProcessingView {
             tabSession: root.tabSession
-            onHoverInfo: function(text, active) { root.hoverInfo(text, active) }
-            onContextMenuRequested: function(controller, xFraction, yFraction) {
-                root.contextMenuRequested(controller, xFraction, yFraction)
+            onHoverInfo: function (text, active) {
+                root.hoverInfo(text, active);
+            }
+            onContextMenuRequested: function (controller, xFraction, yFraction) {
+                root.contextMenuRequested(controller, xFraction, yFraction);
             }
         }
     }
@@ -243,7 +157,7 @@ Rectangle {
                     columnSpacing: 8
                     rowSpacing: 8
                     Repeater {
-                        model: root.tabSession ? root.tabSession.cells : []
+                        model: root.tabSession ? root.tabSession.cellLayout : []
                         MapViewport {
                             required property var modelData
                             Layout.row: modelData.row
@@ -253,26 +167,30 @@ Rectangle {
                             Layout.preferredHeight: Math.max(334, Layout.preferredWidth + 34)
                             controller: modelData.controller
                             viewLabel: modelData.label
-                            selected: modelData.selected
+                            selected: (root.tabSession && root.tabSession.activeCellIndex === modelData.index)
                             showTrackPanels: true
                             crosshairVisible: root.tabSession && root.tabSession.linkCrosshair && root.sharedCursorActive
                             crosshairX: root.sharedCursorX
                             crosshairY: root.sharedCursorY
                             onActivated: root.tabSession.activeCellIndex = modelData.index
-                            onCursorMoved: function(xFraction, yFraction) {
-                                root.sharedCursorX = xFraction; root.sharedCursorY = yFraction; root.sharedCursorActive = true
-                                root.bullseyeHover(modelData.controller, xFraction, yFraction)
+                            onCursorMoved: function (xFraction, yFraction) {
+                                root.sharedCursorX = xFraction;
+                                root.sharedCursorY = yFraction;
+                                root.sharedCursorActive = true;
+                                root.bullseyeHover(modelData.controller, xFraction, yFraction);
                             }
                             onViewportInteracted: root.tabSession.notifyViewportInteracted(modelData.index)
-                            onAnnotationRequested: function(x0, y0, x1, y1) {
-                                root.tabSession.addScopedAnnotation(modelData.index, x0, y0, x1, y1, root.tabSession.layerScope)
+                            scopedAnnotationEditing: true
+                            onAnnotationRequested: function (x0, y0, x1, y1) {
+                                root.tabSession.addScopedAnnotation(modelData.index, x0, y0, x1, y1, root.tabSession.layerScope);
                             }
-                            onContextMenuRequested: function(controller, xFraction, yFraction) {
-                                root.contextMenuRequested(controller, xFraction, yFraction)
+                            onContextMenuRequested: function (controller, xFraction, yFraction) {
+                                root.contextMenuRequested(controller, xFraction, yFraction);
                             }
-                            onHoverInfo: function(text, active) {
-                                if (!active) root.sharedCursorActive = false
-                                root.hoverInfo(text, active)
+                            onHoverInfo: function (text, active) {
+                                if (!active)
+                                    root.sharedCursorActive = false;
+                                root.hoverInfo(text, active);
                             }
                         }
                     }
@@ -306,7 +224,9 @@ Rectangle {
                         height: pairwiseFlick.headerSize
                         property var cell: root.cellAt(0, index)
                         Label {
-                            anchors.left: parent.left; anchors.right: parent.right; anchors.top: parent.top
+                            anchors.left: parent.left
+                            anchors.right: parent.right
+                            anchors.top: parent.top
                             height: 22
                             text: parent.cell ? parent.cell.label.split(" × ")[0] : ""
                             color: Theme.textSecondary
@@ -315,8 +235,11 @@ Rectangle {
                             elide: Text.ElideRight
                         }
                         TrackAxisStrip {
-                            anchors.left: parent.left; anchors.right: parent.right; anchors.top: parent.top
-                            anchors.topMargin: 22; anchors.bottom: parent.bottom
+                            anchors.left: parent.left
+                            anchors.right: parent.right
+                            anchors.top: parent.top
+                            anchors.topMargin: 22
+                            anchors.bottom: parent.bottom
                             controller: parent.cell ? parent.cell.controller : null
                             horizontal: true
                         }
@@ -333,7 +256,9 @@ Rectangle {
                         height: pairwiseFlick.cellSize
                         property var cell: root.cellAt(index, 0)
                         Label {
-                            anchors.left: parent.left; anchors.top: parent.top; anchors.bottom: parent.bottom
+                            anchors.left: parent.left
+                            anchors.top: parent.top
+                            anchors.bottom: parent.bottom
                             width: 22
                             text: parent.cell ? parent.cell.label.split(" × ").pop() : ""
                             color: Theme.textSecondary
@@ -343,8 +268,11 @@ Rectangle {
                             elide: Text.ElideRight
                         }
                         TrackAxisStrip {
-                            anchors.left: parent.left; anchors.leftMargin: 22; anchors.right: parent.right
-                            anchors.top: parent.top; anchors.bottom: parent.bottom
+                            anchors.left: parent.left
+                            anchors.leftMargin: 22
+                            anchors.right: parent.right
+                            anchors.top: parent.top
+                            anchors.bottom: parent.bottom
                             controller: parent.cell ? parent.cell.controller : null
                             horizontal: false
                         }
@@ -352,7 +280,7 @@ Rectangle {
                 }
 
                 Repeater {
-                    model: root.tabSession ? root.tabSession.cells : []
+                    model: root.tabSession ? root.tabSession.cellLayout : []
                     MapViewport {
                         required property var modelData
                         x: pairwiseFlick.headerSize + modelData.column * pairwiseFlick.cellSize
@@ -361,7 +289,7 @@ Rectangle {
                         height: pairwiseFlick.cellSize
                         controller: modelData.controller
                         viewLabel: modelData.label
-                        selected: modelData.selected
+                        selected: (root.tabSession && root.tabSession.activeCellIndex === modelData.index)
                         blank: modelData.blank
                         compact: true
                         showHeader: false
@@ -370,19 +298,23 @@ Rectangle {
                         crosshairX: root.sharedCursorX
                         crosshairY: root.sharedCursorY
                         onActivated: root.tabSession.activeCellIndex = modelData.index
-                        onCursorMoved: function(xFraction, yFraction) {
-                            root.sharedCursorX = xFraction; root.sharedCursorY = yFraction; root.sharedCursorActive = true
-                            root.bullseyeHover(modelData.controller, xFraction, yFraction)
+                        onCursorMoved: function (xFraction, yFraction) {
+                            root.sharedCursorX = xFraction;
+                            root.sharedCursorY = yFraction;
+                            root.sharedCursorActive = true;
+                            root.bullseyeHover(modelData.controller, xFraction, yFraction);
                         }
-                        onAnnotationRequested: function(x0, y0, x1, y1) {
-                            root.tabSession.addScopedAnnotation(modelData.index, x0, y0, x1, y1, root.tabSession.layerScope)
+                        scopedAnnotationEditing: true
+                        onAnnotationRequested: function (x0, y0, x1, y1) {
+                            root.tabSession.addScopedAnnotation(modelData.index, x0, y0, x1, y1, root.tabSession.layerScope);
                         }
-                        onContextMenuRequested: function(controller, xFraction, yFraction) {
-                            root.contextMenuRequested(controller, xFraction, yFraction)
+                        onContextMenuRequested: function (controller, xFraction, yFraction) {
+                            root.contextMenuRequested(controller, xFraction, yFraction);
                         }
-                        onHoverInfo: function(text, active) {
-                            if (!active) root.sharedCursorActive = false
-                            root.hoverInfo(text, active)
+                        onHoverInfo: function (text, active) {
+                            if (!active)
+                                root.sharedCursorActive = false;
+                            root.hoverInfo(text, active);
                         }
                     }
                 }

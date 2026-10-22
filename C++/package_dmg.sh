@@ -113,7 +113,7 @@ copy_qt_plugin imageformats/libqsvg.dylib
 copy_qt_plugin tls/libqsecuretransportbackend.dylib
 
 for module in \
-    QtQuick QtQml QML QtQml/Models QtQml/WorkerScript \
+    QtCore QtQuick QtQml QML QtQml/Models QtQml/WorkerScript \
     QtQuick/Controls QtQuick/Templates QtQuick/Controls/impl QtQuick/Window \
     QtQuick/Effects QtQuick/Layouts QtQuick/Shapes Qt/labs/qmlmodels \
     QtQuick/Dialogs Qt/labs/folderlistmodel; do

@@ -7,6 +7,7 @@ import Carton
 
 Rectangle {
     id: root
+    objectName: "workspaceSidebar"
 
     property var controller: null
     property var tabSession: null
@@ -19,6 +20,17 @@ Rectangle {
     property real applicationFontScale: 1.0
     property bool reducedMotion: false
 
+    property int currentPage: 0
+    property int selectedTrackIndex: -1
+    property int selectedAnnotationIndex: -1
+    signal colorSettingsRequested
+    signal settingsRequested
+    signal clearTracksRequested
+    signal clearAnnotationsRequested
+    function showPage(page) {
+        currentPage = page;
+        searchField.clear();
+    }
     property bool dataExpanded: true
     property bool viewControlsExpanded: true
     property bool displayExpanded: false
@@ -30,17 +42,18 @@ Rectangle {
     property bool searchResultsExpanded: false
     property bool statusExpanded: false
 
-    signal toggleRequested()
-    signal openDatasetRequested()
-    signal loadControlRequested()
-    signal loadTrackRequested()
-    signal loadTrackUrlRequested()
-    signal loadAnnotationsRequested()
+    signal toggleRequested
+    signal openDatasetRequested
+    signal loadControlRequested
+    signal loadTrackRequested
+    signal loadTrackUrlRequested
+    signal loadAnnotationsRequested
     signal pooledResourceRequested(string resourceId, string kind)
     signal pooledControlRequested(string resourceId)
     signal exportAnnotationRequested(int index)
     signal annotationColorRequested(int index, color currentColor)
     signal trackMenuRequested(int index)
+    signal trackNameEditorRequested(int index)
     signal trackBinEditorRequested(int index)
     signal landscapeModeToggled(bool enabled)
     signal hoverTextToggled(bool enabled)
@@ -49,68 +62,31 @@ Rectangle {
     signal interfaceScaleRequested(real value)
     signal fontScaleRequested(real value)
     signal reducedMotionToggled(bool enabled)
-    signal lowColorRequested()
-    signal highColorRequested()
-    signal missingColorRequested()
+    signal lowColorRequested
+    signal highColorRequested
+    signal missingColorRequested
 
     color: Theme.panelBg
     border.color: Theme.borderSubtle
     implicitWidth: 340
 
     function includesSearch(value) {
-        return searchField.text.length === 0 || String(value).toLowerCase().indexOf(searchField.text.toLowerCase()) >= 0
-    }
-
-    function syncControllerSelections() {
-        if (!root.controller) return
-        chromosomeX.currentIndex = Math.max(0, chromosomeX.find(root.controller.chrX))
-        chromosomeY.currentIndex = Math.max(0, chromosomeY.find(root.controller.chrY))
-        resolutionBox.currentIndex = Math.max(0, resolutionBox.find(String(root.controller.resolution)))
-        var matrixIndex = 0
-        for (var i = 0; i < matrixBox.model.length; ++i) {
-            if (matrixBox.model[i].id === root.controller.matrixType) {
-                matrixIndex = i
-                break
-            }
-        }
-        matrixBox.currentIndex = matrixIndex
-        normBox.currentIndex = Math.max(0, normBox.find(root.controller.norm))
-        colorMapBox.currentIndex = Math.max(0, colorMapBox.find(root.controller.colorMap))
+        return searchField.text.length === 0 || String(value).toLowerCase().indexOf(searchField.text.toLowerCase()) >= 0;
     }
 
     function syncControllerModels() {
-        if (!root.controller) {
-            chromosomeX.model = []
-            chromosomeY.model = []
-            resolutionBox.model = []
-            matrixBox.model = []
-            normBox.model = []
-            return
-        }
-        chromosomeX.model = root.controller.chromosomeNames()
-        chromosomeY.model = root.controller.chromosomeNames()
-        resolutionBox.model = root.controller.resolutions()
-        matrixBox.model = root.controller.matrixTypeOptions()
-        normBox.model = root.controller.normalizations()
-        syncControllerSelections()
+        calculationControls.syncModels();
     }
-
-    onControllerChanged: Qt.callLater(root.syncControllerModels)
-    Component.onCompleted: syncControllerModels()
-
-    Connections {
-        target: root.controller
-        function onMetadataChanged() { root.syncControllerModels() }
-        function onControlReadyChanged() { root.syncControllerModels() }
-        function onViewChanged() { root.syncControllerSelections() }
-        function onColorMapChanged() { root.syncControllerSelections() }
+    onControllerChanged: {
+        selectedTrackIndex = -1;
+        selectedAnnotationIndex = -1;
     }
 
     component SectionHeader: Rectangle {
         required property string title
         required property bool expanded
         property string detail: ""
-        signal toggled()
+        signal toggled
         Layout.fillWidth: true
         implicitHeight: 40
         color: headerHover.hovered ? Theme.hoverSurface : "transparent"
@@ -140,8 +116,12 @@ Rectangle {
                 font.pixelSize: Theme.textXs
             }
         }
-        HoverHandler { id: headerHover }
-        TapHandler { onTapped: parent.toggled() }
+        HoverHandler {
+            id: headerHover
+        }
+        TapHandler {
+            onTapped: parent.toggled()
+        }
     }
 
     ColumnLayout {
@@ -175,7 +155,36 @@ Rectangle {
             }
         }
 
-        Rectangle { Layout.fillWidth: true; Layout.preferredHeight: 1; color: Theme.borderSubtle }
+        Rectangle {
+            Layout.fillWidth: true
+            Layout.preferredHeight: 1
+            color: Theme.borderSubtle
+        }
+
+        TabBar {
+            id: sidebarTabs
+            implicitWidth: 300
+            Layout.fillWidth: true
+            currentIndex: root.currentPage
+            onCurrentIndexChanged: root.currentPage = currentIndex
+            Repeater {
+                model: ["Data", "Layers", "Bookmarks", "Inspect"]
+                AppTabButton {
+                    required property string modelData
+                    text: modelData
+                    width: sidebarTabs.width / 4
+                    font.pixelSize: Theme.textSm
+                }
+            }
+        }
+        AppButton {
+            Layout.fillWidth: true
+            Layout.leftMargin: 10
+            Layout.rightMargin: 10
+            Layout.topMargin: 8
+            text: "Application settings…"
+            onClicked: root.settingsRequested()
+        }
 
         AppTextField {
             id: searchField
@@ -184,8 +193,9 @@ Rectangle {
             placeholderText: "Search workspace"
             Accessible.name: "Search datasets, chromosomes, bookmarks, tracks, and annotations"
             onTextChanged: if (root.controller) {
-                root.controller.workspaceSearch = text
-                if (text.length > 0) root.searchResultsExpanded = true
+                root.controller.workspaceSearch = text;
+                if (text.length > 0)
+                    root.searchResultsExpanded = true;
             }
         }
 
@@ -200,13 +210,14 @@ Rectangle {
                 spacing: 0
 
                 SectionHeader {
+                    visible: root.currentPage === 0 && searchField.text.length === 0
                     title: "Data"
                     expanded: root.dataExpanded
                     detail: root.controller && root.controller.filePath.length > 0 ? "loaded" : ""
                     onToggled: root.dataExpanded = !root.dataExpanded
                 }
                 ColumnLayout {
-                    visible: root.dataExpanded
+                    visible: root.dataExpanded && root.currentPage === 0 && searchField.text.length === 0
                     Layout.fillWidth: true
                     Layout.leftMargin: 10
                     Layout.rightMargin: 10
@@ -215,7 +226,12 @@ Rectangle {
                     spacing: 7
                     RowLayout {
                         Layout.fillWidth: true
-                        AppButton { text: "Open Hi-C"; highlighted: true; Layout.fillWidth: true; onClicked: root.openDatasetRequested() }
+                        AppButton {
+                            text: "Open Hi-C"
+                            highlighted: true
+                            Layout.fillWidth: true
+                            onClicked: root.openDatasetRequested()
+                        }
                         AppButton {
                             text: root.controller && root.controller.controlReady ? "Control ✓" : "Control"
                             tonal: true
@@ -226,12 +242,19 @@ Rectangle {
                     }
                     RowLayout {
                         Layout.fillWidth: true
-                        Label { text: "RECENT DATASETS"; color: Theme.textMuted; font.pixelSize: Theme.textXs; font.weight: Font.DemiBold }
-                        Item { Layout.fillWidth: true }
+                        Label {
+                            text: "RECENT DATASETS"
+                            color: Theme.textMuted
+                            font.pixelSize: Theme.textXs
+                            font.weight: Font.DemiBold
+                        }
+                        Item {
+                            Layout.fillWidth: true
+                        }
                         AppButton {
                             text: "Clear"
                             tonal: true
-                            implicitHeight: 22
+                            implicitHeight: Theme.controlHeight
                             leftPadding: 8
                             rightPadding: 8
                             font.pixelSize: Theme.textXs
@@ -253,21 +276,37 @@ Rectangle {
                             Layout.fillWidth: true
                             height: 42
                             hoverEnabled: true
-                            background: Rectangle { color: datasetDelegate.hovered ? Theme.hoverSurface : "transparent" }
+                            background: Rectangle {
+                                color: datasetDelegate.hovered ? Theme.hoverSurface : "transparent"
+                            }
                             contentItem: Column {
                                 leftPadding: 6
-                                Text { text: datasetDelegate.entry.name; color: Theme.textPrimary; font.pixelSize: Theme.textSm; elide: Text.ElideRight; width: parent.width - 12 }
-                                Text { text: datasetDelegate.entry.path; color: Theme.textMuted; font.pixelSize: Theme.textXs; elide: Text.ElideMiddle; width: parent.width - 12 }
+                                Text {
+                                    text: datasetDelegate.entry.name
+                                    color: Theme.textPrimary
+                                    font.pixelSize: Theme.textSm
+                                    elide: Text.ElideRight
+                                    width: parent.width - 12
+                                }
+                                Text {
+                                    text: datasetDelegate.entry.path
+                                    color: Theme.textMuted
+                                    font.pixelSize: Theme.textXs
+                                    elide: Text.ElideMiddle
+                                    width: parent.width - 12
+                                }
                             }
                             onClicked: {
-                                if (root.tabSession) root.tabSession.setPrimaryFile(root.tabSession.activeCellIndex, datasetDelegate.entry.path)
-                                else if (root.controller) root.controller.openRecentMap(datasetDelegate.entry.path)
+                                if (root.tabSession)
+                                    root.tabSession.setPrimaryFile(root.tabSession.activeCellIndex, datasetDelegate.entry.path);
+                                else if (root.controller)
+                                    root.controller.openRecentMap(datasetDelegate.entry.path);
                             }
                         }
                     }
                     Label {
                         visible: DatasetRegistry.resourceCount > 0
-                        text: "SESSION DATASET POOL"
+                        text: "AVAILABLE RESOURCES"
                         color: Theme.textMuted
                         font.pixelSize: Theme.textXs
                         font.weight: Font.DemiBold
@@ -280,7 +319,9 @@ Rectangle {
                             Layout.fillWidth: true
                             height: 42
                             hoverEnabled: true
-                            background: Rectangle { color: pooledDelegate.hovered ? Theme.hoverSurface : "transparent" }
+                            background: Rectangle {
+                                color: pooledDelegate.hovered ? Theme.hoverSurface : "transparent"
+                            }
                             contentItem: RowLayout {
                                 Label {
                                     text: pooledDelegate.entry.kind.toUpperCase()
@@ -292,12 +333,22 @@ Rectangle {
                                 ColumnLayout {
                                     spacing: 0
                                     Layout.fillWidth: true
-                                    Label { text: pooledDelegate.entry.name; color: Theme.textPrimary; font.pixelSize: Theme.textSm; elide: Text.ElideRight; Layout.fillWidth: true }
-                                    Label { text: pooledDelegate.entry.count + (pooledDelegate.entry.custom ? " custom" : " items"); color: Theme.textMuted; font.pixelSize: Theme.textXs }
+                                    Label {
+                                        text: pooledDelegate.entry.name
+                                        color: Theme.textPrimary
+                                        font.pixelSize: Theme.textSm
+                                        elide: Text.ElideRight
+                                        Layout.fillWidth: true
+                                    }
+                                    Label {
+                                        text: pooledDelegate.entry.count + (pooledDelegate.entry.custom ? " custom" : " items")
+                                        color: Theme.textMuted
+                                        font.pixelSize: Theme.textXs
+                                    }
                                 }
                                 AppToolButton {
                                     visible: pooledDelegate.entry.kind === "hic"
-                                    text: "C"
+                                    text: "Control"
                                     onLightSurface: true
                                     Accessible.name: "Use as control map"
                                     ToolTip.visible: hovered
@@ -310,207 +361,114 @@ Rectangle {
                     }
                 }
 
-                SectionHeader {
-                    title: "View & navigation"
-                    expanded: root.viewControlsExpanded
-                    detail: root.controller && root.controller.resolution > 0 ? root.controller.resolution + " bp" : ""
-                    onToggled: root.viewControlsExpanded = !root.viewControlsExpanded
-                }
-                ColumnLayout {
-                    visible: root.viewControlsExpanded
+                MatrixDisplayControls {
+                    id: calculationControls
                     Layout.fillWidth: true
-                    Layout.leftMargin: 10
-                    Layout.rightMargin: 10
-                    Layout.topMargin: 8
-                    Layout.bottomMargin: 10
-                    spacing: 8
-                    GridLayout {
-                        Layout.fillWidth: true
-                        columns: 2
-                        columnSpacing: 8
-                        rowSpacing: 5
-                        Label { text: "Horizontal"; color: Theme.textSecondary; font.pixelSize: Theme.textXs }
-                        Label { text: "Vertical"; color: Theme.textSecondary; font.pixelSize: Theme.textXs }
-                        AppComboBox {
-                            id: chromosomeX
-                            Layout.fillWidth: true
-                            enabled: root.controller && model.length > 0
-                            onActivated: root.controller.chrX = currentText
-                        }
-                        AppComboBox {
-                            id: chromosomeY
-                            Layout.fillWidth: true
-                            enabled: root.controller && model.length > 0
-                            onActivated: root.controller.chrY = currentText
-                        }
-                    }
-                    RowLayout {
-                        Layout.fillWidth: true
-                        Label { text: "Hi-C bin"; color: Theme.textSecondary; font.pixelSize: Theme.textSm }
-                        AppComboBox {
-                            id: resolutionBox
-                            Layout.fillWidth: true
-                            enabled: root.controller && model.length > 0 && !root.controller.resolutionLocked
-                            onActivated: root.controller.resolution = Number(currentText)
-                        }
-                        AppToolButton {
-                            text: root.controller && root.controller.resolutionLocked ? "🔒" : "🔓"
-                            onLightSurface: true
-                            enabled: root.controller && root.controller.resolution > 0
-                            onClicked: root.controller.resolutionLocked = !root.controller.resolutionLocked
-                        }
-                    }
-                    Label { text: "Matrix display"; color: Theme.textSecondary; font.pixelSize: Theme.textXs }
-                    AppComboBox {
-                        id: matrixBox
-                        Layout.fillWidth: true
-                        enabled: !!root.controller
-                        textRole: "label"
-                        valueRole: "id"
-                        onActivated: root.controller.matrixType = currentValue
-                    }
-                    Label { text: "Normalization"; color: Theme.textSecondary; font.pixelSize: Theme.textXs }
-                    AppComboBox { id: normBox; Layout.fillWidth: true; enabled: root.controller && model.length > 0; onActivated: root.controller.norm = currentText }
-                    AppTextField { id: topLocationField; Layout.fillWidth: true; placeholderText: "Horizontal chr:start-end"; enabled: root.controller && root.controller.filePath.length > 0; onAccepted: root.controller.goTo(text, leftLocationField.text.length > 0 ? leftLocationField.text : text) }
-                    AppTextField { id: leftLocationField; Layout.fillWidth: true; placeholderText: "Vertical locus (optional)"; enabled: root.controller && root.controller.filePath.length > 0; onAccepted: root.controller.goTo(topLocationField.text, text.length > 0 ? text : topLocationField.text) }
-                    RowLayout {
-                        Layout.fillWidth: true
-                        AppButton { text: "Go"; tonal: true; Layout.fillWidth: true; enabled: root.controller && topLocationField.text.length > 0; onClicked: root.controller.goTo(topLocationField.text, leftLocationField.text.length > 0 ? leftLocationField.text : topLocationField.text) }
-                        AppButton { text: "Reset"; tonal: true; Layout.fillWidth: true; enabled: root.controller && root.controller.filePath.length > 0; onClicked: root.controller.resetView() }
-                        AppButton { text: "All"; tonal: true; Layout.fillWidth: true; enabled: root.controller && root.controller.filePath.length > 0; onClicked: root.controller.setWholeGenomeView() }
-                    }
-                    RowLayout {
-                        Layout.fillWidth: true
-                        AppButton { text: "− Zoom"; tonal: true; Layout.fillWidth: true; enabled: root.controller && root.controller.filePath.length > 0; onClicked: root.controller.zoom(0.5, 0.5, 0.5) }
-                        AppButton { text: "+ Zoom"; tonal: true; Layout.fillWidth: true; enabled: root.controller && root.controller.filePath.length > 0; onClicked: root.controller.zoom(2.0, 0.5, 0.5) }
-                    }
-                    RowLayout {
-                        Layout.fillWidth: true
-                        AppButton { text: "Undo"; tonal: true; Layout.fillWidth: true; enabled: root.controller && root.controller.canUndoView; onClicked: root.controller.undoView() }
-                        AppButton { text: "Redo"; tonal: true; Layout.fillWidth: true; enabled: root.controller && root.controller.canRedoView; onClicked: root.controller.redoView() }
-                    }
-                    RowLayout {
-                        Layout.fillWidth: true
-                        AppCheckBox { text: "Lock X"; checked: root.controller && root.controller.xLocusLocked; onToggled: if (root.controller) root.controller.xLocusLocked = checked }
-                        AppCheckBox { text: "Lock Y"; checked: root.controller && root.controller.yLocusLocked; onToggled: if (root.controller) root.controller.yLocusLocked = checked }
-                    }
-                    AppCheckBox { text: "Show 1D plotting panels"; checked: root.trackPanelsOpen; onToggled: root.trackPanelsToggled(checked) }
-                    AppCheckBox { text: "Landscape viewport"; checked: root.landscapeMode; onToggled: root.landscapeModeToggled(checked) }
+                    Layout.margins: 10
+                    visible: root.currentPage === 3 && searchField.text.length === 0
+                    controller: root.controller
                 }
 
                 SectionHeader {
-                    title: "Display & performance"
+                    visible: root.currentPage === 3 && searchField.text.length === 0
+                    title: "Plot appearance"
                     expanded: root.displayExpanded
                     onToggled: root.displayExpanded = !root.displayExpanded
                 }
                 ColumnLayout {
-                    visible: root.displayExpanded
+                    visible: root.displayExpanded && root.currentPage === 3 && searchField.text.length === 0
                     Layout.fillWidth: true
                     Layout.leftMargin: 10
                     Layout.rightMargin: 10
                     Layout.topMargin: 8
                     Layout.bottomMargin: 10
                     spacing: 8
-                    AppCheckBox { text: "Show minimap"; checked: root.minimapVisible; onToggled: root.minimapToggled(checked) }
-                    AppCheckBox { text: "Show hover text"; checked: root.hoverTextVisible; onToggled: root.hoverTextToggled(checked) }
+                    AppCheckBox {
+                        text: "Show minimap"
+                        checked: root.minimapVisible
+                        onToggled: root.minimapToggled(checked)
+                    }
+                    AppCheckBox {
+                        text: "Show hover text"
+                        checked: root.hoverTextVisible
+                        onToggled: root.hoverTextToggled(checked)
+                    }
                     Flow {
                         Layout.fillWidth: true
                         spacing: 4
-                        AppCheckBox { text: "Gridlines"; checked: root.controller && root.controller.showGridlines; onToggled: if (root.controller) root.controller.showGridlines = checked }
-                        AppCheckBox { text: "Chr context"; checked: root.controller && root.controller.showChromosomeContext; onToggled: if (root.controller) root.controller.showChromosomeContext = checked }
-                        AppCheckBox { text: "Endpoints"; checked: root.controller && root.controller.axisEndpointsOnly; onToggled: if (root.controller) root.controller.axisEndpointsOnly = checked }
-                        AppCheckBox { text: "Tile debug"; checked: root.controller && root.controller.showTilesDebug; onToggled: if (root.controller) root.controller.showTilesDebug = checked }
-                    }
-                    Label { text: "Heatmap color scale"; color: Theme.textSecondary; font.pixelSize: Theme.textXs }
-                    AppComboBox {
-                        id: colorMapBox
-                        Layout.fillWidth: true
-                        model: ["White-Red", "Viridis", "Blue-White-Red", "Grayscale", "Custom"]
-                        onActivated: if (root.controller) root.controller.colorMap = currentText
-                    }
-                    RowLayout {
-                        Layout.fillWidth: true
-                        AppCheckBox { text: "Symmetric"; checked: root.controller && root.controller.symmetricColorScale; onToggled: if (root.controller) root.controller.symmetricColorScale = checked }
-                        AppCheckBox { text: "Transparent zero"; checked: root.controller && root.controller.zeroTransparent; onToggled: if (root.controller) root.controller.zeroTransparent = checked }
-                    }
-                    RowLayout {
-                        Layout.fillWidth: true
-                        Label { text: "Min"; color: Theme.textSecondary; font.pixelSize: Theme.textSm }
-                        AppTextField { Layout.fillWidth: true; text: root.controller ? String(root.controller.colorMin) : ""; onAccepted: if (root.controller && isFinite(Number(text))) root.controller.colorMin = Number(text) }
-                        Label { text: "Max"; color: Theme.textSecondary; font.pixelSize: Theme.textSm }
-                        AppTextField { Layout.fillWidth: true; text: root.controller ? String(root.controller.colorMax) : ""; onAccepted: if (root.controller && isFinite(Number(text))) root.controller.colorMax = Number(text) }
-                        AppButton { text: "Auto"; tonal: true; enabled: root.controller && !root.controller.colorMaxAuto; onClicked: root.controller.resetColorScale() }
-                    }
-                    RowLayout {
-                        Layout.fillWidth: true
-                        Label { text: "Clip"; color: Theme.textSecondary; font.pixelSize: Theme.textSm }
-                        Slider { Layout.fillWidth: true; from: 50; to: 100; stepSize: 0.5; value: root.controller ? root.controller.colorPercentile : 95; onMoved: if (root.controller) root.controller.colorPercentile = value }
-                        Label { text: root.controller ? root.controller.colorPercentile.toFixed(1) + "%" : ""; color: Theme.textMuted; font.pixelSize: Theme.textXs }
-                    }
-                    RowLayout {
-                        Layout.fillWidth: true
-                        spacing: 6
-                        ColorSwatchButton {
-                            Layout.fillWidth: true
-                            label: "Low"
-                            swatch: root.controller ? root.controller.customLowColor : "#2166ac"
-                            dimmed: !root.controller || root.controller.colorMap !== "Custom"
-                            onClicked: root.lowColorRequested()
+                        AppCheckBox {
+                            text: "Gridlines"
+                            checked: root.controller && root.controller.showGridlines
+                            onToggled: if (root.controller)
+                                root.controller.showGridlines = checked
                         }
-                        ColorSwatchButton {
-                            Layout.fillWidth: true
-                            label: "High"
-                            swatch: root.controller ? root.controller.customHighColor : "#b2182b"
-                            dimmed: !root.controller || root.controller.colorMap !== "Custom"
-                            onClicked: root.highColorRequested()
+                        AppCheckBox {
+                            text: "Chromosome context"
+                            checked: root.controller && root.controller.showChromosomeContext
+                            onToggled: if (root.controller)
+                                root.controller.showChromosomeContext = checked
                         }
-                        ColorSwatchButton {
-                            Layout.fillWidth: true
-                            label: "Missing"
-                            swatch: root.controller ? root.controller.missingValueColor : Theme.missingData
-                            onClicked: root.missingColorRequested()
+                        AppCheckBox {
+                            text: "Axis endpoints"
+                            checked: root.controller && root.controller.axisEndpointsOnly
+                            onToggled: if (root.controller)
+                                root.controller.axisEndpointsOnly = checked
                         }
                     }
-                    RowLayout {
+                    AppButton {
                         Layout.fillWidth: true
-                        Label { text: "Cache"; color: Theme.textSecondary; font.pixelSize: Theme.textSm }
-                        SpinBox { from: 16; to: 4096; stepSize: 16; editable: true; value: root.controller ? root.controller.cacheLimitMB : 128; onValueModified: if (root.controller) root.controller.cacheLimitMB = value }
-                        Label { text: "MB"; color: Theme.textMuted; font.pixelSize: Theme.textSm }
+                        text: "Heatmap colors and range…"
+                        onClicked: root.colorSettingsRequested()
                     }
-                    RowLayout {
-                        Layout.fillWidth: true
-                        Label { text: "UI"; color: Theme.textSecondary; font.pixelSize: Theme.textSm }
-                        Slider { Layout.fillWidth: true; from: 0.85; to: 1.35; stepSize: 0.05; value: root.interfaceScale; onMoved: root.interfaceScaleRequested(value) }
-                        Label { text: Math.round(root.interfaceScale * 100) + "%"; color: Theme.textMuted; font.pixelSize: Theme.textXs }
+                    AppCheckBox {
+                        text: "Show 1D plotting panels"
+                        checked: root.trackPanelsOpen
+                        onToggled: root.trackPanelsToggled(checked)
                     }
-                    RowLayout {
-                        Layout.fillWidth: true
-                        Label { text: "Font"; color: Theme.textSecondary; font.pixelSize: Theme.textSm }
-                        Slider { Layout.fillWidth: true; from: 0.85; to: 1.4; stepSize: 0.05; value: root.applicationFontScale; onMoved: root.fontScaleRequested(value) }
-                        Label { text: Math.round(root.applicationFontScale * 100) + "%"; color: Theme.textMuted; font.pixelSize: Theme.textXs }
+                    AppCheckBox {
+                        text: "Landscape viewport"
+                        checked: root.landscapeMode
+                        onToggled: root.landscapeModeToggled(checked)
                     }
-                    AppCheckBox { text: "Reduce motion"; checked: root.reducedMotion; onToggled: root.reducedMotionToggled(checked) }
                 }
 
                 SectionHeader {
+                    visible: root.currentPage === 1 && searchField.text.length === 0
                     title: "1D tracks"
                     expanded: root.tracksExpanded
                     detail: root.controller ? String(root.controller.trackCount) : ""
                     onToggled: root.tracksExpanded = !root.tracksExpanded
                 }
                 ColumnLayout {
-                    visible: root.tracksExpanded
+                    visible: root.tracksExpanded && root.currentPage === 1 && searchField.text.length === 0
                     Layout.fillWidth: true
                     Layout.leftMargin: 8
                     Layout.rightMargin: 8
                     Layout.topMargin: 8
                     Layout.bottomMargin: 10
                     spacing: 8
-                    RowLayout {
+                    Flow {
+                        spacing: 6
                         Layout.fillWidth: true
-                        AppButton { text: "Load"; highlighted: true; Layout.fillWidth: true; onClicked: root.loadTrackRequested() }
-                        AppButton { text: "URL"; tonal: true; Layout.fillWidth: true; onClicked: root.loadTrackUrlRequested() }
-                        AppButton { text: "Clear"; tonal: true; Layout.fillWidth: true; enabled: root.controller && root.controller.trackCount > 0; onClicked: root.controller.clearTracks() }
+                        AppButton {
+                            text: "Load"
+                            highlighted: true
+                            Layout.fillWidth: true
+                            onClicked: root.loadTrackRequested()
+                        }
+                        AppButton {
+                            text: "URL"
+                            tonal: true
+                            Layout.fillWidth: true
+                            onClicked: root.loadTrackUrlRequested()
+                        }
+                        AppButton {
+                            text: "Clear tracks"
+                            tonal: true
+                            Layout.fillWidth: true
+                            enabled: root.controller && root.controller.trackCount > 0
+                            onClicked: root.clearTracksRequested()
+                        }
                     }
                     Repeater {
                         model: root.controller ? root.controller.tracksModel : null
@@ -520,8 +478,8 @@ Rectangle {
                             Layout.fillWidth: true
                             implicitHeight: trackCardColumn.implicitHeight + 16
                             radius: Theme.radiusMd
-                            color: Theme.surface
-                            border.color: Theme.border
+                            color: root.selectedTrackIndex === trackCard.entry.index ? Theme.selectedSurface : Theme.surface
+                            border.color: root.selectedTrackIndex === trackCard.entry.index ? Theme.accent : Theme.border
                             ColumnLayout {
                                 id: trackCardColumn
                                 anchors.left: parent.left
@@ -531,69 +489,160 @@ Rectangle {
                                 spacing: 6
                                 RowLayout {
                                     Layout.fillWidth: true
-                                    AppCheckBox { checked: trackCard.entry.visible; onToggled: root.controller.setTrackVisible(trackCard.entry.index, checked) }
-                                    AppToolButton { text: trackCard.entry.collapsed ? "›" : "⌄"; onLightSurface: true; onClicked: root.controller.setTrackCollapsed(trackCard.entry.index, !trackCard.entry.collapsed) }
-                                    AppTextField {
+                                    AppCheckBox {
+                                        Accessible.name: "Show " + trackCard.entry.name
+                                        checked: trackCard.entry.visible
+                                        onToggled: root.controller.setTrackVisible(trackCard.entry.index, checked)
+                                    }
+                                    AppToolButton {
+                                        text: root.selectedTrackIndex === trackCard.entry.index ? "⌄" : "›"
+                                        onLightSurface: true
+                                        Accessible.name: "Track details"
+                                        onClicked: root.selectedTrackIndex = root.selectedTrackIndex === trackCard.entry.index ? -1 : trackCard.entry.index
+                                    }
+                                    Rectangle {
+                                        Layout.preferredWidth: 14
+                                        Layout.preferredHeight: 14
+                                        radius: 3
+                                        color: trackCard.entry.positiveColor
+                                        border.color: Theme.borderStrong
+                                    }
+                                    Label {
                                         Layout.fillWidth: true
+                                        Layout.minimumWidth: 60
                                         text: trackCard.entry.name
-                                        placeholderText: "Track name"
-                                        Accessible.name: "Track name"
-                                        // Committing on Enter alone meant an
-                                        // edit was silently lost when focus moved.
-                                        onAccepted: root.controller.setTrackName(trackCard.entry.index, text)
-                                        onEditingFinished: if (text !== trackCard.entry.name && text.trim().length > 0)
-                                            root.controller.setTrackName(trackCard.entry.index, text)
-                                        hoverEnabled: true
-                                        ToolTip.visible: hovered && trackCard.entry.source.length > 0
-                                        ToolTip.delay: 350
-                                        ToolTip.text: trackCard.entry.source
+                                        color: Theme.textPrimary
+                                        elide: Text.ElideRight
+                                        activeFocusOnTab: true
+                                        Accessible.name: trackCard.entry.name + ". Select for track details; double-click to rename."
+                                        Keys.onReturnPressed: root.selectedTrackIndex = trackCard.entry.index
+                                        TapHandler {
+                                            onTapped: root.selectedTrackIndex = root.selectedTrackIndex === trackCard.entry.index ? -1 : trackCard.entry.index
+                                            onDoubleTapped: root.trackNameEditorRequested(trackCard.entry.index)
+                                        }
+                                        HoverHandler {
+                                            id: trackNameHover
+                                        }
+                                        ToolTip.visible: trackNameHover.hovered
+                                        ToolTip.text: trackCard.entry.name + "\n" + trackCard.entry.source + (trackCard.entry.warning ? "\n" + trackCard.entry.warning : "")
                                     }
-                                    AppToolButton { text: "⋯"; onLightSurface: true; onClicked: root.trackMenuRequested(trackCard.entry.index) }
+                                    AppToolButton {
+                                        text: "⋯"
+                                        onLightSurface: true
+                                        Accessible.name: "Track actions"
+                                        onClicked: root.trackMenuRequested(trackCard.entry.index)
+                                    }
                                 }
-                                Label { visible: !trackCard.entry.collapsed; text: trackCard.entry.featureCount + " intervals · " + trackCard.entry.format; color: Theme.textMuted; font.pixelSize: Theme.textXs }
-                                Label {
-                                    visible: !trackCard.entry.collapsed && trackCard.entry.warning !== ""
+                                ColumnLayout {
                                     Layout.fillWidth: true
-                                    text: "⚠ " + trackCard.entry.warning
-                                    color: Theme.danger
-                                    font.pixelSize: Theme.textXs
-                                    wrapMode: Text.WordWrap
-                                }
-                                RowLayout {
-                                    visible: !trackCard.entry.collapsed && trackCard.entry.renderMode === "signal"
-                                    Layout.fillWidth: true
-                                    AppCheckBox { text: "Auto"; checked: trackCard.entry.autoscale; onToggled: root.controller.setTrackAutoscale(trackCard.entry.index, checked) }
-                                    AppCheckBox { text: "Log"; checked: trackCard.entry.logScale; onToggled: root.controller.setTrackRange(trackCard.entry.index, trackCard.entry.min, trackCard.entry.max, checked) }
-                                    AppComboBox { Layout.fillWidth: true; model: ["min", "mean", "max", "none"]; currentIndex: Math.max(0, model.indexOf(trackCard.entry.reduction)); onActivated: root.controller.setTrackReduction(trackCard.entry.index, currentText) }
-                                }
-                                RowLayout {
-                                    visible: !trackCard.entry.collapsed && trackCard.entry.renderMode === "signal"
-                                    Layout.fillWidth: true
-                                    Label { text: trackCard.entry.binSize === 0 ? "Bin: Hi-C · " + root.controller.resolution : "Bin: " + trackCard.entry.effectiveBinSize; color: Theme.textSecondary; font.pixelSize: Theme.textXs; Layout.fillWidth: true }
-                                    AppButton { text: "Match"; tonal: true; onClicked: root.controller.setTrackBinSize(trackCard.entry.index, 0) }
-                                    AppButton { text: "Set…"; tonal: true; onClicked: root.trackBinEditorRequested(trackCard.entry.index) }
-                                }
-                                RowLayout {
-                                    visible: !trackCard.entry.collapsed && trackCard.entry.renderMode === "signal"
-                                    Layout.fillWidth: true
-                                    Label { text: "Min"; color: Theme.textSecondary; font.pixelSize: Theme.textXs }
-                                    AppTextField { Layout.fillWidth: true; text: String(trackCard.entry.min); enabled: !trackCard.entry.autoscale; onAccepted: root.controller.setTrackRange(trackCard.entry.index, Number(text), trackCard.entry.max, trackCard.entry.logScale) }
-                                    Label { text: "Max"; color: Theme.textSecondary; font.pixelSize: Theme.textXs }
-                                    AppTextField { Layout.fillWidth: true; text: String(trackCard.entry.max); enabled: !trackCard.entry.autoscale; onAccepted: root.controller.setTrackRange(trackCard.entry.index, trackCard.entry.min, Number(text), trackCard.entry.logScale) }
-                                }
-                                RowLayout {
-                                    visible: !trackCard.entry.collapsed
-                                    Layout.fillWidth: true
-                                    Label { text: "Height"; color: Theme.textSecondary; font.pixelSize: Theme.textSm }
-                                    AppTextField {
+                                    visible: root.selectedTrackIndex === trackCard.entry.index
+
+                                    Label {
+                                        visible: root.selectedTrackIndex === trackCard.entry.index
+                                        text: trackCard.entry.featureCount + " intervals · " + trackCard.entry.format
+                                        color: Theme.textMuted
+                                        font.pixelSize: Theme.textXs
+                                    }
+                                    Label {
+                                        visible: root.selectedTrackIndex === trackCard.entry.index && trackCard.entry.warning !== ""
                                         Layout.fillWidth: true
-                                        text: String(trackCard.entry.height)
-                                        inputMethodHints: Qt.ImhDigitsOnly
-                                        validator: IntValidator { bottom: 20 }
-                                        onAccepted: if (acceptableInput) root.controller.setTrackHeight(trackCard.entry.index, Math.round(Number(text)))
-                                        onEditingFinished: if (acceptableInput) root.controller.setTrackHeight(trackCard.entry.index, Math.round(Number(text)))
+                                        text: "⚠ " + trackCard.entry.warning
+                                        color: Theme.danger
+                                        font.pixelSize: Theme.textXs
+                                        wrapMode: Text.WordWrap
                                     }
-                                    Label { text: "px"; color: Theme.textMuted; font.pixelSize: Theme.textXs }
+                                    RowLayout {
+                                        visible: root.selectedTrackIndex === trackCard.entry.index && trackCard.entry.renderMode === "signal"
+                                        Layout.fillWidth: true
+                                        AppCheckBox {
+                                            text: "Auto"
+                                            checked: trackCard.entry.autoscale
+                                            onToggled: root.controller.setTrackAutoscale(trackCard.entry.index, checked)
+                                        }
+                                        AppCheckBox {
+                                            text: "Log"
+                                            checked: trackCard.entry.logScale
+                                            onToggled: root.controller.setTrackRange(trackCard.entry.index, trackCard.entry.min, trackCard.entry.max, checked)
+                                        }
+                                        AppComboBox {
+                                            Layout.fillWidth: true
+                                            model: ["min", "mean", "max", "none"]
+                                            currentIndex: Math.max(0, model.indexOf(trackCard.entry.reduction))
+                                            onActivated: root.controller.setTrackReduction(trackCard.entry.index, currentText)
+                                        }
+                                    }
+                                    RowLayout {
+                                        visible: root.selectedTrackIndex === trackCard.entry.index && trackCard.entry.renderMode === "signal"
+                                        Layout.fillWidth: true
+                                        Label {
+                                            text: trackCard.entry.binSize === 0 ? "Bin: Hi-C · " + root.controller.resolution : "Bin: " + trackCard.entry.effectiveBinSize
+                                            color: Theme.textSecondary
+                                            font.pixelSize: Theme.textXs
+                                            Layout.fillWidth: true
+                                        }
+                                        AppButton {
+                                            text: "Match"
+                                            tonal: true
+                                            onClicked: root.controller.setTrackBinSize(trackCard.entry.index, 0)
+                                        }
+                                        AppButton {
+                                            text: "Set…"
+                                            tonal: true
+                                            onClicked: root.trackBinEditorRequested(trackCard.entry.index)
+                                        }
+                                    }
+                                    RowLayout {
+                                        visible: root.selectedTrackIndex === trackCard.entry.index && trackCard.entry.renderMode === "signal"
+                                        Layout.fillWidth: true
+                                        Label {
+                                            text: "Min"
+                                            color: Theme.textSecondary
+                                            font.pixelSize: Theme.textXs
+                                        }
+                                        AppTextField {
+                                            Layout.fillWidth: true
+                                            text: String(trackCard.entry.min)
+                                            enabled: !trackCard.entry.autoscale
+                                            onAccepted: root.controller.setTrackRange(trackCard.entry.index, Number(text), trackCard.entry.max, trackCard.entry.logScale)
+                                        }
+                                        Label {
+                                            text: "Max"
+                                            color: Theme.textSecondary
+                                            font.pixelSize: Theme.textXs
+                                        }
+                                        AppTextField {
+                                            Layout.fillWidth: true
+                                            text: String(trackCard.entry.max)
+                                            enabled: !trackCard.entry.autoscale
+                                            onAccepted: root.controller.setTrackRange(trackCard.entry.index, trackCard.entry.min, Number(text), trackCard.entry.logScale)
+                                        }
+                                    }
+                                    RowLayout {
+                                        visible: root.selectedTrackIndex === trackCard.entry.index
+                                        Layout.fillWidth: true
+                                        Label {
+                                            text: "Height"
+                                            color: Theme.textSecondary
+                                            font.pixelSize: Theme.textSm
+                                        }
+                                        AppTextField {
+                                            Layout.fillWidth: true
+                                            text: String(trackCard.entry.height)
+                                            inputMethodHints: Qt.ImhDigitsOnly
+                                            validator: IntValidator {
+                                                bottom: 20
+                                            }
+                                            onAccepted: if (acceptableInput)
+                                                root.controller.setTrackHeight(trackCard.entry.index, Math.round(Number(text)))
+                                            onEditingFinished: if (acceptableInput)
+                                                root.controller.setTrackHeight(trackCard.entry.index, Math.round(Number(text)))
+                                        }
+                                        Label {
+                                            text: "px"
+                                            color: Theme.textMuted
+                                            font.pixelSize: Theme.textXs
+                                        }
+                                    }
                                 }
                             }
                         }
@@ -601,30 +650,67 @@ Rectangle {
                 }
 
                 SectionHeader {
+                    visible: root.currentPage === 1 && searchField.text.length === 0
                     title: "2D annotations"
                     expanded: root.annotationsExpanded
                     detail: root.controller ? String(root.controller.annotationCount) : ""
                     onToggled: root.annotationsExpanded = !root.annotationsExpanded
                 }
                 ColumnLayout {
-                    visible: root.annotationsExpanded
+                    visible: root.annotationsExpanded && root.currentPage === 1 && searchField.text.length === 0
                     Layout.fillWidth: true
                     Layout.leftMargin: 8
                     Layout.rightMargin: 8
                     Layout.topMargin: 8
                     Layout.bottomMargin: 10
                     spacing: 8
-                    RowLayout {
+                    Flow {
+                        spacing: 6
                         Layout.fillWidth: true
-                        AppButton { text: "Load"; highlighted: true; Layout.fillWidth: true; onClicked: root.loadAnnotationsRequested() }
-                        AppButton { text: "New"; tonal: true; Layout.fillWidth: true; onClicked: if (root.controller) root.controller.addAnnotationLayer("Layer") }
-                        AppButton { text: "Merge"; tonal: true; Layout.fillWidth: true; onClicked: if (root.controller) root.controller.mergeVisibleAnnotationLayers("Merged") }
-                        AppButton { text: "Clear"; tonal: true; Layout.fillWidth: true; enabled: root.controller && root.controller.annotationCount > 0; onClicked: root.controller.clearAnnotations() }
+                        AppButton {
+                            text: "Load"
+                            highlighted: true
+                            Layout.fillWidth: true
+                            onClicked: root.loadAnnotationsRequested()
+                        }
+                        AppButton {
+                            text: "New"
+                            tonal: true
+                            Layout.fillWidth: true
+                            onClicked: if (root.controller)
+                                root.controller.addAnnotationLayer("Layer")
+                        }
+                        AppButton {
+                            text: "Merge"
+                            tonal: true
+                            Layout.fillWidth: true
+                            onClicked: if (root.controller)
+                                root.controller.mergeVisibleAnnotationLayers("Merged")
+                        }
+                        AppButton {
+                            text: "Clear features"
+                            tonal: true
+                            Layout.fillWidth: true
+                            enabled: root.controller && root.controller.annotationCount > 0
+                            onClicked: root.clearAnnotationsRequested()
+                        }
                     }
                     RowLayout {
                         Layout.fillWidth: true
-                        Label { text: "Sparse limit"; color: Theme.textSecondary; font.pixelSize: Theme.textSm }
-                        SpinBox { Layout.fillWidth: true; from: 1; to: 1000000; editable: true; value: root.controller ? root.controller.sparseFeatureLimit : 10000; onValueModified: if (root.controller) root.controller.sparseFeatureLimit = value }
+                        Label {
+                            text: "Sparse limit"
+                            color: Theme.textSecondary
+                            font.pixelSize: Theme.textSm
+                        }
+                        SpinBox {
+                            Layout.fillWidth: true
+                            from: 1
+                            to: 1000000
+                            editable: true
+                            value: root.controller ? root.controller.sparseFeatureLimit : 10000
+                            onValueModified: if (root.controller)
+                                root.controller.sparseFeatureLimit = value
+                        }
                     }
                     Repeater {
                         model: root.controller ? root.controller.annotationsModel : null
@@ -645,73 +731,133 @@ Rectangle {
                                 spacing: 5
                                 RowLayout {
                                     Layout.fillWidth: true
-                                    AppCheckBox { checked: annotationCard.entry.visible; onToggled: root.controller.setAnnotationLayerVisible(annotationCard.entry.index, checked) }
-                                    Label { text: annotationCard.entry.name + " · " + annotationCard.entry.count; color: Theme.textPrimary; Layout.fillWidth: true; elide: Text.ElideRight }
-                                    AppButton { text: "Active"; tonal: true; enabled: !annotationCard.entry.active; onClicked: root.controller.setActiveAnnotationLayer(annotationCard.entry.index) }
-                                }
-                                Flow {
-                                    Layout.fillWidth: true
-                                    spacing: 3
-                                    AppCheckBox { text: "Transparent"; checked: annotationCard.entry.transparent; onToggled: root.controller.setAnnotationLayerTransparent(annotationCard.entry.index, checked) }
-                                    AppCheckBox { text: "Sparse"; checked: annotationCard.entry.sparse; onToggled: root.controller.setAnnotationLayerSparse(annotationCard.entry.index, checked) }
-                                    AppCheckBox { text: "Large"; checked: annotationCard.entry.enlarged; onToggled: root.controller.setAnnotationLayerEnlarged(annotationCard.entry.index, checked) }
-                                }
-                                RowLayout {
-                                    Layout.fillWidth: true
-                                    spacing: 5
-                                    Rectangle {
-                                        Layout.preferredWidth: 18
-                                        Layout.preferredHeight: 18
-                                        radius: 4
-                                        color: annotationCard.entry.color
-                                        border.color: Theme.borderStrong
+                                    AppCheckBox {
+                                        Accessible.name: "Show " + annotationCard.entry.name
+                                        checked: annotationCard.entry.visible
+                                        onToggled: root.controller.setAnnotationLayerVisible(annotationCard.entry.index, checked)
                                     }
-                                    AppButton {
-                                        text: annotationCard.entry.colorOverride ? "Recolor" : "Override color"
-                                        tonal: true
-                                        onClicked: root.annotationColorRequested(annotationCard.entry.index, annotationCard.entry.color)
-                                    }
-                                    AppButton {
-                                        visible: annotationCard.entry.colorOverride
-                                        text: "Original colors"
-                                        tonal: true
-                                        onClicked: root.controller.clearAnnotationLayerColorOverride(annotationCard.entry.index)
-                                    }
-                                    Item { Layout.fillWidth: true }
-                                }
-                                RowLayout {
-                                    Layout.fillWidth: true
-                                    spacing: 5
                                     Label {
-                                        text: "Diagonal placement"
-                                        color: Theme.textSecondary
-                                        font.pixelSize: Theme.textXs
-                                    }
-                                    AppComboBox {
-                                        model: ["Both sides", "Above only", "Below only"]
-                                        currentIndex: annotationCard.entry.placement === "above" ? 1 :
-                                                      (annotationCard.entry.placement === "below" ? 2 : 0)
-                                        onActivated: root.controller.setAnnotationLayerPlacement(
-                                            annotationCard.entry.index,
-                                            currentIndex === 1 ? "above" : (currentIndex === 2 ? "below" : "both"))
+                                        text: annotationCard.entry.name + " · " + annotationCard.entry.count
+                                        color: Theme.textPrimary
                                         Layout.fillWidth: true
+                                        elide: Text.ElideRight
+                                    }
+                                    AppButton {
+                                        text: root.selectedAnnotationIndex === annotationCard.entry.index ? "Done" : "Details"
+                                        tonal: true
+                                        onClicked: {
+                                            root.selectedAnnotationIndex = root.selectedAnnotationIndex === annotationCard.entry.index ? -1 : annotationCard.entry.index;
+                                            root.controller.setActiveAnnotationLayer(annotationCard.entry.index);
+                                        }
                                     }
                                 }
-                                RowLayout {
+                                ColumnLayout {
                                     Layout.fillWidth: true
-                                    AppButton { text: "Duplicate"; tonal: true; Layout.fillWidth: true; onClicked: root.controller.duplicateAnnotationLayer(annotationCard.entry.index) }
-                                    AppButton { text: "Export"; tonal: true; Layout.fillWidth: true; onClicked: root.exportAnnotationRequested(annotationCard.entry.index) }
-                                    AppButton { text: "Clear"; tonal: true; Layout.fillWidth: true; onClicked: root.controller.clearAnnotationLayer(annotationCard.entry.index) }
-                                    AppButton { text: "Delete"; tonal: true; Layout.fillWidth: true; enabled: root.controller.annotationCount > 0; onClicked: root.controller.removeAnnotationLayer(annotationCard.entry.index) }
+                                    visible: root.selectedAnnotationIndex === annotationCard.entry.index
+
+                                    Flow {
+                                        Layout.fillWidth: true
+                                        spacing: 3
+                                        AppCheckBox {
+                                            text: "Transparent"
+                                            checked: annotationCard.entry.transparent
+                                            onToggled: root.controller.setAnnotationLayerTransparent(annotationCard.entry.index, checked)
+                                        }
+                                        AppCheckBox {
+                                            text: "Sparse"
+                                            checked: annotationCard.entry.sparse
+                                            onToggled: root.controller.setAnnotationLayerSparse(annotationCard.entry.index, checked)
+                                        }
+                                        AppCheckBox {
+                                            text: "Large"
+                                            checked: annotationCard.entry.enlarged
+                                            onToggled: root.controller.setAnnotationLayerEnlarged(annotationCard.entry.index, checked)
+                                        }
+                                    }
+                                    RowLayout {
+                                        Layout.fillWidth: true
+                                        spacing: 5
+                                        Rectangle {
+                                            Layout.preferredWidth: 18
+                                            Layout.preferredHeight: 18
+                                            radius: 4
+                                            color: annotationCard.entry.color
+                                            border.color: Theme.borderStrong
+                                        }
+                                        AppButton {
+                                            text: annotationCard.entry.colorOverride ? "Recolor" : "Override color"
+                                            tonal: true
+                                            onClicked: root.annotationColorRequested(annotationCard.entry.index, annotationCard.entry.color)
+                                        }
+                                        AppButton {
+                                            visible: annotationCard.entry.colorOverride
+                                            text: "Original colors"
+                                            tonal: true
+                                            onClicked: root.controller.clearAnnotationLayerColorOverride(annotationCard.entry.index)
+                                        }
+                                        Item {
+                                            Layout.fillWidth: true
+                                        }
+                                    }
+                                    RowLayout {
+                                        Layout.fillWidth: true
+                                        spacing: 5
+                                        Label {
+                                            text: "Diagonal placement"
+                                            color: Theme.textSecondary
+                                            font.pixelSize: Theme.textXs
+                                        }
+                                        AppComboBox {
+                                            model: ["Both sides", "Above only", "Below only"]
+                                            currentIndex: annotationCard.entry.placement === "above" ? 1 : (annotationCard.entry.placement === "below" ? 2 : 0)
+                                            onActivated: root.controller.setAnnotationLayerPlacement(annotationCard.entry.index, currentIndex === 1 ? "above" : (currentIndex === 2 ? "below" : "both"))
+                                            Layout.fillWidth: true
+                                        }
+                                    }
+                                    Flow {
+                                        spacing: 6
+                                        Layout.fillWidth: true
+                                        AppButton {
+                                            text: "Duplicate"
+                                            tonal: true
+                                            Layout.fillWidth: true
+                                            onClicked: root.controller.duplicateAnnotationLayer(annotationCard.entry.index)
+                                        }
+                                        AppButton {
+                                            text: "Export"
+                                            tonal: true
+                                            Layout.fillWidth: true
+                                            onClicked: root.exportAnnotationRequested(annotationCard.entry.index)
+                                        }
+                                        AppButton {
+                                            text: "Clear features"
+                                            tonal: true
+                                            Layout.fillWidth: true
+                                            onClicked: root.controller.clearAnnotationLayer(annotationCard.entry.index)
+                                        }
+                                        AppButton {
+                                            text: "Remove layer"
+                                            tonal: true
+                                            Layout.fillWidth: true
+                                            enabled: root.controller.annotationCount > 0
+                                            onClicked: root.controller.removeAnnotationLayer(annotationCard.entry.index)
+                                        }
+                                    }
                                 }
                             }
                         }
                     }
                 }
 
-                SectionHeader { title: "Chromosomes"; expanded: root.chromosomesExpanded; detail: root.controller ? String(root.controller.chromosomeNames().length) : ""; onToggled: root.chromosomesExpanded = !root.chromosomesExpanded }
+                SectionHeader {
+                    visible: root.currentPage === 0 && searchField.text.length === 0
+                    title: "Chromosomes"
+                    expanded: root.chromosomesExpanded
+                    detail: root.controller ? String(root.controller.chromosomeNames().length) : ""
+                    onToggled: root.chromosomesExpanded = !root.chromosomesExpanded
+                }
                 ColumnLayout {
-                    visible: root.chromosomesExpanded
+                    visible: root.chromosomesExpanded && root.currentPage === 0 && searchField.text.length === 0
                     Layout.fillWidth: true
                     spacing: 2
                     Repeater {
@@ -720,96 +866,144 @@ Rectangle {
                             id: chromosomeRow
                             required property var modelData
                             visible: root.includesSearch(chromosomeRow.modelData)
-                            Layout.fillWidth: true; Layout.leftMargin: 12; Layout.rightMargin: 10
-                            Label { text: chromosomeRow.modelData; color: Theme.textPrimary; Layout.fillWidth: true; font.pixelSize: Theme.textSm }
-                            AppToolButton { text: "X"; onLightSurface: true; onClicked: root.controller.chrX = chromosomeRow.modelData }
-                            AppToolButton { text: "Y"; onLightSurface: true; onClicked: root.controller.chrY = chromosomeRow.modelData }
+                            Layout.fillWidth: true
+                            Layout.leftMargin: 12
+                            Layout.rightMargin: 10
+                            Label {
+                                text: chromosomeRow.modelData
+                                color: Theme.textPrimary
+                                Layout.fillWidth: true
+                                font.pixelSize: Theme.textSm
+                            }
+                            AppToolButton {
+                                text: "X"
+                                onLightSurface: true
+                                onClicked: root.controller.chrX = chromosomeRow.modelData
+                            }
+                            AppToolButton {
+                                text: "Y"
+                                onLightSurface: true
+                                onClicked: root.controller.chrY = chromosomeRow.modelData
+                            }
                         }
                     }
                 }
 
-                SectionHeader { title: "Bookmarks"; expanded: root.bookmarksExpanded; onToggled: root.bookmarksExpanded = !root.bookmarksExpanded }
+                SectionHeader {
+                    visible: root.currentPage === 2 && searchField.text.length === 0
+                    title: "Bookmarks"
+                    expanded: root.bookmarksExpanded
+                    onToggled: root.bookmarksExpanded = !root.bookmarksExpanded
+                }
                 ColumnLayout {
-                    visible: root.bookmarksExpanded
+                    visible: root.bookmarksExpanded && root.currentPage === 2 && searchField.text.length === 0
                     Layout.fillWidth: true
                     spacing: 2
-                    AppButton { text: "+ Save current location"; tonal: true; Layout.fillWidth: true; Layout.margins: 10; onClicked: if (root.controller) root.controller.saveCurrentLocation("") }
+                    AppButton {
+                        text: "+ Save current location"
+                        tonal: true
+                        Layout.fillWidth: true
+                        Layout.margins: 10
+                        onClicked: if (root.controller)
+                            root.controller.saveCurrentLocation("")
+                    }
                     Repeater {
                         model: root.controller ? root.controller.bookmarksModel : null
                         Rectangle {
                             id: bookmarkCard
                             required property var entry
                             required property int index
-                            Layout.fillWidth: true; Layout.leftMargin: 8; Layout.rightMargin: 8
+                            Layout.fillWidth: true
+                            Layout.leftMargin: 8
+                            Layout.rightMargin: 8
                             height: 54
                             color: bookmarkHover.hovered ? Theme.hoverSurface : "transparent"
                             RowLayout {
-                                anchors.fill: parent; anchors.leftMargin: 8; anchors.rightMargin: 4
+                                anchors.fill: parent
+                                anchors.leftMargin: 8
+                                anchors.rightMargin: 4
                                 ColumnLayout {
-                                    Layout.fillWidth: true; spacing: 1
-                                    Label { text: bookmarkCard.entry.name || "Saved locus"; color: Theme.textPrimary; font.pixelSize: Theme.textSm; elide: Text.ElideRight; Layout.fillWidth: true }
-                                    Label { text: bookmarkCard.entry.chrX + ":" + bookmarkCard.entry.x0 + "–" + bookmarkCard.entry.x1; color: Theme.textMuted; font.pixelSize: Theme.textXs; elide: Text.ElideRight; Layout.fillWidth: true }
+                                    Layout.fillWidth: true
+                                    spacing: 1
+                                    Label {
+                                        text: bookmarkCard.entry.name || "Saved locus"
+                                        color: Theme.textPrimary
+                                        font.pixelSize: Theme.textSm
+                                        elide: Text.ElideRight
+                                        Layout.fillWidth: true
+                                    }
+                                    Label {
+                                        text: bookmarkCard.entry.chrX + ":" + bookmarkCard.entry.x0 + "–" + bookmarkCard.entry.x1
+                                        color: Theme.textMuted
+                                        font.pixelSize: Theme.textXs
+                                        elide: Text.ElideRight
+                                        Layout.fillWidth: true
+                                    }
                                 }
-                                AppToolButton { text: "×"; onLightSurface: true; onClicked: root.controller.removeSavedLocation(bookmarkCard.index) }
+                                AppToolButton {
+                                    text: "×"
+                                    onLightSurface: true
+                                    onClicked: root.controller.removeSavedLocation(bookmarkCard.index)
+                                }
                             }
-                            HoverHandler { id: bookmarkHover }
-                            TapHandler { onTapped: root.controller.restoreSavedLocation(bookmarkCard.index) }
+                            HoverHandler {
+                                id: bookmarkHover
+                            }
+                            TapHandler {
+                                onTapped: root.controller.restoreSavedLocation(bookmarkCard.index)
+                            }
                         }
                     }
                 }
 
-                SectionHeader { title: "Results"; expanded: root.resultsExpanded; onToggled: root.resultsExpanded = !root.resultsExpanded }
-                ColumnLayout {
-                    visible: root.resultsExpanded
-                    Layout.fillWidth: true; Layout.margins: 14
-                    Label { text: "No analysis results yet"; color: Theme.textPrimary; font.pixelSize: Theme.textSm; font.weight: Font.DemiBold }
-                    Label { text: "Derived tracks and analysis outputs will appear here."; color: Theme.textMuted; font.pixelSize: Theme.textXs; wrapMode: Text.WordWrap; Layout.fillWidth: true }
+                SectionHeader {
+                    visible: searchField.text.length > 0
+                    title: "Search results"
+                    expanded: root.searchResultsExpanded
+                    onToggled: root.searchResultsExpanded = !root.searchResultsExpanded
                 }
-
-                SectionHeader { title: "Search results"; expanded: root.searchResultsExpanded; onToggled: root.searchResultsExpanded = !root.searchResultsExpanded }
                 ColumnLayout {
-                    visible: root.searchResultsExpanded
+                    visible: root.searchResultsExpanded && searchField.text.length > 0
                     Layout.fillWidth: true
                     Repeater {
                         model: root.controller ? root.controller.searchResultsModel : null
                         ItemDelegate {
                             id: searchDelegate
                             required property var entry
-                            Layout.fillWidth: true; height: 48; hoverEnabled: true
-                            background: Rectangle { color: searchDelegate.hovered ? Theme.hoverSurface : "transparent" }
+                            Layout.fillWidth: true
+                            height: 48
+                            hoverEnabled: true
+                            background: Rectangle {
+                                color: searchDelegate.hovered ? Theme.hoverSurface : "transparent"
+                            }
                             contentItem: Column {
                                 leftPadding: 12
-                                Text { text: searchDelegate.entry.label; color: Theme.textPrimary; font.pixelSize: Theme.textSm; elide: Text.ElideRight; width: parent.width - 20 }
-                                Text { text: searchDelegate.entry.kind.toUpperCase() + " · " + searchDelegate.entry.detail; color: Theme.textMuted; font.pixelSize: Theme.textXs; elide: Text.ElideMiddle; width: parent.width - 20 }
+                                Text {
+                                    text: searchDelegate.entry.label
+                                    color: Theme.textPrimary
+                                    font.pixelSize: Theme.textSm
+                                    elide: Text.ElideRight
+                                    width: parent.width - 20
+                                }
+                                Text {
+                                    text: searchDelegate.entry.kind.toUpperCase() + " · " + searchDelegate.entry.detail
+                                    color: Theme.textMuted
+                                    font.pixelSize: Theme.textXs
+                                    elide: Text.ElideMiddle
+                                    width: parent.width - 20
+                                }
                             }
                             onClicked: {
-                                if (searchDelegate.entry.kind === "dataset") root.controller.openRecentMap(searchDelegate.entry.path)
-                                else if (searchDelegate.entry.kind === "bookmark") root.controller.restoreSavedLocation(searchDelegate.entry.index)
-                                else if (searchDelegate.entry.kind === "track") root.controller.setTrackVisible(searchDelegate.entry.index, true)
-                                else if (searchDelegate.entry.kind === "annotation") root.controller.setActiveAnnotationLayer(searchDelegate.entry.index)
+                                if (searchDelegate.entry.kind === "dataset")
+                                    root.controller.openRecentMap(searchDelegate.entry.path);
+                                else if (searchDelegate.entry.kind === "bookmark")
+                                    root.controller.restoreSavedLocation(searchDelegate.entry.index);
+                                else if (searchDelegate.entry.kind === "track")
+                                    root.controller.setTrackVisible(searchDelegate.entry.index, true);
+                                else if (searchDelegate.entry.kind === "annotation")
+                                    root.controller.setActiveAnnotationLayer(searchDelegate.entry.index);
                             }
                         }
-                    }
-                }
-
-                SectionHeader { title: "Status"; expanded: root.statusExpanded; detail: root.controller ? root.controller.recordCount + " records" : ""; onToggled: root.statusExpanded = !root.statusExpanded }
-                ColumnLayout {
-                    visible: root.statusExpanded
-                    Layout.fillWidth: true
-                    Layout.leftMargin: 12; Layout.rightMargin: 12; Layout.topMargin: 8; Layout.bottomMargin: 14
-                    spacing: 5
-                    Label { Layout.fillWidth: true; text: root.controller && root.controller.filePath.length > 0 ? root.controller.filePath : "No file loaded"; color: Theme.textMuted; font.pixelSize: Theme.textXs; elide: Text.ElideMiddle }
-                    Label { Layout.fillWidth: true; text: root.controller ? root.controller.chrX + ":" + root.controller.x0 + "–" + root.controller.x1 : ""; color: Theme.textPrimary; font.pixelSize: Theme.textSm; wrapMode: Text.WrapAnywhere }
-                    Label { Layout.fillWidth: true; text: root.controller ? root.controller.chrY + ":" + root.controller.y0 + "–" + root.controller.y1 : ""; color: Theme.textPrimary; font.pixelSize: Theme.textSm; wrapMode: Text.WrapAnywhere }
-                    Label { Layout.fillWidth: true; text: root.controller ? root.controller.genomeId + " · " + root.controller.matrixDimensions + " · " + root.controller.resolution + " bp" : ""; color: Theme.textSecondary; font.pixelSize: Theme.textXs; wrapMode: Text.WordWrap }
-                    Label { Layout.fillWidth: true; text: root.controller ? "Cache " + root.controller.cacheMemoryMB.toFixed(1) + "/" + root.controller.cacheLimitMB + " MB · " + root.controller.renderingBackend : ""; color: Theme.textSecondary; font.pixelSize: Theme.textXs; wrapMode: Text.WordWrap }
-                    Label { Layout.fillWidth: true; text: root.controller ? root.controller.status : ""; color: Theme.textSecondary; font.pixelSize: Theme.textSm; wrapMode: Text.WordWrap }
-                    Rectangle {
-                        visible: root.hoverTextVisible && root.hoverText.length > 0
-                        Layout.fillWidth: true
-                        implicitHeight: statusHoverText.implicitHeight + 16
-                        radius: Theme.radiusSm; color: Theme.surfaceSunken; border.color: Theme.borderSubtle
-                        Label { id: statusHoverText; anchors.fill: parent; anchors.margins: 8; text: root.hoverText; color: Theme.textPrimary; font.pixelSize: Theme.textXs; wrapMode: Text.WordWrap }
                     }
                 }
             }

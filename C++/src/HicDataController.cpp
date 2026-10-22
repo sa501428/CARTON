@@ -84,6 +84,13 @@ HicDataController::HicDataController(QObject* parent)
     m_annotationLayers.push_back(baseLayer);
     connect(this, &HicDataController::tracksChanged, this, &HicDataController::refreshTracksModel);
     connect(this, &HicDataController::annotationsChanged, this, &HicDataController::refreshAnnotationsModel);
+    connect(this, &HicDataController::tracksChanged, this, [this]() {
+        if (m_layerClearUndoKind == QStringLiteral("tracks")) discardLayerClearUndo();
+    });
+    connect(this, &HicDataController::annotationsChanged, this, [this]() {
+        if (m_layerClearUndoKind == QStringLiteral("annotations")) discardLayerClearUndo();
+    });
+    connect(this, &HicDataController::filePathChanged, this, &HicDataController::discardLayerClearUndo);
     connect(this, &HicDataController::annotationsChanged, this, [this]() {
         for (const AnnotationLayer& layer : m_annotationLayers)
             if (layer.data && layer.data->custom) m_registry->notifyAnnotationChanged(layer.resourceId);
@@ -736,6 +743,63 @@ void HicDataController::clearAnnotations() {
     }
     m_selectedAnnotationId.clear();
     emit annotationsChanged();
+}
+
+bool HicDataController::canUndoLayerClear() const {
+    return !m_layerClearUndoKind.isEmpty();
+}
+
+void HicDataController::discardLayerClearUndo() {
+    if (!canUndoLayerClear()) return;
+    m_layerClearUndoKind.clear();
+    m_clearedTracks.clear();
+    m_clearedAnnotationLayers.clear();
+    m_clearedSelectedAnnotationId.clear();
+    emit layerClearUndoChanged();
+}
+
+void HicDataController::clearLayersWithUndo(const QString& kind) {
+    if (kind != QStringLiteral("tracks") && kind != QStringLiteral("annotations")) return;
+    discardLayerClearUndo();
+    // Retain the actual layers. Serializing/restoring the whole session would
+    // reset unrelated layers, cancel their pending loads, and mutate pooled data.
+    if (kind == QStringLiteral("tracks")) {
+        auto previous = m_tracks;
+        clearTracks();
+        if (previous.empty()) return;
+        m_clearedTracks = std::move(previous);
+    } else {
+        const bool hadAnnotations = annotationCount() > 0;
+        auto previous = m_annotationLayers;
+        const int active = m_activeAnnotationLayer;
+        const QString selected = m_selectedAnnotationId;
+        // Holding previous also makes editableAnnotations detach shared data.
+        clearAnnotations();
+        if (!hadAnnotations) return;
+        m_clearedAnnotationLayers = std::move(previous);
+        m_clearedActiveAnnotationLayer = active;
+        m_clearedSelectedAnnotationId = selected;
+    }
+    m_layerClearUndoKind = kind;
+    emit layerClearUndoChanged();
+}
+
+bool HicDataController::undoLayerClear() {
+    if (!canUndoLayerClear()) return false;
+    const QString kind = m_layerClearUndoKind;
+    m_layerClearUndoKind.clear();
+    if (kind == QStringLiteral("tracks")) {
+        m_tracks = std::move(m_clearedTracks);
+        emit tracksChanged();
+    } else {
+        m_annotationLayers = std::move(m_clearedAnnotationLayers);
+        m_activeAnnotationLayer = m_clearedActiveAnnotationLayer;
+        m_selectedAnnotationId = m_clearedSelectedAnnotationId;
+        emit annotationsChanged();
+    }
+    m_clearedSelectedAnnotationId.clear();
+    emit layerClearUndoChanged();
+    return true;
 }
 
 QVariantList HicDataController::recentMaps() const {

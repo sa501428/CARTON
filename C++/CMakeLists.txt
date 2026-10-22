@@ -160,7 +160,7 @@ endif()
 
 # Singleton metadata must be present before qt_add_qml_module generates the
 # qmldir; setting this afterwards leaves Theme unresolved at runtime.
-set_source_files_properties(qml/Theme.qml PROPERTIES QT_QML_SINGLETON_TYPE true)
+set_source_files_properties(qml/Theme.qml qml/InteractionState.qml PROPERTIES QT_QML_SINGLETON_TYPE true)
 
 qt_add_qml_module(carton
     URI Carton
@@ -170,6 +170,12 @@ qt_add_qml_module(carton
     NO_IMPORT_SCAN
     QML_FILES
         qml/Main.qml
+        qml/InteractionState.qml
+        qml/MapNavigationBar.qml
+        qml/WorkspaceLayoutBar.qml
+        qml/MatrixDisplayControls.qml
+        qml/AppSettingsDialog.qml
+        qml/NewTabDialog.qml
         qml/Theme.qml
         qml/AppButton.qml
         qml/AppToolButton.qml
@@ -206,6 +212,17 @@ target_link_libraries(carton
 )
 
 if(BUILD_TESTING)
+    target_sources(carton PRIVATE tests/ui_smoke.cpp tests/ui_smoke.h)
+    target_compile_definitions(carton PRIVATE
+        CARTON_ENABLE_UI_TESTS
+        CARTON_UI_TEST_HIC_PATH="${CMAKE_CURRENT_SOURCE_DIR}/tests/data/trans-v10.hic"
+        CARTON_UI_TEST_TRACK_PATH="${CMAKE_CURRENT_SOURCE_DIR}/tests/data/ten-regions.bed"
+    )
+    add_test(NAME carton_ui_smoke COMMAND carton --ui-smoke-test)
+    set_tests_properties(carton_ui_smoke PROPERTIES
+        ENVIRONMENT "QT_QPA_PLATFORM=offscreen"
+        TIMEOUT 60
+    )
     add_executable(carton_core_smoke tests/controller_smoke.cpp)
     target_link_libraries(carton_core_smoke PRIVATE carton_core Qt6::Gui)
     target_compile_definitions(carton_core_smoke PRIVATE
@@ -299,6 +316,7 @@ else()
 endif()
 # ── macOS Qt deployment (runs during `cmake --install`) ──────────────────────
 if(APPLE)
+    option(CARTON_DEPLOY_SMOKE_TEST "Launch the installed app for a startup smoke test" ON)
     get_target_property(_qt_qmake Qt6::qmake IMPORTED_LOCATION)
     get_filename_component(_qt_bin_dir "${_qt_qmake}" DIRECTORY)
     find_program(CARTON_MACDEPLOYQT NAMES macdeployqt HINTS "${_qt_bin_dir}" REQUIRED)

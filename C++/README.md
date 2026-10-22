@@ -85,7 +85,7 @@ The desktop app supports:
 11. Right-click map actions for undo/redo zoom, jump to diagonal, copy genomic position, and layer loading/clearing
 12. Top and left 1D track panels for BED/bedGraph-like interval tracks, with 100 px default height and multi-file loading
 13. 2D BEDPE-like annotation overlays with per-layer color overrides and both/above/below-diagonal placement controls
-14. Direct interaction layer for wheel zoom, drag pan, double-click zoom, and Shift-drag region zoom
+14. Direct interaction layer for wheel zoom, drag pan, double-click zoom, and Alt-drag region zoom and Shift-drag annotation drawing
 15. Coordinate lookup/jump fields and desktop menus for file, navigation, display, and layer actions
 16. A session-scoped dataset registry: `.hic` metadata, parsed tracks, parsed annotations, and the bounded tile cache are shared when the same resource is used by multiple tabs or cells
 17. Responsive multi-map grids with independently assigned maps, 1D tracks, and 2D annotations per cell
@@ -102,6 +102,42 @@ range and matching chromosome boundaries.
 The default tab is the single-map layout and retains the complete primary-map plus optional-control workflow. Multi-map tabs default to cell-scoped layers; the other layouts expose the scope selector appropriate to their shared axes. Editing a reused annotation layer uses copy-on-write, so the edited tab or cell receives a unique custom resource while the original pooled annotation remains unchanged.
 
 For development and layout smoke testing, the application accepts `--tab-type=single|multi-map|multi-region|map-region|pairwise|rotated-45|bullseye|virtual-4c|processing`, `--regions=<path>`, and `--regions-format=bed|bedpe|bedpe-as-bed`.
+
+## Interface
+
+Navigation stays above the map: use the locus fields, chromosome selectors,
+resolution selector, and navigation history without scrolling the sidebar.
+Choose **Pan**, **Zoom region**, or **Annotate** to select the drag action.
+The wheel and double-click zoom, Alt-drag zooms a region, and Shift-drag draws
+an annotation in every map view that supports annotation editing.
+
+The sidebar has **Data**, **Layers**, **Bookmarks**, and **Inspect** destinations.
+Layers use compact rows; select a layer to edit its details. **Inspect** separates
+matrix calculation and normalization from plot appearance. The legend and
+**Color range** button open the same heatmap color editor.
+
+Multi-map views show the current editing target above the map. **Add layers to**
+uses explicit destinations such as the selected cell or all cells in the tab.
+**Layout** and **Linking** group less frequent grid and synchronization options.
+**New Tab** describes each layout by task; tabs can be renamed and closed from
+their own headers. Application settings contain appearance, performance, and
+developer options. The status bar keeps loading messages and errors visible,
+and offers Undo after clearing tracks or annotation features.
+
+Keyboard shortcuts use Command on macOS and Control elsewhere: O opens a map,
+T creates a tab, W closes the current tab, F focuses locus entry, and S saves a
+workspace. Standard Undo/Redo shortcuts navigate history when a text editor is
+not focused. Appearance and interface-size preferences persist across launches.
+
+The offscreen interface regression test is registered as `carton_ui_smoke` when
+`BUILD_TESTING` is enabled. It exercises sidebar destinations, dialogs, all nine
+tab types, narrow windows, larger fonts, locus navigation, and Undo clear.
+
+For code-only macOS packaging without launching CARTON, configure with
+`-DCARTON_DEPLOY_SMOKE_TEST=OFF`, build, and use `cmake --install` with a separate
+staging prefix. Deployment still bundles Qt and verifies the ad-hoc signature;
+it skips the startup test. The `package_dmg.sh` workflow runs its own startup
+test, independently of this CMake option.
 
 ## Slice Format:
 The slice format (.slc) is a binary format that contains:

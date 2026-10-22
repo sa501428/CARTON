@@ -58,7 +58,7 @@ _copy_plugin(imageformats/libqsvg.dylib)
 _copy_plugin(tls/libqsecuretransportbackend.dylib)
 
 foreach(module IN ITEMS
-        QtQuick QtQml QML QtQml/Models QtQml/WorkerScript
+        QtCore QtQuick QtQml QML QtQml/Models QtQml/WorkerScript
         QtQuick/Controls QtQuick/Templates QtQuick/Controls/impl QtQuick/Window
         QtQuick/Effects QtQuick/Layouts QtQuick/Shapes Qt/labs/qmlmodels
         QtQuick/Dialogs Qt/labs/folderlistmodel)
@@ -110,6 +110,11 @@ execute_process(COMMAND /usr/bin/codesign --verify --deep --strict "${_app}"
                 RESULT_VARIABLE _verify_result OUTPUT_QUIET ERROR_VARIABLE _verify_error)
 if(NOT _verify_result EQUAL 0)
     message(FATAL_ERROR "CARTON app signature verification failed: ${_verify_error}")
+endif()
+
+if(NOT @CARTON_DEPLOY_SMOKE_TEST@)
+    message(STATUS "CARTON startup smoke test disabled; the packaged app was not launched")
+    return()
 endif()
 
 set(_smoke_home "${CMAKE_INSTALL_PREFIX}/.carton-smoke-home")

@@ -7,22 +7,30 @@ ToolButton {
     id: control
 
     property color idleColor: "transparent"
-    property color contentColor: Theme.chromeText
-    property bool onLightSurface: false
+    property color contentColor: Theme.textPrimary
+    property bool onLightSurface: !Theme.dark
     property url iconSource: ""
     property int iconSize: 16
 
-    implicitHeight: 30
-    implicitWidth: Math.max(30, implicitContentWidth + leftPadding + rightPadding)
+    implicitHeight: Theme.controlHeight
+    implicitWidth: Math.max(Theme.controlHeight, implicitContentWidth + leftPadding + rightPadding)
     leftPadding: 10
     rightPadding: 10
     hoverEnabled: true
+    focusPolicy: Qt.StrongFocus
+    Accessible.name: text
     font.family: Theme.fontFamily
     font.pixelSize: Theme.textSm
     font.weight: Font.Medium
 
+    ToolTip.visible: hovered && Accessible.name.length > 0
+    ToolTip.text: Accessible.name
+    ToolTip.delay: 450
+
     background: Rectangle {
         radius: Theme.radiusSm
+        border.width: control.activeFocus ? 2 : 0
+        border.color: Theme.accent
         color: {
             if (!control.enabled) return "transparent"
             var tint = control.onLightSurface ? Qt.rgba(0, 0, 0, 1) : Qt.rgba(1, 1, 1, 1)

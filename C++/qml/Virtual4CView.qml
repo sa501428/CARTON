@@ -16,32 +16,58 @@ Rectangle {
         spacing: 0
         Rectangle {
             Layout.fillWidth: true
-            Layout.preferredHeight: 46
+            implicitHeight: analysisTools.implicitHeight + 16
             color: Theme.surfaceAlt
             border.color: Theme.borderSubtle
-            RowLayout {
-                anchors.fill: parent; anchors.leftMargin: 10; anchors.rightMargin: 10; spacing: 8
-                Label { text: "Anchor locus"; color: Theme.textSecondary; font.pixelSize: Theme.textXs }
-                AppComboBox {
-                    model: ["Row (anchor Y)", "Column (anchor X)"]
-                    currentIndex: root.tabSession && root.tabSession.virtual4CAxis === "column" ? 1 : 0
-                    onActivated: if (root.tabSession) root.tabSession.virtual4CAxis = currentIndex === 1 ? "column" : "row"
-                    Layout.preferredWidth: 156
+            Flow {
+                id: analysisTools
+                anchors.left: parent.left
+                anchors.right: parent.right
+                anchors.top: parent.top
+                anchors.leftMargin: 10
+                anchors.rightMargin: 10
+                spacing: 8
+                Row {
+                    spacing: 6
+                    Label {
+                        anchors.verticalCenter: parent.verticalCenter
+                        text: "Anchor locus"
+                        color: Theme.textSecondary
+                        font.pixelSize: Theme.textXs
+                    }
+                    AppComboBox {
+                        model: ["Row (anchor Y)", "Column (anchor X)"]
+                        currentIndex: root.tabSession && root.tabSession.virtual4CAxis === "column" ? 1 : 0
+                        onActivated: if (root.tabSession)
+                            root.tabSession.virtual4CAxis = currentIndex === 1 ? "column" : "row"
+                        width: 156
+                    }
                 }
                 AppTextField {
                     text: root.tabSession ? String(root.tabSession.virtual4CAnchor) : "0"
-                    validator: DoubleValidator { bottom: 0; decimals: 0 }
-                    onEditingFinished: if (root.tabSession) root.tabSession.virtual4CAnchor = Number(text)
-                    Layout.preferredWidth: 140
+                    validator: DoubleValidator {
+                        bottom: 0
+                        decimals: 0
+                    }
+                    onEditingFinished: if (root.tabSession)
+                        root.tabSession.virtual4CAnchor = Number(text)
+                    width: 140
                 }
                 Label {
-                    text: root.tabSession && root.tabSession.activeController
-                        ? "one " + root.tabSession.activeController.resolution + " bp bin"
-                        : "one selected-resolution bin"
-                    color: Theme.textMuted; font.pixelSize: Theme.textXs
+                    width: Math.min(implicitWidth, analysisTools.width)
+                    wrapMode: Text.WordWrap
+                    text: root.tabSession && root.tabSession.activeController ? "one " + root.tabSession.activeController.resolution + " bp bin" : "one selected-resolution bin"
+                    color: Theme.textMuted
+                    font.pixelSize: Theme.textXs
                 }
-                Item { Layout.fillWidth: true }
-                Label { text: "Move across the source map or enter an exact anchor"; color: Theme.textMuted; font.pixelSize: Theme.textXs }
+
+                Label {
+                    width: Math.min(implicitWidth, analysisTools.width)
+                    wrapMode: Text.WordWrap
+                    text: "Move across the source map or enter an exact anchor"
+                    color: Theme.textMuted
+                    font.pixelSize: Theme.textXs
+                }
             }
         }
 
@@ -52,23 +78,24 @@ Rectangle {
             MapViewport {
                 SplitView.preferredWidth: 390
                 SplitView.minimumWidth: 280
-                property var sourceCell: root.tabSession && root.tabSession.cells.length > 0
-                    ? root.tabSession.cells[root.tabSession.activeCellIndex] : null
+                property var sourceCell: root.tabSession && root.tabSession.cellLayout.length > 0 ? root.tabSession.cellLayout[root.tabSession.activeCellIndex] : null
                 controller: sourceCell ? sourceCell.controller : null
                 viewLabel: sourceCell ? sourceCell.label + " · anchor source" : "Anchor source"
                 selected: true
-                onCursorMoved: function(xFraction, yFraction) {
-                    if (!sourceCell || !sourceCell.controller) return
-                    var c = sourceCell.controller
-                    var position = root.tabSession.virtual4CAxis === "column"
-                        ? c.x0 + (c.x1 - c.x0) * xFraction
-                        : c.y0 + (c.y1 - c.y0) * yFraction
-                    root.tabSession.virtual4CAnchor = Math.floor(position / Math.max(1, c.resolution)) * Math.max(1, c.resolution)
+                onCursorMoved: function (xFraction, yFraction) {
+                    if (!sourceCell || !sourceCell.controller)
+                        return;
+                    var c = sourceCell.controller;
+                    var position = root.tabSession.virtual4CAxis === "column" ? c.x0 + (c.x1 - c.x0) * xFraction : c.y0 + (c.y1 - c.y0) * yFraction;
+                    root.tabSession.virtual4CAnchor = Math.floor(position / Math.max(1, c.resolution)) * Math.max(1, c.resolution);
                 }
-                onViewportInteracted: if (sourceCell) root.tabSession.notifyViewportInteracted(sourceCell.index)
-                onHoverInfo: function(text, active) { root.hoverInfo(text, active) }
-                onContextMenuRequested: function(controller, xFraction, yFraction) {
-                    root.contextMenuRequested(controller, xFraction, yFraction)
+                onViewportInteracted: if (sourceCell)
+                    root.tabSession.notifyViewportInteracted(sourceCell.index)
+                onHoverInfo: function (text, active) {
+                    root.hoverInfo(text, active);
+                }
+                onContextMenuRequested: function (controller, xFraction, yFraction) {
+                    root.contextMenuRequested(controller, xFraction, yFraction);
                 }
             }
 
@@ -81,39 +108,48 @@ Rectangle {
                     spacing: 10
                     padding: 10
                     Repeater {
-                        model: root.tabSession ? root.tabSession.cells : []
+                        model: root.tabSession ? root.tabSession.cellLayout : []
                         Rectangle {
                             required property var modelData
                             width: parent.width - 20
                             height: 220
                             color: Theme.surface
-                            border.color: modelData.selected ? Theme.accent : Theme.border
+                            border.color: (root.tabSession && root.tabSession.activeCellIndex === modelData.index) ? Theme.accent : Theme.border
                             radius: Theme.radiusSm
                             ColumnLayout {
                                 anchors.fill: parent
                                 Rectangle {
-                                    Layout.fillWidth: true; Layout.preferredHeight: 36
+                                    Layout.fillWidth: true
+                                    Layout.preferredHeight: 36
                                     color: Theme.surfaceAlt
                                     RowLayout {
-                                        anchors.fill: parent; anchors.leftMargin: 8; anchors.rightMargin: 8
-                                        Label { text: modelData.label; color: Theme.textPrimary; Layout.fillWidth: true; elide: Text.ElideMiddle }
+                                        anchors.fill: parent
+                                        anchors.leftMargin: 8
+                                        anchors.rightMargin: 8
+                                        Label {
+                                            text: modelData.label
+                                            color: Theme.textPrimary
+                                            Layout.fillWidth: true
+                                            elide: Text.ElideMiddle
+                                        }
                                         Label {
                                             text: modelData.controller ? modelData.controller.chrX + " · " + modelData.controller.resolution + " bp" : ""
-                                            color: Theme.textMuted; font.pixelSize: Theme.textXs
+                                            color: Theme.textMuted
+                                            font.pixelSize: Theme.textXs
                                         }
                                         AppButton {
-                                            text: "Create pooled 1D track"
+                                            text: "Create 1D track"
                                             tonal: true
                                             onClicked: {
-                                                var id = root.tabSession.createVirtual4CTrack(modelData.index, "", "cell")
-                                                root.toastRequested(id.length > 0 ? "Virtual 4C track created and loaded" : "Could not create virtual 4C track",
-                                                                    id.length > 0 ? "success" : "error")
+                                                var id = root.tabSession.createVirtual4CTrack(modelData.index, "", "cell");
+                                                root.toastRequested(id.length > 0 ? "Virtual 4C track created and loaded" : "Could not create virtual 4C track", id.length > 0 ? "success" : "error");
                                             }
                                         }
                                     }
                                 }
                                 Item {
-                                    Layout.fillWidth: true; Layout.fillHeight: true
+                                    Layout.fillWidth: true
+                                    Layout.fillHeight: true
                                     Virtual4CItem {
                                         anchors.fill: parent
                                         anchors.margins: 12
@@ -122,12 +158,18 @@ Rectangle {
                                         axis: root.tabSession ? root.tabSession.virtual4CAxis : "row"
                                     }
                                     Rectangle {
-                                        anchors.left: parent.left; anchors.right: parent.right; anchors.bottom: parent.bottom
-                                        anchors.margins: 12; height: 1; color: Theme.borderStrong
+                                        anchors.left: parent.left
+                                        anchors.right: parent.right
+                                        anchors.bottom: parent.bottom
+                                        anchors.margins: 12
+                                        height: 1
+                                        color: Theme.borderStrong
                                     }
                                 }
                             }
-                            TapHandler { onTapped: root.tabSession.activeCellIndex = modelData.index }
+                            TapHandler {
+                                onTapped: root.tabSession.activeCellIndex = modelData.index
+                            }
                         }
                     }
                 }
