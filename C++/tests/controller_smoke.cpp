@@ -7,8 +7,10 @@
 #include <QSettings>
 #include <QTemporaryDir>
 #include <QThread>
+#include <QThreadPool>
 #include <QUrl>
 
+#include <algorithm>
 #include <limits>
 #include <cmath>
 #include <functional>
@@ -413,6 +415,46 @@ int main(int argc, char** argv) {
     asynchronousRegions.loadRegionsAsync(QUrl::fromLocalFile(regionsBedpe), QStringLiteral("bedpe"));
     if (!require(waitFor([&]() { return asynchronousRegions.regionCount() == 2; }),
                  "region files load asynchronously for interactive sessions")) return 1;
+
+    // Complete background work before delivering its watcher notification so
+    // replacement selections are tested without timing-dependent sleeps.
+    auto finishRegionLoads = []() {
+        QThreadPool::globalInstance()->waitForDone();
+        QCoreApplication::processEvents(QEventLoop::AllEvents);
+    };
+    asynchronousRegions.loadRegionsAsync(QUrl::fromLocalFile(regionsBedpe), QStringLiteral("bedpe"));
+    asynchronousRegions.setWindowSize(4000);
+    finishRegionLoads();
+    if (!require(asynchronousRegions.windowSize() == 4000,
+                 "background region loads preserve the latest window size")) return 1;
+    asynchronousRegions.loadRegionsAsync(QUrl::fromLocalFile(regionsBedpe), QStringLiteral("bedpe"));
+    asynchronousRegions.loadRegionsAsync(QUrl::fromLocalFile(regionsBedpe), QStringLiteral("bedpe"));
+    if (!require(asynchronousRegions.loadRegions(QUrl::fromLocalFile(regionsBed), QStringLiteral("bed")),
+                 "replace background regions with a synchronous selection")) return 1;
+    finishRegionLoads();
+    finishRegionLoads();
+    if (!require(asynchronousRegions.regionSet()->kind() == QStringLiteral("bed"),
+                 "older background region loads cannot overwrite a newer selection")) return 1;
+    asynchronousRegions.loadRegionsAsync(QUrl::fromLocalFile(regionsBedpe), QStringLiteral("bedpe"));
+    QVariantMap replacementState;
+    replacementState[QStringLiteral("tabType")] = QStringLiteral("multi-region");
+    if (!require(asynchronousRegions.restoreState(replacementState), "restore while loading regions")) return 1;
+    finishRegionLoads();
+    if (!require(asynchronousRegions.regionCount() == 0,
+                 "background regions cannot overwrite a restored workspace")) return 1;
+
+    for (const QString& type : {QStringLiteral("multi-map"), QStringLiteral("multi-region")}) {
+        for (int columns : {0, -5, 100}) {
+            TabSession importedLayout;
+            QVariantMap layout;
+            layout[QStringLiteral("tabType")] = type;
+            layout[QStringLiteral("layoutColumns")] = columns;
+            if (!require(importedLayout.restoreState(layout) &&
+                         importedLayout.layoutColumns() == std::clamp(columns, 1, 12) &&
+                         importedLayout.cellCount() > 0,
+                         "imported layouts clamp invalid column counts")) return 1;
+        }
+    }
 
     TabSession multiMap;
     multiMap.initialize(QStringLiteral("multi-map"));

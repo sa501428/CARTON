@@ -15,7 +15,14 @@ set(CMAKE_AUTOUIC ON)
 find_package(Threads REQUIRED)
 find_package(Qt6 6.5 REQUIRED COMPONENTS Core Gui Quick QuickControls2 Concurrent Svg)
 
-set(STRAW_SOURCE_DIR "${CMAKE_CURRENT_SOURCE_DIR}/../../straw/C++" CACHE PATH
+# Support sibling repositories and workspaces that group data libraries in
+# hic-infra alongside hic-viz. Explicit cache paths always take precedence.
+set(_carton_straw_default "${CMAKE_CURRENT_SOURCE_DIR}/../../straw/C++")
+if(NOT EXISTS "${_carton_straw_default}/CMakeLists.txt" AND
+   EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/../../../hic-infra/straw/C++/CMakeLists.txt")
+    set(_carton_straw_default "${CMAKE_CURRENT_SOURCE_DIR}/../../../hic-infra/straw/C++")
+endif()
+set(STRAW_SOURCE_DIR "${_carton_straw_default}" CACHE PATH
     "Path to the shared Straw C++ source checkout")
 if(NOT TARGET straw_core)
     if(EXISTS "${STRAW_SOURCE_DIR}/CMakeLists.txt")
@@ -32,7 +39,12 @@ if(NOT TARGET straw_core)
     endif()
 endif()
 
-set(IGVCPP_SOURCE_DIR "${CMAKE_CURRENT_SOURCE_DIR}/../../igv-cpp" CACHE PATH
+set(_carton_igvcpp_default "${CMAKE_CURRENT_SOURCE_DIR}/../../igv-cpp")
+if(NOT EXISTS "${_carton_igvcpp_default}/CMakeLists.txt" AND
+   EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/../../../hic-infra/igv-cpp/CMakeLists.txt")
+    set(_carton_igvcpp_default "${CMAKE_CURRENT_SOURCE_DIR}/../../../hic-infra/igv-cpp")
+endif()
+set(IGVCPP_SOURCE_DIR "${_carton_igvcpp_default}" CACHE PATH
     "Path to an igv-cpp source checkout; leave invalid to use an installed package")
 if(NOT TARGET igv::igv)
     if(EXISTS "${IGVCPP_SOURCE_DIR}/CMakeLists.txt")

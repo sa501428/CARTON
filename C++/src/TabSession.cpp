@@ -18,11 +18,15 @@ TabSession::TabSession(QObject* parent)
         if (!m_initializing) rebuildCells();
     });
     connect(&m_regionLoadWatcher, &QFutureWatcher<RegionLoadResult>::finished, this, [this]() {
-        const RegionLoadResult result = m_regionLoadWatcher.result();
+        RegionLoadResult result = m_regionLoadWatcher.result();
         m_regionLoadActive = false;
         if (result.generation == m_regionLoadGeneration) {
             if (!result.error.isEmpty()) emit errorOccurred(result.error);
-            else if (!m_regionSet->restoreState(result.state)) emit errorOccurred(m_regionSet->errorString());
+            else {
+                // The user can change the window while parsing is in flight.
+                result.state[QStringLiteral("windowSize")] = m_regionSet->windowSize();
+                if (!m_regionSet->restoreState(result.state)) emit errorOccurred(m_regionSet->errorString());
+            }
         }
         if (m_hasPendingRegionLoad) {
             const RegionLoadRequest request = m_pendingRegionLoad;
@@ -366,6 +370,10 @@ bool TabSession::isMultiSourceType() const {
 }
 
 void TabSession::initialize(const QString& value) {
+    // A completed parse from the previous workspace must not replace this one.
+    ++m_regionLoadGeneration;
+    m_hasPendingRegionLoad = false;
+    m_pendingCellStates.clear();
     m_initializing = true;
     const Type nextType = parseType(value);
     for (CellSpec& cell : m_cells) if (cell.controller) cell.controller->deleteLater();
@@ -663,6 +671,8 @@ void TabSession::setControlFile(int cellIndex, const QUrl& url) {
 }
 
 bool TabSession::loadRegions(const QUrl& url, const QString& requestedFormat) {
+    ++m_regionLoadGeneration;
+    m_hasPendingRegionLoad = false;
     QString format = requestedFormat.trimmed().toLower();
     if (format.isEmpty()) {
         if (m_type == Type::Pairwise) format = url.toString().contains(QStringLiteral("bedpe"), Qt::CaseInsensitive)
@@ -942,7 +952,7 @@ QVariantMap TabSession::state() const {
 bool TabSession::restoreState(const QVariantMap& value) {
     initialize(value.value(QStringLiteral("tabType"), QStringLiteral("single")).toString());
     m_title = value.value(QStringLiteral("title"), typeLabel()).toString();
-    m_layoutColumns = value.value(QStringLiteral("layoutColumns"), 2).toInt();
+    m_layoutColumns = std::clamp(value.value(QStringLiteral("layoutColumns"), m_layoutColumns).toInt(), 1, 12);
     m_transposed = value.value(QStringLiteral("transposed"), false).toBool();
     m_diagonalMode = value.value(QStringLiteral("diagonalMode"), QStringLiteral("split")).toString();
     m_layerScope = value.value(QStringLiteral("layerScope"), QStringLiteral("default")).toString();

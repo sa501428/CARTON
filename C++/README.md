@@ -11,8 +11,12 @@ The shared Straw C++ library provides local/HTTP `.hic` metadata inspection, spa
 
 The build requires CMake 3.24 or newer; Qt 6.5 or newer with Core, Gui, Quick,
 Quick Controls 2, Concurrent, and SVG; libcurl; zlib; zstd; HTSlib 1.17+; and
-pkg-config. Clone CARTON and `igv-cpp` as sibling repositories, or install
-`igv-cpp` so CMake can find its package configuration.
+pkg-config. Clone CARTON, `straw`, and `igv-cpp` as sibling repositories, or
+place CARTON under `hic-viz/` and the libraries under a sibling `hic-infra/`.
+CMake discovers either layout. For other locations, pass
+`-DSTRAW_SOURCE_DIR=/path/to/straw/C++` and
+`-DIGVCPP_SOURCE_DIR=/path/to/igv-cpp`, or install `igv-cpp` so CMake can find
+its package configuration.
 
 The app icon is generated from `logo.svg` during the build. macOS receives an
 `.icns` bundle icon, while Windows receives a multi-resolution `.ico` embedded
@@ -76,7 +80,7 @@ The desktop app supports:
 6. Smooth mouse-wheel zoom and drag pan
 7. Asynchronous visible-range loading with a bounded record cache
 8. Batched GPU heatmap rendering in a custom Qt Quick item
-9. Five tab layouts: single-map, multi-map, multi-region, maps-by-region, and pairwise region matrix
+9. Nine tab layouts: single-map, multi-map, multi-region, maps-by-region, pairwise region matrix, 45° diagonal heatmaps, SIP bullseye, Virtual 4C, and experimental processing
 10. Juicebox-compatible coloring: observed/expected use a linear white-to-red scale with an automatic 95th-percentile range, log is an explicit separate display mode, and OE uses a log-ratio blue-white-red scale with default threshold 5
 11. Right-click map actions for undo/redo zoom, jump to diagonal, copy genomic position, and layer loading/clearing
 12. Top and left 1D track panels for BED/bedGraph-like interval tracks, with 100 px default height and multi-file loading
@@ -92,7 +96,7 @@ The desktop app supports:
 
 The default tab is the single-map layout and retains the complete primary-map plus optional-control workflow. Multi-map tabs default to cell-scoped layers; the other layouts expose the scope selector appropriate to their shared axes. Editing a reused annotation layer uses copy-on-write, so the edited tab or cell receives a unique custom resource while the original pooled annotation remains unchanged.
 
-For development and layout smoke testing, the application accepts `--tab-type=single|multi-map|multi-region|map-region|pairwise`, `--regions=<path>`, and `--regions-format=bed|bedpe|bedpe-as-bed`.
+For development and layout smoke testing, the application accepts `--tab-type=single|multi-map|multi-region|map-region|pairwise|rotated-45|bullseye|virtual-4c|processing`, `--regions=<path>`, and `--regions-format=bed|bedpe|bedpe-as-bed`.
 
 ## Slice Format:
 The slice format (.slc) is a binary format that contains:
