@@ -13,6 +13,7 @@ ColumnLayout {
     property var families: []
     property string selectedFamily: "Contacts"
     property string synchronizedMatrixType: ""
+    property string synchronizedContext: ""
     readonly property var familyOptions: options.filter(function (option) {
         return option.group === selectedFamily;
     })
@@ -27,6 +28,7 @@ ColumnLayout {
                 selectedFamily = options[i].group;
         }
         synchronizedMatrixType = controller ? controller.matrixType : "";
+        synchronizedContext = controller ? controller.chrX + "\n" + controller.chrY : "";
         families = groups;
         if (families.indexOf(selectedFamily) < 0 && families.length)
             selectedFamily = families[0];
@@ -45,7 +47,7 @@ ColumnLayout {
             root.syncModels();
         }
         function onViewChanged() {
-            if (root.controller && root.controller.matrixType !== root.synchronizedMatrixType)
+            if (root.controller && (root.controller.matrixType !== root.synchronizedMatrixType || root.synchronizedContext !== root.controller.chrX + "\n" + root.controller.chrY))
                 root.syncModels();
         }
     }

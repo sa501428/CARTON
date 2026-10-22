@@ -236,6 +236,7 @@ if(BUILD_TESTING)
     target_compile_definitions(carton_regressions PRIVATE
         CARTON_TEST_TRANS_PATH="${CMAKE_CURRENT_SOURCE_DIR}/tests/data/trans-v10.hic"
         CARTON_TEST_ALL_LAST_PATH="${CMAKE_CURRENT_SOURCE_DIR}/tests/data/all-last-v10.hic"
+        CARTON_TEST_ALL_SPECIAL_PATH="${CMAKE_CURRENT_SOURCE_DIR}/tests/data/all-special-resolution-v9.hic"
         CARTON_TEST_HIC_PATH="${CMAKE_CURRENT_SOURCE_DIR}/../igv-main/test/data/hic/test_chr22.hic"
     )
     add_test(NAME carton_regressions COMMAND carton_regressions)

@@ -4,6 +4,7 @@
 #include <QFileInfo>
 #include <QJsonDocument>
 #include <QSaveFile>
+#include <QScopedValueRollback>
 #include <QTimer>
 #include <QUuid>
 #include <QtConcurrent>
@@ -210,6 +211,10 @@ void TabSession::setLinkNavigation(bool value) {
     if (m_linkNavigation == value) return;
     m_linkNavigation = value;
     emit linkingChanged();
+    if (value) {
+        m_navigationSource = activeController();
+        syncNavigationToReference();
+    }
 }
 
 void TabSession::setLinkCrosshair(bool value) {
@@ -381,6 +386,7 @@ bool TabSession::isMultiSourceType() const {
 }
 
 void TabSession::initialize(const QString& value) {
+    m_navigationSource.clear();
     // A completed parse from the previous workspace must not replace this one.
     ++m_regionLoadGeneration;
     m_hasPendingRegionLoad = false;
@@ -498,12 +504,20 @@ HicDataController* TabSession::createController(const QString& key) {
         }
         if (m_type == Type::Bullseye || m_type == Type::Virtual4C || m_type == Type::Processing)
             emit analysisSettingsChanged();
+        if (!controller->initializingView()) {
+            for (int i = 0; i < m_cells.size(); ++i)
+                if (m_cells[i].controller == controller) {
+                    notifyViewportInteracted(i);
+                    break;
+                }
+        }
     });
     controller->setObjectName(key);
     return controller;
 }
 
 void TabSession::rebuildCells() {
+    QScopedValueRollback<bool> rebuilding(m_rebuildingCells, true);
     QHash<QString, QPointer<HicDataController>> existing;
     for (const CellSpec& cell : m_cells) if (cell.controller) existing.insert(cell.key, cell.controller);
     QVector<CellSpec> next;
@@ -828,21 +842,33 @@ bool TabSession::cellsShareNavigation(const CellSpec& source, const CellSpec& ta
 // Cell order decides the reference so the result does not depend on which map
 // finished opening first.
 void TabSession::syncNavigationToReference() {
-    if (!m_linkNavigation) return;
-    for (int index = 0; index < m_cells.size(); ++index) {
-        const CellSpec& cell = m_cells[index];
-        if (!cell.controller || cell.controller->chrX().isEmpty()) continue;
-        notifyViewportInteracted(index);
-        return;
+    if (!m_linkNavigation || m_synchronizingNavigation || m_rebuildingCells) return;
+    QScopedValueRollback<bool> synchronizing(m_synchronizingNavigation, true);
+    // Resolve each linked group independently (each region row in Maps × regions).
+    // A user's latest navigation takes priority when another map finishes loading.
+    for (CellSpec& target : m_cells) {
+        if (!target.controller || target.controller->chromosomeNames().isEmpty()) continue;
+        const CellSpec* reference = nullptr;
+        for (const CellSpec& source : m_cells) {
+            if (!source.controller || source.controller->chromosomeNames().isEmpty()) continue;
+            if (source.key != target.key && !cellsShareNavigation(source, target)) continue;
+            if (!reference || source.controller == m_navigationSource) reference = &source;
+            if (source.controller == m_navigationSource) break;
+        }
+        if (reference && reference->controller != target.controller)
+            target.controller->syncViewFrom(reference->controller, m_linkColorScale);
     }
 }
 
 void TabSession::notifyViewportInteracted(int cellIndex) {
-    if (!m_linkNavigation || cellIndex < 0 || cellIndex >= m_cells.size()) return;
+    if (!m_linkNavigation || m_synchronizingNavigation || m_rebuildingCells ||
+        cellIndex < 0 || cellIndex >= m_cells.size()) return;
     const CellSpec& source = m_cells[cellIndex];
-    if (!source.controller) return;
+    if (!source.controller || source.controller->initializingView() || source.controller->chromosomeNames().isEmpty()) return;
+    m_navigationSource = source.controller;
+    QScopedValueRollback<bool> synchronizing(m_synchronizingNavigation, true);
     for (CellSpec& target : m_cells) {
-        if (target.controller && cellsShareNavigation(source, target))
+        if (target.controller && !target.controller->chromosomeNames().isEmpty() && cellsShareNavigation(source, target))
             target.controller->syncViewFrom(source.controller, m_linkColorScale);
     }
 }

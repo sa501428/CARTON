@@ -286,13 +286,6 @@ Rectangle {
                             ctx.stroke();
                         }
                     }
-                    if (root.controller.chrX === root.controller.chrY) {
-                        ctx.strokeStyle = Theme.boundaryLine;
-                        ctx.beginPath();
-                        ctx.moveTo(0, 0);
-                        ctx.lineTo(width, height);
-                        ctx.stroke();
-                    }
                     var annotations = root.controller.visibleAnnotations();
                     var spanX = Math.max(1, root.controller.x1 - root.controller.x0);
                     var spanY = Math.max(1, root.controller.y1 - root.controller.y0);

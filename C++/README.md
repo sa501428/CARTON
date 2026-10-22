@@ -113,8 +113,10 @@ an annotation in every map view that supports annotation editing.
 
 The sidebar has **Data**, **Layers**, **Bookmarks**, and **Inspect** destinations.
 Layers use compact rows; select a layer to edit its details. **Inspect** separates
-matrix calculation and normalization from plot appearance. The legend and
-**Color range** button open the same heatmap color editor.
+matrix calculation and normalization from plot appearance. The persistent
+**Palette** selector changes the color scheme directly; **Color − / +** decreases
+or increases intensity, and **Auto** restores the automatic range. The legend
+and **Colors…** button open the detailed heatmap color editor.
 
 Multi-map views show the current editing target above the map. **Add layers to**
 uses explicit destinations such as the selected cell or all cells in the tab.
@@ -132,6 +134,13 @@ not focused. Appearance and interface-size preferences persist across launches.
 The offscreen interface regression test is registered as `carton_ui_smoke` when
 `BUILD_TESTING` is enabled. It exercises sidebar destinations, dialogs, all nine
 tab types, narrow windows, larger fonts, locus navigation, and Undo clear.
+
+`carton_regressions` uses `QCoreApplication` and creates no windows. It covers
+All-specific resolutions, asynchronous initial linking, chromosome navigation,
+workspace restore, and layer operations. Add `--verify-all-file /path/to/file.hic`
+to validate an actual file through the controller and its render-data snapshot
+without launching the GUI. Legacy All matrices use their own stored resolution
+list rather than the ordinary chromosome resolutions in the file header.
 
 For code-only macOS packaging without launching CARTON, configure with
 `-DCARTON_DEPLOY_SMOKE_TEST=OFF`, build, and use `cmake --install` with a separate

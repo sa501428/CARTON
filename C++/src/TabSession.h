@@ -236,6 +236,9 @@ private:
     bool m_linkCrosshair = true;
     bool m_linkColorScale = false;
     bool m_initializing = false;
+    bool m_rebuildingCells = false;
+    bool m_synchronizingNavigation = false;
+    QPointer<HicDataController> m_navigationSource;
     QHash<QString, QVariantMap> m_pendingCellStates;
     int m_analysisPaneHeight = 260;
     qint64 m_diagonalMaxDistance = 2000000;

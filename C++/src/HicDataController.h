@@ -102,6 +102,7 @@ public:
     QString matrixType() const;
     QString norm() const;
     int resolution() const;
+    bool initializingView() const { return m_initializingView; }
     qint64 x0() const;
     qint64 x1() const;
     qint64 y0() const;
@@ -383,6 +384,8 @@ private:
 
     void setStatus(const QString& value);
     void setBusy(bool value);
+    const std::vector<int32_t>& viewResolutions(const QString& chrX, const QString& chrY) const;
+    int displayBinSize(int queryResolution) const;
     void applyMetadata(const std::shared_ptr<const StrawFileInfo>& metadata);
     chromosome chromosomeByName(const QString& name) const;
     qint64 chromosomeLength(const QString& name) const;
@@ -528,6 +531,7 @@ private:
     QString m_genomeId;
     QString m_status = "Open a .hic file to begin.";
     bool m_busy = false;
+    bool m_initializingView = false;
     QString m_chrX;
     QString m_chrY;
     QString m_matrixType = "observed";

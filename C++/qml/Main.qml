@@ -3296,21 +3296,6 @@ ApplicationWindow {
                                     overviewMode: true
                                 }
 
-                                Canvas {
-                                    anchors.fill: parent
-                                    visible: activeController && activeController.chrX === activeController.chrY
-                                    onPaint: {
-                                        var ctx = getContext("2d");
-                                        ctx.reset();
-                                        ctx.strokeStyle = Theme.boundaryLine;
-                                        ctx.lineWidth = 1;
-                                        ctx.beginPath();
-                                        ctx.moveTo(0, 0);
-                                        ctx.lineTo(width, height);
-                                        ctx.stroke();
-                                    }
-                                }
-
                                 Rectangle {
                                     id: minimapViewportBox
                                     visible: !!activeController
@@ -3423,14 +3408,14 @@ ApplicationWindow {
                                 font.pixelSize: Theme.textSm
                             }
                             QuickControlButton {
-                                text: "½×"
-                                Accessible.name: "Halve the colour scale maximum (brighter map)"
-                                onClicked: activeController.scaleColorRange(0.5)
+                                text: "−"
+                                Accessible.name: "Less color intensity"
+                                onClicked: activeController.scaleColorRange(2.0)
                             }
                             QuickControlButton {
-                                text: "2×"
-                                Accessible.name: "Double the colour scale maximum (dimmer map)"
-                                onClicked: activeController.scaleColorRange(2.0)
+                                text: "+"
+                                Accessible.name: "More color intensity"
+                                onClicked: activeController.scaleColorRange(0.5)
                             }
                             QuickControlButton {
                                 text: "Auto"

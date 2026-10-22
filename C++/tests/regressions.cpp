@@ -1,7 +1,7 @@
 #include <QElapsedTimer>
 #include <QEventLoop>
 #include <QFile>
-#include <QGuiApplication>
+#include <QCoreApplication>
 #include <QSettings>
 #include <QTemporaryDir>
 #include <QThread>
@@ -39,7 +39,9 @@ bool writeFile(const QString& path, const QByteArray& data) {
 }
 
 int main(int argc, char** argv) {
-    QGuiApplication app(argc, argv);
+    // These data/model tests only paint rectangles into in-memory images.
+    // They require no window system, GUI application, or desktop access.
+    QCoreApplication app(argc, argv);
     app.setOrganizationName(QStringLiteral("CARTON tests"));
     app.setApplicationName(QStringLiteral("CARTON regressions"));
     QTemporaryDir temporary;
@@ -188,6 +190,42 @@ int main(int argc, char** argv) {
     check(trans.chrX() == QStringLiteral("chrA") && trans.chrY() == QStringLiteral("chrA"),
           "files without All default to the first chromosome");
     const QString allLastPath = QStringLiteral(CARTON_TEST_ALL_LAST_PATH);
+    HicDataController specialAll;
+    specialAll.openFile(QUrl::fromLocalFile(QStringLiteral(CARTON_TEST_ALL_SPECIAL_PATH)));
+    check(waitFor([&]() { return !specialAll.resolutions().isEmpty() && !specialAll.busy(); }) &&
+          specialAll.resolution() == 6176 && specialAll.recordCount() == 1 &&
+          specialAll.resolutions() == QVariantList{6176},
+          "legacy All loads its matrix-specific resolution absent from the header list");
+    specialAll.setNorm(QStringLiteral("KR"));
+    check(specialAll.norm() == QStringLiteral("NONE"), "All overview keeps raw normalization");
+    specialAll.setViewRegion(QStringLiteral("chr1"), 0, 10000000, QStringLiteral("chr1"), 0, 10000000);
+    check(specialAll.resolutions().contains(100000) && !specialAll.resolutions().contains(6176),
+          "leaving All restores the ordinary chromosome resolution list");
+    specialAll.setWholeGenomeView();
+    check(specialAll.resolution() == 6176, "returning to All restores its special resolution");
+
+    TabSession linkedChromosomes;
+    linkedChromosomes.initialize(QStringLiteral("multi-map"));
+    const QUrl transUrl = QUrl::fromLocalFile(QStringLiteral(CARTON_TEST_TRANS_PATH));
+    linkedChromosomes.setPrimaryFile(0, transUrl);
+    check(waitFor([&]() { return !linkedChromosomes.cells()[0].toMap().value("controller").value<HicDataController*>()->busy(); }),
+          "first comparison map loads");
+    auto* linkedFirst = linkedChromosomes.cells()[0].toMap().value("controller").value<HicDataController*>();
+    linkedFirst->setViewRegion(QStringLiteral("chrB"), 0, 70, QStringLiteral("chrB"), 0, 70);
+    linkedChromosomes.setPrimaryFile(1, transUrl);
+    auto* linkedSecond = linkedChromosomes.cells()[1].toMap().value("controller").value<HicDataController*>();
+    check(waitFor([&]() { return !linkedSecond->busy() && !linkedSecond->resolutions().isEmpty(); }) &&
+          linkedSecond->chrX() == QStringLiteral("chrB") && linkedSecond->chrY() == QStringLiteral("chrB"),
+          "a later comparison map joins the user's existing chromosome immediately");
+    linkedFirst->setViewRegion(QStringLiteral("chrA"), 0, 60, QStringLiteral("chrB"), 0, 70);
+    check(linkedSecond->chrX() == QStringLiteral("chrA") && linkedSecond->chrY() == QStringLiteral("chrB"),
+          "locus and chromosome controls synchronize without a mouse-navigation callback");
+    linkedChromosomes.setLinkNavigation(false);
+    linkedFirst->setViewRegion(QStringLiteral("chrB"), 0, 70, QStringLiteral("chrB"), 0, 70);
+    check(linkedSecond->chrX() == QStringLiteral("chrA"), "unlinked chromosome navigation remains independent");
+    linkedChromosomes.setLinkNavigation(true);
+    check(linkedSecond->chrX() == QStringLiteral("chrB"), "enabling linking synchronizes existing maps immediately");
+
     HicDataController allLast;
     allLast.openFile(QUrl::fromLocalFile(allLastPath));
     check(waitFor([&]() { return !allLast.resolutions().isEmpty() && !allLast.busy(); }) &&
@@ -195,6 +233,9 @@ int main(int argc, char** argv) {
           allLast.xChromosomeLength() == 18 && allLast.chromosomeBoundaries().front().toMap().value("end").toLongLong() == 10 && allLast.chromosomeBoundaries().size() == 2 &&
           allLast.recordCount() > 0,
           "default selection finds an out-of-order All without excluding the first chromosome");
+    allLast.syncViewFrom(&specialAll);
+    check(allLast.x0() == 0 && allLast.x1() == 18 && allLast.resolution() == 1,
+          "linked All maps scale coordinates and resolution into each file's stored overview units");
     QFile allFixture(allLastPath);
     if (!allFixture.open(QIODevice::ReadOnly)) return 1;
     QByteArray uppercaseAll = allFixture.readAll();
@@ -306,5 +347,21 @@ int main(int argc, char** argv) {
           "workspace restores comparison mode after control metadata arrives");
     check(std::abs(restored.activeController()->colorMax() - 17.0) < 0.001,
           "workspace retains its manual color range");
+    const int verifyAll = app.arguments().indexOf(QStringLiteral("--verify-all-file"));
+    if (verifyAll >= 0 && check(verifyAll + 1 < app.arguments().size(), "All verification requires a file path")) {
+        HicDataController actualAll;
+        actualAll.openFile(QUrl::fromLocalFile(app.arguments()[verifyAll + 1]));
+        check(waitFor([&]() { return !actualAll.busy() && !actualAll.resolutions().isEmpty(); }) &&
+              actualAll.wholeGenomeView() && actualAll.recordCount() > 0,
+              "supplied file loads a nonempty All view through the controller");
+        std::vector<contactRecord> records, controlRecords;
+        int binSize = 0;
+        actualAll.renderRecordsSnapshot(records, controlRecords, binSize, 500000);
+        check(!records.empty() && binSize > 0, "supplied All contacts reach the renderer snapshot");
+        qInfo() << "All controller validation: query resolution" << actualAll.resolution()
+                << "render bin size" << binSize << "loaded contacts" << actualAll.recordCount()
+                << "visible render contacts" << records.size();
+        drainLoads();
+    }
     return passed ? 0 : 1;
 }

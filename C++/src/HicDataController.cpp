@@ -21,6 +21,7 @@
 #include <QPdfWriter>
 #include <QSaveFile>
 #include <QSettings>
+#include <QScopedValueRollback>
 #include <QStandardPaths>
 #include <QTextStream>
 
@@ -900,13 +901,14 @@ QVariantList HicDataController::chromosomeBoundaries() const {
 QVariantList HicDataController::resolutions() const {
     QVariantList values;
     if (!m_metadata) return values;
-    for (int32_t resolution : m_metadata->bpResolutions) {
+    for (int32_t resolution : viewResolutions(m_chrX, m_chrY)) {
         values.push_back(resolution);
     }
     return values;
 }
 
 QVariantList HicDataController::normalizations() const {
+    if (wholeGenomeView()) return {QStringLiteral("NONE")};
     QVariantList values;
     if (m_metadata) for (const std::string& norm : m_metadata->normalizations) {
         values.push_back(QString::fromStdString(norm));
@@ -1793,7 +1795,7 @@ void HicDataController::exportFigurePdf(const QUrl& url, int width, int height) 
                                 m_customLowColor, m_customHighColor, m_missingValueColor, m_zeroTransparent};
     painter.fillRect(plot, heatmapColorForValue(0.0, colors));
     paintHeatmapRecords(painter, plot, snapshot, controlSnapshot, m_chrX, m_chrY, m_matrixType,
-                        m_x0, m_x1, m_y0, m_y1, m_resolution, colors);
+                        m_x0, m_x1, m_y0, m_y1, displayBinSize(m_resolution), colors);
     painter.setBrush(Qt::NoBrush);
     painter.setPen(QPen(Qt::lightGray, 1));
     painter.drawRect(plot.adjusted(0, 0, -1, -1));
@@ -1832,7 +1834,7 @@ bool HicDataController::exportFigurePng(const QUrl& url, int width, int height) 
                                 m_customLowColor, m_customHighColor, m_missingValueColor, m_zeroTransparent};
     painter.fillRect(plot, heatmapColorForValue(0.0, colors));
     paintHeatmapRecords(painter, plot, snapshot, controlSnapshot, m_chrX, m_chrY, m_matrixType,
-                        m_x0, m_x1, m_y0, m_y1, m_resolution, colors);
+                        m_x0, m_x1, m_y0, m_y1, displayBinSize(m_resolution), colors);
     painter.setBrush(Qt::NoBrush);
     painter.setPen(QColor("#52606d"));
     painter.drawRect(plot.adjusted(0, 0, -1, -1));
@@ -2100,6 +2102,7 @@ void HicDataController::setWholeGenomeView() {
     pushViewHistory();
     m_chrX = QString::fromStdString(all->name);
     m_chrY = m_chrX;
+    m_norm = QStringLiteral("NONE");
     m_x0 = 0;
     m_y0 = 0;
     const qint64 length = chromosomeLength(m_chrX);
@@ -2350,7 +2353,7 @@ void HicDataController::resetView() {
 }
 
 void HicDataController::syncViewFrom(HicDataController* other, bool includeColor) {
-    if (!other || other == this) return;
+    if (!other || other == this || !m_metadata || !other->m_metadata) return;
     QString nextChrX = m_chrX;
     QString nextChrY = m_chrY;
     qint64 nextX0 = m_x0;
@@ -2358,7 +2361,7 @@ void HicDataController::syncViewFrom(HicDataController* other, bool includeColor
     qint64 nextY0 = m_y0;
     qint64 nextY1 = m_y1;
     bool incompatibleAxis = false;
-    auto mapAxis = [this, &incompatibleAxis](bool locked, const QString& sourceChr,
+    auto mapAxis = [this, other, &incompatibleAxis](bool locked, const QString& sourceChr,
                                              qint64 sourceStart, qint64 sourceEnd,
                                              QString& targetChr, qint64& targetStart, qint64& targetEnd) {
         if (locked) return;
@@ -2374,17 +2377,30 @@ void HicDataController::syncViewFrom(HicDataController* other, bool includeColor
         }
         targetStart = sourceStart;
         targetEnd = sourceEnd;
+        if (isAllChromosome(sourceChr) && isAllChromosome(targetChr)) {
+            const qint64 sourceLength = other->chromosomeLength(sourceChr);
+            const qint64 targetLength = chromosomeLength(targetChr);
+            if (sourceLength > 0 && targetLength > 0) {
+                targetStart = qRound64(static_cast<double>(sourceStart) / sourceLength * targetLength);
+                targetEnd = qRound64(static_cast<double>(sourceEnd) / sourceLength * targetLength);
+            }
+        }
     };
     mapAxis(m_xLocusLocked, other->m_chrX, other->m_x0, other->m_x1, nextChrX, nextX0, nextX1);
     mapAxis(m_yLocusLocked, other->m_chrY, other->m_y0, other->m_y1, nextChrY, nextY0, nextY1);
     int nextResolution = m_resolution;
-    if (!m_resolutionLocked) {
-        nextResolution = other->m_resolution;
-        if (m_metadata && !m_metadata->bpResolutions.empty()) {
-            nextResolution = *std::min_element(m_metadata->bpResolutions.cbegin(), m_metadata->bpResolutions.cend(),
-                [other](int a, int b) {
-                    return std::abs(static_cast<qint64>(a) - other->m_resolution) <
-                           std::abs(static_cast<qint64>(b) - other->m_resolution);
+    const auto& choices = viewResolutions(nextChrX, nextChrY);
+    if (!m_resolutionLocked || std::find(choices.begin(), choices.end(), nextResolution) == choices.end()) {
+        qint64 requestedResolution = other->m_resolution;
+        if (isAllChromosome(nextChrX) && isAllChromosome(nextChrY) && other->chromosomeLength(other->m_chrX) > 0)
+            requestedResolution = std::max<qint64>(1, qRound64(static_cast<double>(other->m_resolution) *
+                chromosomeLength(nextChrX) / other->chromosomeLength(other->m_chrX)));
+        nextResolution = static_cast<int>(std::min<qint64>(INT_MAX, requestedResolution));
+        if (!choices.empty()) {
+            nextResolution = *std::min_element(choices.cbegin(), choices.cend(),
+                [requestedResolution](int a, int b) {
+                    return std::abs(static_cast<qint64>(a) - requestedResolution) <
+                           std::abs(static_cast<qint64>(b) - requestedResolution);
                 });
         }
     }
@@ -2451,6 +2467,7 @@ void HicDataController::setChrX(const QString& value) {
     if (m_chrX == value) return;
     m_chrX = value;
     if (m_chrY.isEmpty()) m_chrY = value;
+    if (wholeGenomeView()) m_norm = QStringLiteral("NONE");
     resetView();
     emit viewChanged();
 }
@@ -2458,6 +2475,7 @@ void HicDataController::setChrX(const QString& value) {
 void HicDataController::setChrY(const QString& value) {
     if (m_chrY == value) return;
     m_chrY = value;
+    if (wholeGenomeView()) m_norm = QStringLiteral("NONE");
     resetView();
     emit viewChanged();
 }
@@ -2487,6 +2505,7 @@ void HicDataController::setMatrixType(const QString& value) {
 }
 
 void HicDataController::setNorm(const QString& value) {
+    if (wholeGenomeView() && value != QStringLiteral("NONE")) return;
     if (m_norm == value) return;
     m_norm = value;
     clearLoadedRegion();
@@ -3187,9 +3206,8 @@ void HicDataController::renderRecordsSnapshot(std::vector<contactRecord>& record
                                               int& dataResolution,
                                               int maxRecordsPerLayer) const {
     QMutexLocker locker(&m_mutex);
-    const int sourceResolution = (!m_records.empty() || !m_controlRecords.empty()) && m_loadedKey.resolution > 0
-        ? m_loadedKey.resolution
-        : std::max(1, m_resolution);
+    const int sourceResolution = displayBinSize((!m_records.empty() || !m_controlRecords.empty()) && m_loadedKey.resolution > 0
+        ? m_loadedKey.resolution : m_resolution);
     dataResolution = sourceResolution;
     const bool reflectIntra = m_chrX == m_chrY;
     const auto recordIsVisible = [this, sourceResolution, reflectIntra](const contactRecord& record) {
@@ -3265,7 +3283,7 @@ void HicDataController::renderMinimapRecordsSnapshot(std::vector<contactRecord>&
                                                       int& dataResolution,
                                                       int maxRecords) const {
     QMutexLocker locker(&m_mutex);
-    dataResolution = std::max(1, m_minimapResolution);
+    dataResolution = displayBinSize(m_minimapResolution);
     if (m_minimapRecords.empty()) {
         records.clear();
         return;
@@ -3324,6 +3342,7 @@ void HicDataController::setBusy(bool value) {
 
 void HicDataController::applyMetadata(const std::shared_ptr<const StrawFileInfo>& metadata) {
     if (!metadata) return;
+    QScopedValueRollback<bool> initializing(m_initializingView, true);
     m_metadata = metadata;
     clearLoadedRegion();
     m_genomeId = QString::fromStdString(metadata->genome);
@@ -3392,6 +3411,28 @@ bool HicDataController::isAllChromosome(const QString& name) const {
            name.compare(QStringLiteral("all"), Qt::CaseInsensitive) == 0;
 }
 
+const std::vector<int32_t>& HicDataController::viewResolutions(const QString& chrX, const QString& chrY) const {
+    static const std::vector<int32_t> empty;
+    if (!m_metadata) return empty;
+    if (isAllChromosome(chrX) && isAllChromosome(chrY) && !m_metadata->wholeGenomeResolutions.empty())
+        return m_metadata->wholeGenomeResolutions;
+    return m_metadata->bpResolutions;
+}
+
+int HicDataController::displayBinSize(int queryResolution) const {
+    if (!wholeGenomeView() || !m_metadata) return std::max(1, queryResolution);
+    QString version;
+    qint64 stride = 1, finest = 1;
+    for (const auto& [key, value] : m_metadata->attributes) {
+        if (key == "hicAll.version") version = QString::fromStdString(value);
+        if (key == "hicAll.storageStride") stride = QString::fromStdString(value).toLongLong();
+        if (key == "hicAll.finestResolution") finest = QString::fromStdString(value).toLongLong();
+    }
+    if (version == QStringLiteral("2") && finest > 0 && stride > 0 && stride <= INT_MAX / finest)
+        return std::max(queryResolution, static_cast<int>(stride * finest));
+    return std::max(1, queryResolution);
+}
+
 bool HicDataController::matrixNeedsControl(const QString& matrixType) const {
     return matrixType.contains(QStringLiteral("control")) || matrixType.contains(QStringLiteral("ratio")) ||
            matrixType.contains(QStringLiteral("vs")) || matrixType == QStringLiteral("diff");
@@ -3427,9 +3468,9 @@ bool HicDataController::controlSupportsCurrentView(QString* reason) const {
     if (!m_chrY.isEmpty() && !hasChromosome(m_chrY)) {
         return fail(QStringLiteral("chromosome %1 is missing").arg(m_chrY));
     }
-    if (m_resolution > 0 &&
-        std::find(m_controlMetadata->bpResolutions.cbegin(), m_controlMetadata->bpResolutions.cend(), m_resolution) ==
-            m_controlMetadata->bpResolutions.cend()) {
+    const auto& choices = wholeGenomeView() && !m_controlMetadata->wholeGenomeResolutions.empty()
+        ? m_controlMetadata->wholeGenomeResolutions : m_controlMetadata->bpResolutions;
+    if (m_resolution > 0 && std::find(choices.cbegin(), choices.cend(), m_resolution) == choices.cend()) {
         return fail(QStringLiteral("%1 bp bins are unavailable").arg(m_resolution));
     }
     if (m_norm != QStringLiteral("NONE") &&
@@ -3554,12 +3595,14 @@ void HicDataController::clampRegion() {
 }
 
 void HicDataController::adaptResolutionToSpan(qint64 span) {
-    if (m_resolutionLocked || !m_metadata || m_metadata->bpResolutions.empty() || span <= 0) return;
+    const auto& choices = viewResolutions(m_chrX, m_chrY);
+    if (choices.empty() || span <= 0) return;
+    if (m_resolutionLocked && std::find(choices.begin(), choices.end(), m_resolution) != choices.end()) return;
     constexpr double targetVisibleBins = 650.0;
     const double ideal = std::max(1.0, static_cast<double>(span) / targetVisibleBins);
-    int best = m_metadata->bpResolutions.front();
+    int best = choices.front();
     double bestDistance = std::numeric_limits<double>::infinity();
-    for (const int candidate : m_metadata->bpResolutions) {
+    for (const int candidate : choices) {
         if (candidate <= 0) continue;
         const double distance = std::abs(std::log(static_cast<double>(candidate) / ideal));
         if (distance < bestDistance) {
@@ -3572,9 +3615,10 @@ void HicDataController::adaptResolutionToSpan(qint64 span) {
 
 qint64 HicDataController::minimumZoomSpan() const {
     int finestResolution = std::max(1, m_resolution);
-    if (!m_resolutionLocked && m_metadata && !m_metadata->bpResolutions.empty()) {
+    const auto& choices = viewResolutions(m_chrX, m_chrY);
+    if (!m_resolutionLocked && !choices.empty()) {
         finestResolution = std::numeric_limits<int>::max();
-        for (const int candidate : m_metadata->bpResolutions) {
+        for (const int candidate : choices) {
             if (candidate > 0) {
                 finestResolution = std::min(finestResolution, candidate);
             }
@@ -3773,10 +3817,9 @@ bool HicDataController::applyViewState(const QVariantMap& state) {
     const int requestedResolution = state.value("resolution").toInt();
     if (requestedResolution > 0) {
         m_resolution = requestedResolution;
-        if (m_metadata && !m_metadata->bpResolutions.empty() &&
-            std::find(m_metadata->bpResolutions.cbegin(), m_metadata->bpResolutions.cend(), m_resolution) ==
-                m_metadata->bpResolutions.cend()) {
-            m_resolution = *std::min_element(m_metadata->bpResolutions.cbegin(), m_metadata->bpResolutions.cend(),
+        const auto& choices = viewResolutions(m_chrX, m_chrY);
+        if (!choices.empty() && std::find(choices.cbegin(), choices.cend(), m_resolution) == choices.cend()) {
+            m_resolution = *std::min_element(choices.cbegin(), choices.cend(),
                 [requestedResolution](int a, int b) {
                     return std::abs(static_cast<qint64>(a) - requestedResolution) <
                            std::abs(static_cast<qint64>(b) - requestedResolution);
@@ -4004,8 +4047,28 @@ void HicDataController::clearLoadedRegion() {
 
 void HicDataController::scheduleRequest() {
     if (m_deferRequests) return;
-    if (m_filePath.isEmpty()) {
+    if (m_filePath.isEmpty() || !m_metadata || m_chrX.isEmpty() || m_chrY.isEmpty()) {
         return;
+    }
+    bool adjusted = false;
+    if (wholeGenomeView()) {
+        adjusted = m_norm != QStringLiteral("NONE");
+        m_norm = QStringLiteral("NONE");
+        if (m_matrixType != QStringLiteral("observed") && m_matrixType != QStringLiteral("control") &&
+            m_matrixType != QStringLiteral("log") && m_matrixType != QStringLiteral("logcontrol")) {
+            m_matrixType = QStringLiteral("observed");
+            m_colorMaxAuto = true;
+            adjusted = true;
+        }
+    }
+    const auto& choices = viewResolutions(m_chrX, m_chrY);
+    if (!choices.empty() && std::find(choices.begin(), choices.end(), m_resolution) == choices.end()) {
+        adaptResolutionToSpan(std::max(m_x1 - m_x0, m_y1 - m_y0));
+        adjusted = true;
+    }
+    if (adjusted) {
+        clearLoadedRegion();
+        emit viewChanged();
     }
     if (!validateMatrixMode(m_matrixType)) {
         return;
@@ -4066,9 +4129,9 @@ void HicDataController::rebuildHoverLookupLocked() {
 }
 
 QString HicDataController::minimapSignature() const {
-    if (m_filePath.isEmpty() || m_chrX.isEmpty() || m_chrY.isEmpty() || !m_metadata || m_metadata->bpResolutions.empty())
+    if (m_filePath.isEmpty() || m_chrX.isEmpty() || m_chrY.isEmpty() || !m_metadata || viewResolutions(m_chrX, m_chrY).empty())
         return {};
-    const int resolution = *std::max_element(m_metadata->bpResolutions.cbegin(), m_metadata->bpResolutions.cend());
+    const int resolution = *std::max_element(viewResolutions(m_chrX, m_chrY).cbegin(), viewResolutions(m_chrX, m_chrY).cend());
     return QStringLiteral("%1\n%2\n%3\n%4").arg(m_filePath, m_chrX, m_chrY).arg(resolution);
 }
 
@@ -4087,8 +4150,8 @@ void HicDataController::requestMinimap() {
     const QString chrY = m_chrY;
     const qint64 xLength = chromosomeLength(chrX);
     const qint64 yLength = chromosomeLength(chrY);
-    if (!m_metadata || m_metadata->bpResolutions.empty()) return;
-    const int resolution = *std::max_element(m_metadata->bpResolutions.cbegin(), m_metadata->bpResolutions.cend());
+    if (!m_metadata || viewResolutions(m_chrX, m_chrY).empty()) return;
+    const int resolution = *std::max_element(viewResolutions(m_chrX, m_chrY).cbegin(), viewResolutions(m_chrX, m_chrY).cend());
     if (xLength <= 0 || yLength <= 0 || resolution <= 0) return;
     m_minimapRequestSignature = signature;
     m_minimapWatcher.setFuture(QtConcurrent::run([signature, path, chrX, chrY, xLength, yLength, resolution]() {

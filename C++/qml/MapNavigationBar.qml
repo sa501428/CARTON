@@ -11,6 +11,7 @@ Rectangle {
     property var tabSession: null
     property var chromosomes: []
     property var resolutions: []
+    property string resolutionContext: ""
     property bool separateAxes: false
     readonly property bool loaded: controller && controller.filePath.length > 0
     readonly property string editingLabel: {
@@ -24,6 +25,7 @@ Rectangle {
     function syncModels() {
         chromosomes = controller ? controller.chromosomeNames() : [];
         resolutions = controller ? controller.resolutions() : [];
+        resolutionContext = controller ? controller.chrX + "\n" + controller.chrY : "";
         syncLoci(true);
     }
     function syncLoci(reset) {
@@ -50,7 +52,10 @@ Rectangle {
             root.syncModels();
         }
         function onViewChanged() {
-            root.syncLoci();
+            if (root.controller && root.resolutionContext !== root.controller.chrX + "\n" + root.controller.chrY)
+                root.syncModels();
+            else
+                root.syncLoci();
         }
     }
     implicitHeight: contents.implicitHeight + 16
@@ -208,9 +213,57 @@ Rectangle {
                 onClicked: root.inspectRequested()
                 Accessible.name: "Inspect calculation and normalization"
             }
-            AppButton {
-                text: "Color range: " + (root.controller && !root.controller.colorMaxAuto ? "Manual" : "Auto")
-                onClicked: root.colorsRequested()
+            Row {
+                spacing: 6
+                Label {
+                    text: "Palette"
+                    color: Theme.textSecondary
+                    anchors.verticalCenter: parent.verticalCenter
+                }
+                AppComboBox {
+                    objectName: "quickHeatmapPalette"
+                    width: 156
+                    model: ["White-Red", "Viridis", "Blue-White-Red", "Grayscale", "Custom"]
+                    currentIndex: root.controller ? Math.max(0, model.indexOf(root.controller.colorMap)) : 0
+                    enabled: root.loaded
+                    Accessible.name: "Heatmap color palette"
+                    onActivated: root.controller.colorMap = currentText
+                }
+            }
+            Row {
+                spacing: 4
+                Label {
+                    text: "Color"
+                    color: Theme.textSecondary
+                    anchors.verticalCenter: parent.verticalCenter
+                }
+                AppToolButton {
+                    objectName: "decreaseHeatmapColor"
+                    text: "−"
+                    enabled: root.loaded
+                    Accessible.name: "Less color intensity"
+                    ToolTip.text: "Less color: double the color-range maximum"
+                    onClicked: root.controller.scaleColorRange(2.0)
+                }
+                AppToolButton {
+                    objectName: "increaseHeatmapColor"
+                    text: "+"
+                    enabled: root.loaded
+                    Accessible.name: "More color intensity"
+                    ToolTip.text: "More color: halve the color-range maximum"
+                    onClicked: root.controller.scaleColorRange(0.5)
+                }
+                AppButton {
+                    text: "Auto"
+                    enabled: root.loaded && !root.controller.colorMaxAuto
+                    onClicked: root.controller.resetColorScale()
+                    Accessible.name: "Restore automatic heatmap color range"
+                }
+                AppButton {
+                    text: "Colors…"
+                    onClicked: root.colorsRequested()
+                    Accessible.name: "Heatmap colors and range settings"
+                }
             }
         }
         Label {
